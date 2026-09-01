@@ -1376,8 +1376,13 @@ func orderBuckets(bs []*Bucket, now, freeGroup int64, planGroups func(int64) []i
 			continue
 		}
 		plans = append(plans, b)
-		for _, g := range planGroups(b.PackageID) {
-			allPlanGroups[g] = true
+		// A zero-limit legacy plan is not a node entitlement. In particular, an
+		// active pool/grant must not revive its groups and turn "0" back into an
+		// implicit unlimited plan through the fallback path below.
+		if b.TrafficLimit > 0 {
+			for _, g := range planGroups(b.PackageID) {
+				allPlanGroups[g] = true
+			}
 		}
 	}
 	sort.Slice(plans, func(i, j int) bool {

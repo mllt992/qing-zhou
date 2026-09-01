@@ -27,14 +27,14 @@
             <span class="kv">订阅 <b>{{ p.subscribers || 0 }}</b></span>
           </div>
           <div class="lc-meta" style="color:var(--text-2);">
-            <span v-if="p.traffic_bytes" class="kv">{{ fmtTotal(p.traffic_bytes) }}</span>
+            <span class="kv">{{ fmtTotal(p.traffic_bytes) }}</span>
             <span v-if="p.duration_days" class="kv">{{ p.duration_days }}天</span>
             <span v-if="p.type === 'plan' && p.queue_key" class="kv">续期组 <b>{{ p.queue_key }}</b></span>
           </div>
           <!-- 多时长套餐：把每档时长的价格摊开，免得只看到默认那档 -->
           <div v-if="p.options?.length > 1" class="lc-opts">
             <span v-for="(o, i) in p.options" :key="o.days" class="opt-chip" :class="{ def: i === 0 }">
-              {{ o.days }}天 · {{ o.price_points }}分<template v-if="o.traffic_bytes"> · {{ fmtTotal(o.traffic_bytes) }}</template>
+              {{ o.days }}天 · {{ o.price_points }}分 · {{ fmtTotal(o.traffic_bytes) }}
             </span>
           </div>
           <div v-if="p.user_group_ids?.length" class="lc-meta" style="color:var(--text-3);">
@@ -89,7 +89,7 @@
             </div>
             <div v-for="(o, i) in form.options" :key="i" class="opt-row">
               <n-input-number v-model:value="o.days" :min="1" :show-button="false" placeholder="30" />
-              <n-input-number v-model:value="o.traffic_gb" :min="0" :show-button="false" placeholder="100" />
+              <n-input-number v-model:value="o.traffic_gb" :min="0.01" :show-button="false" placeholder="100" />
               <n-input-number v-model:value="o.price" :min="0" :show-button="false" placeholder="100" />
               <n-button quaternary size="small" :disabled="form.options.length <= 1"
                         title="删除该档" @click="removeOption(i)">✕</n-button>
@@ -109,7 +109,7 @@
           </div>
         </n-form-item>
         <template v-else>
-          <n-form-item label="流量 (GB)"><n-input-number v-model:value="form.traffic_gb" :min="0" style="width:100%;" /></n-form-item>
+          <n-form-item label="流量 (GB)"><n-input-number v-model:value="form.traffic_gb" :min="0.01" style="width:100%;" /></n-form-item>
           <n-form-item label="天数"><n-input-number v-model:value="form.days" :min="0" style="width:100%;" /></n-form-item>
           <n-form-item label="积分"><n-input-number v-model:value="form.price" :min="0" style="width:100%;" /></n-form-item>
         </template>
@@ -159,7 +159,7 @@ const reordering = ref(false)
 const showForm = ref(false)
 const editing = ref<any>(null)
 type OptRow = { days: number | null; traffic_gb: number | null; price: number | null }
-const form = reactive({ name: '', type: 'traffic', queue_key: '', description: '', highlights: [] as string[], traffic_gb: 0, days: 30, price: 100, stock: -1, options: [] as OptRow[], group_ids: [] as number[], user_group_ids: [] as number[] })
+const form = reactive({ name: '', type: 'traffic', queue_key: '', description: '', highlights: [] as string[], traffic_gb: 100, days: 30, price: 100, stock: -1, options: [] as OptRow[], group_ids: [] as number[], user_group_ids: [] as number[] })
 
 const GB = 1024 * 1024 * 1024
 
@@ -176,7 +176,7 @@ function addOption(days?: number) {
       price: Math.round((first.price || 0) * k),
     })
   } else {
-    form.options.push({ days: days || null, traffic_gb: first?.traffic_gb ?? 0, price: first?.price ?? 0 })
+    form.options.push({ days: days || null, traffic_gb: first?.traffic_gb ?? 100, price: first?.price ?? 0 })
   }
 }
 function removeOption(i: number) {
@@ -199,7 +199,7 @@ function userGroupNames(ids: number[]) {
 function optRowsOf(pkg?: any): OptRow[] {
   const opts = Array.isArray(pkg?.options) ? pkg.options : []
   if (opts.length) return opts.map((o: any) => ({ days: o.days, traffic_gb: (o.traffic_bytes || 0) / GB, price: o.price_points || 0 }))
-  return [{ days: pkg?.duration_days || 30, traffic_gb: (pkg?.traffic_bytes || 0) / GB, price: pkg?.price_points ?? 100 }]
+  return [{ days: pkg?.duration_days || 30, traffic_gb: pkg ? (pkg.traffic_bytes || 0) / GB : 100, price: pkg?.price_points ?? 100 }]
 }
 
 function openForm(pkg?: any) {
@@ -214,7 +214,7 @@ function openForm(pkg?: any) {
       group_ids: pkg.group_ids || [], user_group_ids: pkg.user_group_ids || [],
     })
   } else {
-    Object.assign(form, { name: '', type: 'traffic', queue_key: '', description: '', highlights: [], traffic_gb: 0, days: 30, price: 100, stock: -1, options: optRowsOf(), group_ids: [], user_group_ids: [] })
+    Object.assign(form, { name: '', type: 'traffic', queue_key: '', description: '', highlights: [], traffic_gb: 100, days: 30, price: 100, stock: -1, options: optRowsOf(), group_ids: [], user_group_ids: [] })
   }
   showForm.value = true
 }

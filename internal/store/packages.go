@@ -264,7 +264,7 @@ func (s *Store) PackageNames() (map[int64]string, error) {
 // transaction, so hiding a package here is not what makes it unbuyable.
 func (s *Store) ListPackagesForUser(userID int64) ([]*Package, error) {
 	rows, err := s.db.Query(`SELECT `+pkgCols+` FROM packages p
-		WHERE p.enabled=1 AND (p.stock<0 OR p.stock>0)
+		WHERE p.enabled=1 AND p.traffic_bytes>0 AND (p.stock<0 OR p.stock>0)
 		  AND (NOT EXISTS (SELECT 1 FROM package_user_groups g WHERE g.package_id=p.id)
 		       OR EXISTS (SELECT 1 FROM package_user_groups g
 		                  JOIN user_group_members m ON m.group_id=g.group_id

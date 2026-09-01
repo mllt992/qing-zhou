@@ -155,13 +155,11 @@ func adminUserViewWithWindow(u *store.User, groupIDs []int64, buckets []*store.B
 		}
 		v["traffic"] = J{
 			"used":      tr.Used,
-			"total":     tr.Total, // 0 = no metered quota; read `unlimited` to tell which
+			"total":     tr.Total,
 			"remaining": tr.Remaining,
-			"unlimited": tr.Unlimited,
-			// Usage on uncapped份 and on the free group is real, it just cannot be
-			// part of any percentage. Reported beside the ratio, never inside it.
-			"unmetered_used": tr.UnmeteredUsed,
-			"free_used":      freeUsed,
+			"unlimited": false, // compatibility field; traffic is always finite
+			// Free-group usage is metering telemetry, not a quota entitlement.
+			"free_used": freeUsed,
 		}
 		v["plan_summary"] = adminPlanRollupOf(buckets)
 	}
@@ -225,17 +223,14 @@ func (a *API) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "服务器错误")
 		return
 	}
-	traffic, _ := a.st.GetSettingInt64("default_traffic", 10<<30)
-	expiryDays, _ := a.st.GetSettingInt64("default_expiry_days", 30)
 	subToken, _ := idgen.RandToken(24)
-	expiryAt := int64(0)
-	if expiryDays > 0 {
-		expiryAt = time.Now().Unix() + expiryDays*86400
-	}
 
 	id, err := a.st.CreateUser(store.NewUser{
 		Username: req.Username, Email: req.Email, PasswordHash: hash,
-		SubToken: subToken, TrafficLimit: traffic, ExpiryAt: expiryAt,
+		// The provisioning path creates and aggregates the real welcome bucket.
+		// Never stage default settings in the legacy aggregate columns: traffic 0
+		// plus a future expiry is no entitlement, not a time-limited unlimited one.
+		SubToken: subToken, TrafficLimit: 0, ExpiryAt: 0,
 		Remark: req.Remark, EmailGateExempt: true,
 	})
 	if err != nil {
@@ -275,8 +270,8 @@ func (a *API) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		// Manual "general allowance" grant, stored in a real bucket (see
-		// AdminUpdateUser). ManualEnabled=false removes it; ManualTraffic 0 = unlimited,
-		// ManualExpiry 0 = never. TrafficLimit/ExpiryAt are accepted for backward
+		// AdminUpdateUser). ManualEnabled=false removes it; an enabled grant must
+		// carry positive finite traffic. ManualExpiry 0 = never. TrafficLimit/ExpiryAt are accepted for backward
 		// compatibility with older clients and mapped onto the grant.
 		ManualEnabled *bool    `json:"manual_enabled"`
 		ManualTraffic *int64   `json:"manual_traffic"`
@@ -411,6 +406,10 @@ func (a *API) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		if req.ManualExpiry != nil && *req.ManualExpiry >= 0 {
 			g.Expiry = *req.ManualExpiry
 		}
+		if g.Enabled && g.Traffic <= 0 {
+			fail(w, http.StatusBadRequest, "管理员额度的流量必须大于 0")
+			return
+		}
 		manual = &g
 	case req.TrafficLimit != nil || req.ExpiryAt != nil:
 		g := store.ManualGrant{Enabled: true}
@@ -419,6 +418,10 @@ func (a *API) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.ExpiryAt != nil && *req.ExpiryAt >= 0 {
 			g.Expiry = *req.ExpiryAt
+		}
+		if g.Traffic <= 0 {
+			fail(w, http.StatusBadRequest, "管理员额度的流量必须大于 0")
+			return
 		}
 		manual = &g
 	}
@@ -502,6 +505,8 @@ func (a *API) handleAdminAssignPlan(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err == store.ErrUnknownPkgType:
 			fail(w, http.StatusBadRequest, "未知套餐类型")
+		case errors.Is(err, store.ErrPackageNoTraffic):
+			fail(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, store.ErrInvalidAssignDays):
 			fail(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, store.ErrOptionNotFound):

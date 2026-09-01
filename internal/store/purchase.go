@@ -14,6 +14,7 @@ var (
 	ErrPackageDisabled   = errors.New("商品已下架")
 	ErrPackageNotAllowed = errors.New("该商品仅限指定用户组购买")
 	ErrOutOfStock        = errors.New("商品库存不足")
+	ErrPackageNoTraffic  = errors.New("商品流量必须大于 0")
 	ErrUnknownPkgType    = errors.New("未知商品类型")
 	ErrOrderNotFound     = errors.New("订单不存在")
 	ErrAlreadyRefunded   = errors.New("该订单已退款")
@@ -120,6 +121,9 @@ func (s *Store) PurchaseDuration(userID int64, pkg *Package, days int64, idemKey
 	// the bucket, the snapshot and the ledger all agree on one combination.
 	if pkg, err = fresh.forDuration(days); err != nil {
 		return nil, err
+	}
+	if pkg.TrafficBytes <= 0 {
+		return nil, ErrPackageNoTraffic
 	}
 	if !pkg.Enabled {
 		return nil, ErrPackageDisabled
@@ -269,6 +273,9 @@ func (s *Store) AssignPackageDuration(userID int64, pkg *Package, days, operator
 	pkg, err := pkg.forAdminDuration(days)
 	if err != nil {
 		return nil, err
+	}
+	if pkg.TrafficBytes <= 0 {
+		return nil, ErrPackageNoTraffic
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

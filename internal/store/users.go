@@ -434,7 +434,7 @@ func (s *Store) SetUserRemark(id int64, remark string) error {
 }
 
 // ManualGrant describes an admin's manual "general allowance" for a user. Enabled
-// false removes any existing grant; Traffic 0 = unlimited (plan-bucket semantics);
+// false removes any existing grant; an enabled grant has a positive finite Traffic;
 // Expiry 0 = never. A nil *ManualGrant passed to AdminUpdateUser leaves the grant
 // untouched (for edits that only change status/reset).
 type ManualGrant struct {
@@ -497,6 +497,9 @@ func (s *Store) AdminUpdateUser(id int64, status string, resetUsed bool, manual 
 // applyManualGrant upserts (Enabled) or removes (!Enabled) the user's package_id=0
 // admin-grant bucket within the caller's transaction.
 func applyManualGrant(tx txLike, userID int64, g *ManualGrant, now int64) error {
+	if g.Enabled && g.Traffic <= 0 {
+		return errors.New("管理员额度的流量必须大于 0")
+	}
 	var bid int64
 	qerr := tx.QueryRow(`SELECT id FROM user_plans WHERE user_id=? AND kind='plan' AND package_id=0 ORDER BY id LIMIT 1`, userID).Scan(&bid)
 	switch {

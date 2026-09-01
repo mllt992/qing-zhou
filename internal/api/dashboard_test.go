@@ -7,69 +7,51 @@ import (
 	"qingzhou/internal/store"
 )
 
-// An uncapped份 must not poison the metered ratio. Before this, its Used() was
-// added to the numerator while its TrafficLimit (0) added nothing to the
-// denominator, so holding one unlimited plan next to a metered one showed a
-// used-percentage far past what the metered份 had actually consumed — and the
-// UI's "流量已用尽" banner fired while an unlimited plan was still live.
-func TestDashboardTraffic_UnlimitedBucketKeptOutOfRatio(t *testing.T) {
+// Zero quota is inert. It must not add either quota or historical usage to the
+// current finite roll-up.
+func TestDashboardTraffic_ZeroBucketIsInert(t *testing.T) {
 	buckets := []*store.Bucket{
 		{ID: 1, Kind: "plan", Status: "active", TrafficLimit: 100 << 30, UsedUp: 10 << 30, UsedDown: 10 << 30},
-		{ID: 2, Kind: "plan", Status: "active", TrafficLimit: 0, UsedUp: 400 << 30, UsedDown: 100 << 30}, // 不限量
+		{ID: 2, Kind: "plan", Status: "active", TrafficLimit: 0, UsedUp: 400 << 30, UsedDown: 100 << 30},
 	}
 
 	d := dashboardTraffic(buckets)
 
 	if d.Total != 100<<30 {
-		t.Errorf("Total = %d, want %d (uncapped份 contributes no quota)", d.Total, int64(100)<<30)
+		t.Errorf("Total = %d, want %d (zero份 contributes no quota)", d.Total, int64(100)<<30)
 	}
 	if d.Used != 20<<30 {
-		t.Errorf("Used = %d, want %d (uncapped份 usage must stay out)", d.Used, int64(20)<<30)
+		t.Errorf("Used = %d, want %d (zero份 usage must stay out)", d.Used, int64(20)<<30)
 	}
 	if d.Remaining != 80<<30 {
 		t.Errorf("Remaining = %d, want %d", d.Remaining, int64(80)<<30)
 	}
-	if !d.Unlimited {
-		t.Error("Unlimited = false, want true — the account holds an uncapped份")
-	}
-	if d.UnmeteredUsed != 500<<30 {
-		t.Errorf("UnmeteredUsed = %d, want %d", d.UnmeteredUsed, int64(500)<<30)
-	}
 }
 
-// Total == 0 is ambiguous on its own: it is what both "只有不限量份额" and
-// "根本没有份额" produce. Unlimited is what tells them apart, and the two render
-// as 不限 vs 无额度 — opposite meanings.
-func TestDashboardTraffic_ZeroTotalIsNotAlwaysUnlimited(t *testing.T) {
+// Total == 0 has exactly one meaning: no usable quota.
+func TestDashboardTraffic_ZeroTotalMeansNoQuota(t *testing.T) {
 	noPlans := dashboardTraffic([]*store.Bucket{
 		{ID: 1, Kind: store.KindFree, TrafficLimit: 0, UsedUp: 1 << 30},
 	})
-	if noPlans.Total != 0 || noPlans.Unlimited {
-		t.Errorf("free-only account: Total=%d Unlimited=%v, want 0/false", noPlans.Total, noPlans.Unlimited)
-	}
-	if noPlans.UnmeteredUsed != 0 {
-		t.Errorf("free bucket must be excluded entirely, got UnmeteredUsed=%d", noPlans.UnmeteredUsed)
+	if noPlans.Total != 0 || noPlans.Used != 0 {
+		t.Errorf("free-only account: Total=%d Used=%d, want 0/0", noPlans.Total, noPlans.Used)
 	}
 
-	onlyUnlimited := dashboardTraffic([]*store.Bucket{
+	onlyZero := dashboardTraffic([]*store.Bucket{
 		{ID: 2, Kind: "plan", Status: "active", TrafficLimit: 0, UsedUp: 1 << 30},
 	})
-	if onlyUnlimited.Total != 0 || !onlyUnlimited.Unlimited {
-		t.Errorf("unlimited-only account: Total=%d Unlimited=%v, want 0/true", onlyUnlimited.Total, onlyUnlimited.Unlimited)
+	if onlyZero.Total != 0 || onlyZero.Used != 0 {
+		t.Errorf("zero-only account: Total=%d Used=%d, want 0/0", onlyZero.Total, onlyZero.Used)
 	}
 }
 
 // Every account carries an empty pool bucket (limit 0) as bookkeeping. Reading
-// that 0 as "uncapped" the way a real unlimited plan's 0 is read would show 不限
-// to every user on the panel, including one with a plain metered plan.
-func TestDashboardTraffic_EmptyPoolIsNotUnlimited(t *testing.T) {
+// that 0 as usable traffic would overstate every user's quota.
+func TestDashboardTraffic_EmptyPoolIsInert(t *testing.T) {
 	d := dashboardTraffic([]*store.Bucket{
 		{ID: 1, Kind: "plan", Status: "active", TrafficLimit: 10 << 30, UsedUp: 1 << 30},
 		{ID: 2, Kind: "pool", Status: "active", TrafficLimit: 0},
 	})
-	if d.Unlimited {
-		t.Error("Unlimited = true, want false — an empty pool grants nothing")
-	}
 	if d.Total != 10<<30 {
 		t.Errorf("Total = %d, want %d", d.Total, int64(10)<<30)
 	}
@@ -116,9 +98,6 @@ func TestDashboardTraffic_ExcludesExpired(t *testing.T) {
 	})
 	if allExpired.Total != 0 || allExpired.Remaining != 0 {
 		t.Errorf("expired-only: Total=%d Remaining=%d, want 0/0", allExpired.Total, allExpired.Remaining)
-	}
-	if allExpired.Unlimited {
-		t.Error("expired-only: Unlimited = true, want false")
 	}
 
 	// 不过期的份 (ExpiryAt 0) must not be mistaken for expired.

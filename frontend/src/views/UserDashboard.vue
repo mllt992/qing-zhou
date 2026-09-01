@@ -99,8 +99,8 @@
                 <span class="ring-label">已使用</span>
               </template>
               <template v-else>
-                <span class="ring-pct ring-inf">{{ unlimited ? '∞' : '—' }}</span>
-                <span class="ring-label">{{ unlimited ? '不限量' : '暂无额度' }}</span>
+                <span class="ring-pct ring-inf">—</span>
+                <span class="ring-label">暂无额度</span>
               </template>
             </div>
           </div>
@@ -178,31 +178,27 @@ const greeting = computed(() => {
 })
 
 // ---- 流量口径 ----
-// 后端把「有额度的份」和「不限量的份」分开报：total/used 只统计前者，
-// unlimited 说明手上还有不限量的份（此时 total=0 不代表没额度）。
+// 所有流量额度都是有限数字；total=0 就是没有额度。
 const traffic = computed(() => dash.value.traffic || {})
-const unlimited = computed(() => traffic.value.unlimited === true)
 // metered = 存在可以算百分比的额度。没有它，环形图和进度条都无意义。
 const metered = computed(() => (traffic.value.total || 0) > 0)
 const usedPct = computed(() => pct(traffic.value.used, traffic.value.total))
 const usedBadge = computed(() => metered.value && usedPct.value > 0 ? '已用 ' + usedPct.value + '%' : '')
 const ringColor = computed(() => {
-  if (!metered.value) return unlimited.value ? '#6f8f76' : '#b8b8b8'
+  if (!metered.value) return '#b8b8b8'
   return usedPct.value > 90 ? '#c2685c' : usedPct.value > 70 ? '#bf9540' : '#6f8f76'
 })
 
 const remainingText = computed(() => {
   if (!dash.value.traffic) return '—'
   if (metered.value) return fmtBytes(traffic.value.remaining)
-  return unlimited.value ? '不限' : '无额度'
+  return '无额度'
 })
 const trafficSub = computed(() => {
   const t = traffic.value
   if (!dash.value.traffic) return ''
   const parts: string[] = []
   if (metered.value) parts.push(`已用 ${fmtBytes(t.used)} / ${fmtBytes(t.total)}`)
-  // 不限量份的用量是真实发生的，只是不参与百分比——单独报，别装作没有
-  if (unlimited.value) parts.push(`不限量份已用 ${fmtBytes(t.unmetered_used)}`)
   return parts.join(' · ') || '还没有可用套餐'
 })
 
@@ -214,13 +210,12 @@ const ringPctText = computed(() => {
   return v >= 100 || Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(1)
 })
 const ringOffset = computed(() => {
-  if (!metered.value) return unlimited.value ? 0 : CIRC // 不限量画满圈，无额度留空
+  if (!metered.value) return CIRC
   return CIRC * (1 - Math.min(usedPct.value, 100) / 100)
 })
 const ringFoot = computed(() => {
   if (!dash.value.traffic) return '—'
   if (metered.value) return `${fmtBytes(traffic.value.used)} / ${fmtBytes(traffic.value.total)}`
-  if (unlimited.value) return `已用 ${fmtBytes(traffic.value.unmetered_used)}`
   return '去商城选购套餐'
 })
 
@@ -267,8 +262,7 @@ const alerts = computed(() => {
       to: '/shop', action: '去续费',
     })
   }
-  // 不限量的份还在，就不该报「流量已用尽」——有额度的那份用完了也还能跑
-  if (metered.value && !unlimited.value && (traffic.value.used || 0) >= traffic.value.total) {
+  if (metered.value && (traffic.value.used || 0) >= traffic.value.total) {
     out.push({ key: 'exhausted', type: 'warning', text: '流量已用尽，', to: '/shop', action: '购买流量包' })
   }
   return out

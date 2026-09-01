@@ -8,8 +8,7 @@ import (
 )
 
 // The admin list's traffic must be the roll-up, not the users.* mirror: queued
-// and expired份 carry quota the user cannot spend, and an uncapped份 has no
-// denominator to add. The old card summed all of them and reported e.g.
+// and expired/zero份 carry quota the user cannot spend. The old card summed all of them and reported e.g.
 // "0 B / 210 GiB" for a user whose only usable份 was 10 GiB.
 func TestAdminUserView_TrafficIgnoresQueuedAndExpired(t *testing.T) {
 	now := time.Now().Unix()
@@ -17,7 +16,7 @@ func TestAdminUserView_TrafficIgnoresQueuedAndExpired(t *testing.T) {
 		{ID: 1, Kind: "plan", PackageID: 5, Name: "在用", Status: "active", TrafficLimit: 10 << 30, UsedUp: 2 << 30, ExpiryAt: now + 86400},
 		{ID: 2, Kind: "plan", PackageID: 5, Name: "排队", Status: "queued", TrafficLimit: 100 << 30},
 		{ID: 3, Kind: "plan", PackageID: 7, Name: "过期", Status: "active", TrafficLimit: 100 << 30, UsedDown: 1 << 30, ExpiryAt: now - 86400},
-		{ID: 4, Kind: "plan", PackageID: 0, Name: "管理员额度", Status: "active", TrafficLimit: 0, UsedUp: 3 << 30}, // uncapped
+		{ID: 4, Kind: "plan", PackageID: 0, Name: "管理员额度", Status: "active", TrafficLimit: 0, UsedUp: 3 << 30},
 		{ID: 5, Kind: store.KindFree, Name: "免费流量", UsedDown: 5 << 30},
 	}
 	u := &store.User{ID: 1, Username: "kim", Status: "active",
@@ -37,11 +36,8 @@ func TestAdminUserView_TrafficIgnoresQueuedAndExpired(t *testing.T) {
 	if got := tr["remaining"].(int64); got != 8<<30 {
 		t.Errorf("remaining = %d GiB, want 8", got>>30)
 	}
-	if tr["unlimited"] != true {
-		t.Error("unlimited = false, but an uncapped份 is live")
-	}
-	if got := tr["unmetered_used"].(int64); got != 3<<30 {
-		t.Errorf("unmetered_used = %d GiB, want 3", got>>30)
+	if tr["unlimited"] != false {
+		t.Error("compatibility unlimited flag must stay false")
 	}
 	if got := tr["free_used"].(int64); got != 5<<30 {
 		t.Errorf("free_used = %d GiB, want 5", got>>30)

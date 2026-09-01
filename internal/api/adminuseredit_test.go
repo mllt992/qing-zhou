@@ -96,6 +96,27 @@ func TestAdminUpdateUser_OmittedEmailIsLeftAlone(t *testing.T) {
 	}
 }
 
+func TestAdminUpdateUser_RejectsEnabledZeroTrafficGrant(t *testing.T) {
+	a, st := newUserEditAPI(t)
+	id, err := st.CreateUser(store.NewUser{Username: "zero-grant", PasswordHash: "h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := putUser(a, id, `{"manual_enabled":true,"manual_traffic":0,"manual_expiry":0}`)
+	if w.Code != 400 {
+		t.Fatalf("status %d, want 400: %s", w.Code, w.Body.String())
+	}
+	buckets, err := st.ListBuckets(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range buckets {
+		if b.Kind == "plan" && b.PackageID == 0 {
+			t.Fatalf("zero-byte admin grant was created: %+v", b)
+		}
+	}
+}
+
 func TestAdminUpdateUser_RejectsMalformedEmail(t *testing.T) {
 	a, st := newUserEditAPI(t)
 	id, _ := st.CreateUser(store.NewUser{Username: "u1", Email: "ok@example.com", PasswordHash: "h"})

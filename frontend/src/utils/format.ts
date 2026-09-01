@@ -9,7 +9,7 @@ export function fmtBytes(n: number | null | undefined): string {
 }
 
 export function fmtTotal(n: number | null | undefined): string {
-  return (!n || n <= 0) ? '不限' : fmtBytes(n)
+  return fmtBytes(n)
 }
 
 export function fmtDate(ts: number | null | undefined): string {

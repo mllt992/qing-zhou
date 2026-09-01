@@ -260,8 +260,7 @@
           </div>
         </n-form-item>
         <template v-if="manualEnabled">
-          <n-form-item label="不限流量"><n-switch v-model:value="unlimitedTraffic" /></n-form-item>
-          <n-form-item v-if="!unlimitedTraffic" label="流量 (GB)"><n-input-number v-model:value="editTrafficGB" :min="0" style="width:100%;" /></n-form-item>
+          <n-form-item label="流量 (GB)"><n-input-number v-model:value="editTrafficGB" :min="0.01" style="width:100%;" /></n-form-item>
           <n-form-item label="到期时间"><n-input v-model:value="editExpiry" :input-props="{ type: 'datetime-local' }" style="width:100%;" /></n-form-item>
         </template>
         <n-form-item label="用户组">
@@ -409,15 +408,13 @@ function trafficMain(u: any) {
   const t = trafficOf(u)
   if (!t) return '—'
   if (meteredOf(u)) return `${fmtBytes(t.used)} / ${fmtBytes(t.total)}`
-  return t.unlimited ? '不限量' : '无可用额度'
+  return '无可用额度'
 }
 function trafficNote(u: any) {
   const t = trafficOf(u)
   if (!t) return '流量数据读取失败'
   const parts: string[] = []
   if (meteredOf(u)) parts.push(`剩余 ${fmtBytes(t.remaining)}`)
-  // 不限量份 / 免费分组的用量是真实发生的，只是没有分母，单独报而不混进百分比
-  if (t.unlimited) parts.push(`不限量份已用 ${fmtBytes(t.unmetered_used)}`)
   if (t.free_used > 0) parts.push(`免费分组 ${fmtBytes(t.free_used)}`)
   const pool = u.plan_summary?.pool_limit || 0
   if (pool > 0) parts.push(`含流量包 ${fmtBytes(pool - (u.plan_summary.pool_used || 0))}`)
@@ -425,7 +422,7 @@ function trafficNote(u: any) {
 }
 function barWidth(u: any) {
   if (meteredOf(u)) return Math.min(usedPctOf(u), 100) + '%'
-  return trafficOf(u)?.unlimited ? '100%' : '0%'
+  return '0%'
 }
 function barColor(p: number) {
   return p > 90 ? '#c2685c' : p > 70 ? '#bf9540' : '#6f8f76'
@@ -594,7 +591,7 @@ interface PlanGroup {
   key: string; name: string; kind: string
   items: any[]
   active: number; queued: number; finished: number
-  availLimit: number; availUsed: number; hasUnlimited: boolean
+  availLimit: number; availUsed: number
   totalUsed: number; nextExpiry: number
 }
 
@@ -610,7 +607,7 @@ const planGroups = computed<PlanGroup[]>(() => {
       g = {
         key, name: p.kind === 'pool' ? (p.name || '通用流量') : (p.name || '套餐 #' + p.id), kind: p.kind,
         items: [], active: 0, queued: 0, finished: 0,
-        availLimit: 0, availUsed: 0, hasUnlimited: false, totalUsed: 0, nextExpiry: 0,
+        availLimit: 0, availUsed: 0, totalUsed: 0, nextExpiry: 0,
       }
       map.set(key, g)
     }
@@ -621,7 +618,6 @@ const planGroups = computed<PlanGroup[]>(() => {
     // 可用额度只累加生效中的份，理由同卡片口径
     if (b === 'active') {
       if (p.traffic_limit > 0) { g.availLimit += p.traffic_limit; g.availUsed += p.used || 0 }
-      else g.hasUnlimited = true
       if (p.expiry_at > 0 && (g.nextExpiry === 0 || p.expiry_at < g.nextExpiry)) g.nextExpiry = p.expiry_at
     }
   }
@@ -632,11 +628,10 @@ const planGroups = computed<PlanGroup[]>(() => {
 function groupPct(g: PlanGroup) { return g.availLimit > 0 ? pct(g.availUsed, g.availLimit) : 0 }
 function groupBarWidth(g: PlanGroup) {
   if (g.availLimit > 0) return Math.min(groupPct(g), 100) + '%'
-  return g.hasUnlimited ? '100%' : '0%'
+  return '0%'
 }
 function groupAvailText(g: PlanGroup) {
   if (g.availLimit > 0) return `${fmtBytes(g.availUsed)} / ${fmtBytes(g.availLimit)}`
-  if (g.hasUnlimited) return '不限量'
   return g.queued ? '待启用' : '无可用额度'
 }
 function groupNote(g: PlanGroup) {
@@ -668,7 +663,7 @@ function removePlan(p: any) {
   if (!u) return
   const isPool = p.kind === 'pool'
   const queued = p.status === 'queued'
-  const quota = p.traffic_limit > 0 ? fmtBytes(p.traffic_limit) : '不限量'
+  const quota = fmtBytes(p.traffic_limit)
   dialog.warning({
     title: isPool ? '确认清空流量包' : queued ? '确认移除未生效套餐' : '确认移除套餐',
     content: isPool
@@ -703,8 +698,7 @@ const GiB = 1024 * 1024 * 1024
 const adjustAmountText = computed(() => {
   const p = adjustPlan.value
   if (!p) return ''
-  if (p.traffic_limit > 0) return `${fmtBytes(p.used || 0)} / ${fmtBytes(p.traffic_limit)}`
-  return p.kind === 'pool' ? '流量包余额 0' : `不限量 · 已用 ${fmtBytes(p.used || 0)}`
+  return `${fmtBytes(p.used || 0)} / ${fmtBytes(p.traffic_limit)}`
 })
 function openAdjust(p: any) {
   adjustPlan.value = p
@@ -797,7 +791,6 @@ async function handleCreate() {
 const showEdit = ref(false)
 const editUser = ref<any>(null)
 const manualEnabled = ref(false)
-const unlimitedTraffic = ref(false)
 const editTrafficGB = ref(0)
 const editExpiry = ref('')
 const editBanned = ref(false)
@@ -817,7 +810,6 @@ async function openEdit(u: any) {
   // the aggregate traffic_limit), so saving sets exactly that bucket — no double
   // counting against their purchased plans, and no accidental grant when there's none.
   manualEnabled.value = false
-  unlimitedTraffic.value = false
   editTrafficGB.value = 0
   editExpiry.value = ''
   showEdit.value = true
@@ -826,7 +818,6 @@ async function openEdit(u: any) {
     const grant = plans.find((p: any) => p.kind === 'plan' && p.package_id === 0)
     if (grant) {
       manualEnabled.value = true
-      unlimitedTraffic.value = !grant.traffic_limit || grant.traffic_limit <= 0
       editTrafficGB.value = (grant.traffic_limit || 0) / (1024 * 1024 * 1024)
       editExpiry.value = toLocalDatetimeInput(grant.expiry_at)
     }
@@ -839,7 +830,7 @@ async function handleSave() {
     const body: any = {
       status: editBanned.value ? 'banned' : 'active',
       manual_enabled: manualEnabled.value,
-      manual_traffic: manualEnabled.value && !unlimitedTraffic.value ? Math.round(editTrafficGB.value * 1024 * 1024 * 1024) : 0,
+      manual_traffic: manualEnabled.value ? Math.round(editTrafficGB.value * 1024 * 1024 * 1024) : 0,
       manual_expiry: manualEnabled.value && editExpiry.value ? Math.floor(new Date(editExpiry.value).getTime() / 1000) : 0,
     }
     if (resetPw.value) body.password = resetPw.value
@@ -1040,8 +1031,7 @@ onMounted(load)
 .pm-label { display: block; font-size: 11.5px; color: var(--text-3); }
 .pm-val { display: block; font-size: 17px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-val em { font-style: normal; font-size: 12px; font-weight: 550; color: var(--text-3); }
-/* 汇总提示是三段式的（剩余 / 不限量份 / 免费分组），窄屏截断等于把后两段吞掉，
-   所以这里让它折行而不是省略号 */
+/* 汇总提示可能包含剩余额度与免费分组用量，窄屏下允许折行。 */
 .pm-hint { display: block; font-size: 11px; color: var(--text-3); font-style: normal; margin-top: 2px; line-height: 1.45; }
 .pm-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .pm-bar .spacer { flex: 1; }

@@ -30,7 +30,7 @@
         <span class="sec-caption">复制后导入客户端，地址包含访问凭据，请勿公开分享</span>
       </template>
       <div class="routing-choice">
-        <div class="routing-choice-label">代理范围</div>
+        <div class="routing-choice-label">原生配置代理范围</div>
         <n-select v-model:value="routingProfile" :options="routingProfileOptions" size="small" class="routing-choice-select" />
         <div class="routing-choice-note">{{ routingProfileNote }}</div>
       </div>
@@ -38,19 +38,22 @@
         <n-input :value="selectedSubscriptionURL" readonly placeholder="暂无订阅" />
         <n-button type="primary" @click="copy(selectedSubscriptionURL)">复制</n-button>
       </n-input-group>
-      <div class="routing-compat-note">只影响这次复制并重新导入的链接；已经在使用的订阅不会改变。</div>
+      <div class="routing-compat-note">作用于下方 Clash / sing-box / Surge 配置；只影响这次复制并重新导入的链接，已在使用的订阅不会改变。</div>
       <div class="sub-action-row">
-        <span class="sub-action-label">导入格式</span>
+        <span class="sub-action-label">分流配置</span>
         <n-button size="small" secondary @click="copy(selectedFormats?.clash)">Clash</n-button>
         <n-button size="small" secondary @click="copy(selectedFormats?.singbox)">sing-box</n-button>
         <n-button size="small" secondary @click="copy(selectedFormats?.surge)">Surge</n-button>
+      </div>
+      <div class="sub-action-row">
+        <span class="sub-action-label">仅节点</span>
         <!-- formats.base64, not formats.default: default has no ?format= and so
              picks its output from the client's User-Agent, which silently hands
              YAML to anything whose UA contains "clash". This button is for
              v2rayN / NekoBox / Shadowrocket, so it must pin the link list. -->
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button size="small" secondary @click="copy(selectedFormats?.base64 || sub.formats?.base64 || sub.formats?.default)">通用 / v2rayN</n-button>
+            <n-button size="small" secondary @click="copy(base64SubscriptionURL)">通用 / v2rayN</n-button>
           </template>
           通用格式只包含节点，代理范围由客户端本地规则决定
         </n-tooltip>
@@ -362,9 +365,29 @@ const routingProfileOptions = [
   { label: '智能分流（推荐）', value: 'cn_direct' },
   { label: '全部代理', value: 'proxy_all' },
 ]
-const selectedProfile = computed<any>(() => sub.value?.profiles?.[routingProfile.value] || {})
-const selectedSubscriptionURL = computed<string>(() => selectedProfile.value?.url || '')
-const selectedFormats = computed<any>(() => selectedProfile.value?.formats || {})
+const routingProfileParam = computed(() => routingProfile.value === 'cn_direct' ? 'cn-direct' : 'proxy-all')
+// Build every native-config URL from the current base address and current selector
+// value. This avoids a stale/missing `profiles` payload making the visible choice
+// and the copied Clash/sing-box/Surge link disagree during rolling upgrades.
+function routedSubscriptionURL(format?: 'clash' | 'singbox' | 'surge'): string {
+  const base = sub.value?.url
+  if (!base) return ''
+  try {
+    const u = new URL(base, window.location.origin)
+    u.searchParams.set('profile', routingProfileParam.value)
+    if (format) u.searchParams.set('format', format)
+    return u.toString()
+  } catch { return '' }
+}
+const selectedSubscriptionURL = computed(() => routedSubscriptionURL())
+const selectedFormats = computed(() => ({
+  clash: routedSubscriptionURL('clash'),
+  singbox: routedSubscriptionURL('singbox'),
+  surge: routedSubscriptionURL('surge'),
+}))
+// v2rayN/base64 subscriptions contain share links only and have no routing-policy
+// field. Keep its URL format-pinned but do not pretend the CN selector can alter it.
+const base64SubscriptionURL = computed<string>(() => sub.value?.formats?.base64 || sub.value?.formats?.default || '')
 const routingProfileNote = computed(() => routingProfile.value === 'cn_direct'
   ? 'AI 走代理，中国大陆直连，其余公网走代理；Clash / sing-box 同步使用国内解析，Surge 遵循系统 DNS。'
   : 'AI 和所有公网流量都走代理，仅局域网保持直连。')
@@ -463,8 +486,8 @@ function segRange(p: any): string {
 }
 // 一段用掉了多少。排队中的还没开始计量，只报待用额度。
 function segUsage(p: any): string {
-  if (p.status === 'queued') return '待用流量 ' + (p.traffic_limit > 0 ? fmtTotal(p.traffic_limit) : '不限')
-  if (p.traffic_limit <= 0) return `已用 ${fmtBytes(p.used)} · 不限流量`
+  if (p.status === 'queued') return '待用流量 ' + fmtTotal(p.traffic_limit)
+  if (p.traffic_limit <= 0) return `已用 ${fmtBytes(p.used)} / 0 B · 剩 0 B`
   return `已用 ${fmtBytes(p.used)} / ${fmtTotal(p.traffic_limit)} · 剩 ${fmtBytes(p.remaining < 0 ? 0 : p.remaining)}`
 }
 function planPct(p: any) { return p.status === 'queued' ? 0 : pct(p.used, p.traffic_limit) }

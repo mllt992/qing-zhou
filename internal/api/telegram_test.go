@@ -524,7 +524,7 @@ func TestNotifyTrafficLowRecovers(t *testing.T) {
 	}
 }
 
-func TestNotifySkipsUnlimitedAndBanned(t *testing.T) {
+func TestNotifySkipsZeroQuotaAndBanned(t *testing.T) {
 	a, st, inbox := newTelegramAPI(t)
 	uid, err := st.CreateUser(store.NewUser{Username: "u1", PasswordHash: "x"})
 	if err != nil {
@@ -533,12 +533,12 @@ func TestNotifySkipsUnlimitedAndBanned(t *testing.T) {
 	if err := st.BindTelegram(uid, 14, 14, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	// Uncapped: must not fire traffic_low even at "0 remaining".
-	insertPlan(t, st, uid, "不限", 0, 50<<30, time.Now().Unix()+30*86400)
+	// Zero quota has no meaningful low-water percentage and must not fire traffic_low.
+	insertPlan(t, st, uid, "零额度", 0, 50<<30, time.Now().Unix()+30*86400)
 	a.sweepTelegramNotifies()
 	for _, m := range *inbox {
 		if strings.Contains(m.html, "流量") {
-			t.Fatalf("unlimited account got a traffic notice: %s", m.html)
+			t.Fatalf("zero-quota account got a traffic notice: %s", m.html)
 		}
 	}
 

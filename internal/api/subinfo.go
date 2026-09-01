@@ -89,7 +89,7 @@ type subInfo struct {
 	SiteName  string
 	SubURL    string
 	Used      int64
-	Total     int64 // 0 = unlimited
+	Total     int64 // 0 = no quota
 	ExpiryAt  int64 // 0 = never
 	NodeCount int
 	Expired   bool
@@ -113,14 +113,14 @@ func (s subInfo) UsedText() string { return fmtBytes(s.Used) }
 
 func (s subInfo) TotalText() string {
 	if s.Total <= 0 {
-		return "不限"
+		return "0 B"
 	}
 	return fmtBytes(s.Total)
 }
 
 func (s subInfo) RemainText() string {
 	if s.Total <= 0 {
-		return "不限"
+		return "0 B"
 	}
 	if rem := s.Total - s.Used; rem > 0 {
 		return fmtBytes(rem)
@@ -147,6 +147,9 @@ func (s subInfo) UsedPercent() int {
 
 func (s subInfo) ExpiryText() string {
 	if s.ExpiryAt <= 0 {
+		if s.Total <= 0 && s.NodeCount == 0 {
+			return "无套餐"
+		}
 		return "永久"
 	}
 	return time.Unix(s.ExpiryAt, 0).Format("2006-01-02 15:04")

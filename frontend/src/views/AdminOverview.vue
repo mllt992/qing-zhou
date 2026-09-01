@@ -113,11 +113,7 @@
                   <td>{{ fmtBytes(p.traffic) }}</td>
                   <td>{{ p.buckets ? fmtBytes(Math.round(p.traffic / p.buckets)) : '—' }}</td>
                   <td>
-                    <!-- 配额里含不限量份额时，用量占比没有意义，别给一个假的百分比 -->
-                    <template v-if="p.unlimited">
-                      <span class="muted">含不限量</span>
-                    </template>
-                    <template v-else-if="p.quota > 0">
+                    <template v-if="p.quota > 0">
                       <div class="mini-bar"><i :style="{ width: Math.min(100, p.traffic / p.quota * 100) + '%' }" /></div>
                       <span class="muted">{{ (p.traffic / p.quota * 100).toFixed(0) }}%</span>
                     </template>
@@ -201,9 +197,9 @@
                                                    :style="{ width: Math.min(100, u.traffic / u.traffic_limit * 100) + '%' }" /></div>
                           <span class="muted">{{ fmtTotal(u.traffic_limit) }}</span>
                         </template>
-                        <span v-else class="muted">不限</span>
+                        <span v-else class="muted">0 B</span>
                       </td>
-                      <td :class="expiryClass(u.expiry_at)">{{ u.expiry_at ? fmtDate(u.expiry_at) : '永久' }}</td>
+                      <td :class="expiryClass(u.expiry_at)">{{ u.expiry_at ? fmtDate(u.expiry_at) : (u.traffic_limit > 0 ? '永久' : '无套餐') }}</td>
                       <td class="muted">{{ u.last_online_at ? timeAgo(u.last_online_at) : '—' }}</td>
                       <td>{{ u.spend || 0 }}</td>
                       <td><n-button size="tiny" quaternary @click="toggleUser(u)">{{ expanded === u.id ? '收起' : '趋势' }}</n-button></td>

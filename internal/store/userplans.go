@@ -71,12 +71,14 @@ func usableExpr(alias string) string {
 	a := alias + "."
 	return `(` + a + `status='active'
 		AND (` + a + `expiry_at=0 OR ` + a + `expiry_at>strftime('%s','now'))
-		AND (` + a + `traffic_limit=0 OR ` + a + `used_up+` + a + `used_down<` + a + `traffic_limit))`
+		AND ` + a + `traffic_limit>0
+		AND ` + a + `used_up+` + a + `used_down<` + a + `traffic_limit)`
 }
 
 const usableHeadPredicate = `h.kind='plan' AND h.status='active'
 	AND (h.expiry_at=0 OR h.expiry_at>?)
-	AND (h.traffic_limit=0 OR h.used_up+h.used_down<h.traffic_limit)`
+	AND h.traffic_limit>0
+	AND h.used_up+h.used_down<h.traffic_limit`
 
 // StatusRetired marks a plan bucket that has finished its turn and handed the
 // renewal line's slot to the next份.
@@ -438,19 +440,18 @@ func subFromPool(tx txLike, userID int64, subBytes, now int64) error {
 // recomputeUserAggregate rebuilds the legacy users.* aggregate columns from the
 // authoritative buckets after a bucket change (e.g. a refund), so the dashboard
 // totals stay consistent with what enforcement actually sees. traffic_limit /
-// used_up / used_down are summed across all buckets; expiry_at is the latest
-// plan-bucket expiry (0 when the user holds only the never-expiring pool).
+// used_up / used_down are summed across positive, non-free buckets; expiry_at is
+// the latest positive plan-bucket expiry (0 with no finite plan entitlement).
 //
-// Free buckets are excluded from all three sums: they carry no limit, so letting
-// their usage into used_* would count unmetered free-group traffic against the
-// user's paid quota in handleSub's serviceable check — the very coupling the
-// free bucket exists to break.
+// Free buckets are excluded from all three sums: they carry no paid limit, and
+// their separately metered usage must not inflate the user's finite paid-quota
+// totals or dashboard percentage.
 func recomputeUserAggregate(tx txLike, userID, now int64) (limit, up, down, expiry int64, err error) {
 	err = tx.QueryRow(`SELECT
-		COALESCE(SUM(CASE WHEN kind=? THEN 0 ELSE traffic_limit END),0),
-		COALESCE(SUM(CASE WHEN kind=? THEN 0 ELSE used_up END),0),
-		COALESCE(SUM(CASE WHEN kind=? THEN 0 ELSE used_down END),0),
-		COALESCE(MAX(CASE WHEN kind='plan' THEN expiry_at ELSE 0 END),0)
+		COALESCE(SUM(CASE WHEN kind=? OR traffic_limit<=0 THEN 0 ELSE traffic_limit END),0),
+		COALESCE(SUM(CASE WHEN kind=? OR traffic_limit<=0 THEN 0 ELSE used_up END),0),
+		COALESCE(SUM(CASE WHEN kind=? OR traffic_limit<=0 THEN 0 ELSE used_down END),0),
+		COALESCE(MAX(CASE WHEN kind='plan' AND traffic_limit>0 THEN expiry_at ELSE 0 END),0)
 		FROM user_plans WHERE user_id=?`,
 		KindFree, KindFree, KindFree, userID).Scan(&limit, &up, &down, &expiry)
 	if err != nil {
@@ -459,6 +460,59 @@ func recomputeUserAggregate(tx txLike, userID, now int64) (limit, up, down, expi
 	_, err = tx.Exec(`UPDATE users SET traffic_limit=?, used_up=?, used_down=?, expiry_at=?, updated_at=? WHERE id=?`,
 		limit, up, down, expiry, now, userID)
 	return
+}
+
+const finiteTrafficAggregateMigration = "finite-traffic-aggregate-v1"
+
+// migrateFiniteTrafficAggregates repairs accounts created while zero traffic was
+// treated as an uncapped grant. The buckets are authoritative: discard only the
+// synthetic zero-byte welcome row, retain commercial/admin rows for audit and
+// manual repair, then rebuild every legacy users.* summary with finite semantics.
+func (s *Store) migrateFiniteTrafficAggregates() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var applied int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version=?`, finiteTrafficAggregateMigration).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`DELETE FROM user_plans WHERE kind='plan' AND package_id=? AND traffic_limit<=0`, WelcomePackageID); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT id FROM users ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	var userIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		userIDs = append(userIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for _, id := range userIDs {
+		if _, _, _, _, err := recomputeUserAggregate(tx, id, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?,?)`, finiteTrafficAggregateMigration, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // KindFree is the bucket holding a user's free-group (unmetered) allowance.
@@ -531,11 +585,24 @@ func (s *Store) EnsureFreeBucket(userID int64, username string) error {
 // which handleSub reads as "never expires". Same class of bug as the admin grant
 // fixed in 5bea5ad; this is the registration path it missed.
 //
-// No-ops when the grant is disabled (traffic and expiry both zero) or the user
-// already has one. Recomputes the aggregate so the dashboard mirrors the bucket.
+// Creates nothing when the grant has no traffic, regardless of the configured
+// expiry, and still recomputes the legacy aggregate to clear values staged by an
+// older registration path. A positive grant is idempotent. In either case the
+// aggregate mirrors the authoritative buckets when this returns.
 func (s *Store) EnsureWelcomeBucket(userID int64, username string, traffic, expiry int64) error {
-	if traffic <= 0 && expiry <= 0 {
-		return nil
+	// Zero is zero quota, never an implicit unlimited grant. In particular, an
+	// operator may leave the trial duration configured while setting its traffic
+	// to zero; that combination means "no signup grant", not "unlimited for N days".
+	if traffic <= 0 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, _, _, _, err := recomputeUserAggregate(tx, userID, time.Now().Unix()); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -670,8 +737,9 @@ func (b *Bucket) ProxyActive(now int64) bool {
 // Used is the bucket's total consumed bytes.
 func (b *Bucket) Used() int64 { return b.UsedUp + b.UsedDown }
 
-// HasQuota reports whether the bucket has traffic left (limit 0 = unlimited).
-func (b *Bucket) HasQuota() bool { return b.TrafficLimit == 0 || b.Used() < b.TrafficLimit }
+// HasQuota reports whether the bucket has a positive amount of traffic left.
+// A zero limit is an empty bucket, never an implicit unlimited entitlement.
+func (b *Bucket) HasQuota() bool { return b.TrafficLimit > 0 && b.Used() < b.TrafficLimit }
 
 // NotExpired reports whether the bucket is still within its time window.
 func (b *Bucket) NotExpired(now int64) bool { return b.ExpiryAt == 0 || b.ExpiryAt > now }
@@ -796,10 +864,6 @@ var (
 	// ErrZeroDelta — an adjust of 0 bytes is a no-op the admin almost certainly
 	// did not mean to submit.
 	ErrZeroDelta = errors.New("调整量不能为 0")
-	// ErrBucketUnlimited — a plan bucket with traffic_limit=0 is uncapped; there
-	// is no finite number to grow or shrink. (An empty pool is different: its 0
-	// is "no balance", and adding is how it gets one.)
-	ErrBucketUnlimited = errors.New("不限量套餐无法按字节调整")
 	// ErrTrafficFloor — subtracting would drop the limit below what has already
 	// been used (or below zero). Used bytes cannot be un-spent this way; reset
 	// the counters first if that is the intent.
@@ -912,11 +976,6 @@ func (s *Store) AdjustBucketTraffic(userID, bucketID, delta int64) (*Bucket, err
 	// returns to service when nothing is queued behind it.
 	if b.Status == StatusRetired || (b.Kind == "plan" && !b.NotExpired(now)) {
 		return nil, ErrBucketFinished
-	}
-	// A plan with limit 0 is uncapped. A pool with limit 0 is empty — adding
-	// is the whole point of adjusting it.
-	if b.TrafficLimit == 0 && b.Kind != "pool" {
-		return nil, ErrBucketUnlimited
 	}
 	newLimit := b.TrafficLimit + delta
 	if newLimit < b.Used() || newLimit < 0 {

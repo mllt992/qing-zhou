@@ -37,10 +37,10 @@ var (
 	tvPLink    = tgTplVar{"panel_link", "「打开面板」可点击链接"}
 	tvBar      = tgTplVar{"bar", "用量进度条，如 ▓▓▓▓▓▓▓▓░░  82%"}
 	tvUsed     = tgTplVar{"used", "已用流量"}
-	tvTotal    = tgTplVar{"total", "总量；不限量时为「不限」"}
+	tvTotal    = tgTplVar{"total", "总流量额度；没有额度时为「—」"}
 	tvRemain   = tgTplVar{"remaining", "剩余流量"}
 	tvRemainPc = tgTplVar{"remain_pct", "剩余百分比数字，不含 %"}
-	tvUnmeter  = tgTplVar{"unmetered", "不限量用量补充行；没有则为空"}
+	tvUnmeter  = tgTplVar{"unmetered", "兼容字段，当前始终为空"}
 	tvSummary  = tgTplVar{"summary", "流量一行摘要"}
 	tvItems    = tgTplVar{"items", "套餐列表，由「套餐条目」模板拼出"}
 	tvFooter   = tgTplVar{"footer", "底部操作链接（打开面板续费 / 查看）"}
@@ -224,12 +224,10 @@ func tgFooter(panel, site, action string) string {
 	return `<a href="` + telegram.Escape(panel) + `">` + telegram.Escape(action) + `</a>`
 }
 
-// tgBar is a 10-cell usage bar. Uncapped / empty quota have no ratio that
-// means anything, so they get a short label instead of a fake 0% or 100%.
-func tgBar(used, total int64, unlimited bool) string {
-	if unlimited && total <= 0 {
-		return "∞　不限量"
-	}
+// tgBar is a 10-cell usage bar. Empty quota has no meaningful ratio, so it gets
+// a short label instead of a fake 0% or 100%. The last argument is retained for
+// template/test source compatibility; unlimited traffic is no longer supported.
+func tgBar(used, total int64, _ bool) string {
 	if total <= 0 {
 		return "—　暂无额度"
 	}
@@ -254,27 +252,6 @@ func (a *API) trafficVars(username string, buckets []*store.Bucket) map[string]s
 	m["used"] = fmtBytes(tr.Used)
 	m["unmetered"] = ""
 	switch {
-	case tr.Unlimited && tr.Total == 0:
-		m["total"] = "不限"
-		m["remaining"] = "不限"
-		m["remain_pct"] = ""
-		m["summary"] = "不限量"
-		if tr.UnmeteredUsed > 0 {
-			m["unmetered"] = "\n不限量已用　" + fmtBytes(tr.UnmeteredUsed)
-			m["summary"] = "不限量（已用 " + fmtBytes(tr.UnmeteredUsed) + "）"
-		}
-		m["bar"] = tgBar(0, 0, true)
-	case tr.Unlimited:
-		m["total"] = fmtBytes(tr.Total)
-		m["remaining"] = fmtBytes(tr.Remaining)
-		if tr.Total > 0 {
-			m["remain_pct"] = fmt.Sprintf("%d", tr.Remaining*100/tr.Total)
-		} else {
-			m["remain_pct"] = ""
-		}
-		m["unmetered"] = "\n另有不限量用量　" + fmtBytes(tr.UnmeteredUsed)
-		m["summary"] = fmt.Sprintf("计量 %s / %s，另有不限量 %s", fmtBytes(tr.Used), fmtBytes(tr.Total), fmtBytes(tr.UnmeteredUsed))
-		m["bar"] = tgBar(tr.Used, tr.Total, false)
 	case tr.Total == 0:
 		m["used"] = fmtBytes(0)
 		m["total"] = "—"
@@ -321,11 +298,7 @@ func planItemVars(p planView) map[string]string {
 	case p.ExpiryAt > 0:
 		expiry = fmtUnix(p.ExpiryAt)
 	}
-	total, remaining := "不限", "不限"
-	if p.Remaining >= 0 {
-		total = fmtBytes(p.TrafficLimit)
-		remaining = fmtBytes(p.Remaining)
-	}
+	total, remaining := fmtBytes(p.TrafficLimit), fmtBytes(p.Remaining)
 	return map[string]string{
 		"name":      telegram.Escape(p.Name),
 		"status":    planStatusLabel(p.Status),

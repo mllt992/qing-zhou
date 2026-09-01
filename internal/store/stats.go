@@ -301,8 +301,8 @@ type PackageStat struct {
 	Holders      int64 `json:"holders"`
 	ActiveBucket int64 `json:"active_buckets"` // not expired and not over quota
 	Traffic      int64 `json:"traffic"`        // used bytes across those buckets
-	Quota        int64 `json:"quota"`          // granted bytes; 0 entries mean unlimited
-	Unlimited    int64 `json:"unlimited"`      // buckets with no traffic cap
+	Quota        int64 `json:"quota"`          // granted finite bytes
+	Unlimited    int64 `json:"unlimited"`      // compatibility field; always zero
 	Expiring7d   int64 `json:"expiring_7d"`
 }
 
@@ -329,12 +329,12 @@ func (s *Store) PackageStats() ([]PackageStat, error) {
 			(SELECT COUNT(DISTINCT b.user_id) FROM user_plans b WHERE b.package_id=ids.pid AND b.kind='plan'),
 			(SELECT COUNT(*) FROM user_plans b WHERE b.package_id=ids.pid AND b.kind='plan'
 				AND (b.expiry_at=0 OR b.expiry_at>?)
-				AND (b.traffic_limit=0 OR b.used_up+b.used_down < b.traffic_limit)),
+				AND b.traffic_limit>0 AND b.used_up+b.used_down < b.traffic_limit),
 			(SELECT COALESCE(SUM(b.used_up+b.used_down),0) FROM user_plans b WHERE b.package_id=ids.pid AND b.kind='plan'),
 			(SELECT COALESCE(SUM(b.traffic_limit),0) FROM user_plans b WHERE b.package_id=ids.pid AND b.kind='plan'),
-			(SELECT COUNT(*) FROM user_plans b WHERE b.package_id=ids.pid AND b.kind='plan' AND b.traffic_limit=0),
+			0,
 			(SELECT COUNT(*) FROM user_plans b WHERE b.package_id=ids.pid AND b.kind='plan'
-				AND b.expiry_at>? AND b.expiry_at<=?)
+				AND b.traffic_limit>0 AND b.expiry_at>? AND b.expiry_at<=?)
 		FROM ids LEFT JOIN packages p ON p.id=ids.pid
 		ORDER BY 6 DESC, 5 DESC`,
 		now, now, now+7*86400)

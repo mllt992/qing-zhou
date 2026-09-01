@@ -153,6 +153,35 @@ func TestPlanDurations_SingleDurationPackage(t *testing.T) {
 	}
 }
 
+func TestPlanDurations_ZeroTrafficCannotBePurchasedOrAssigned(t *testing.T) {
+	st := newRefundStore(t)
+	uid := mkUser(t, st, "zero-package")
+	pkgID, err := st.CreatePackage(Package{
+		Type: "plan", Name: "零额度旧商品", TrafficBytes: 0, DurationDays: 30,
+		PricePoints: 100, Stock: -1, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := st.GetPackage(pkgID)
+	if err != nil || pkg == nil {
+		t.Fatalf("GetPackage: %v %#v", err, pkg)
+	}
+	before := points(t, st, uid)
+	if _, err := st.PurchaseDuration(uid, pkg, 0, "", noopSync); !errors.Is(err, ErrPackageNoTraffic) {
+		t.Fatalf("purchase error = %v, want ErrPackageNoTraffic", err)
+	}
+	if got := points(t, st, uid); got != before {
+		t.Fatalf("points changed after rejected zero-byte purchase: %d -> %d", before, got)
+	}
+	if _, err := st.AssignPackageDuration(uid, pkg, 30, 0, noopSync); !errors.Is(err, ErrPackageNoTraffic) {
+		t.Fatalf("assignment error = %v, want ErrPackageNoTraffic", err)
+	}
+	if buckets := planBuckets(t, st, uid, pkgID); len(buckets) != 0 {
+		t.Fatalf("zero-byte package created buckets: %+v", buckets)
+	}
+}
+
 // The refund prorates against the length actually bought (carried in the order
 // snapshot), not the package's default one.
 func TestPlanDurations_RefundUsesPurchasedLength(t *testing.T) {

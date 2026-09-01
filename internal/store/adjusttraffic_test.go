@@ -110,8 +110,9 @@ func TestAdjustBucketTraffic_ExhaustPromotesQueued(t *testing.T) {
 	}
 }
 
-// An empty pool accepts a top-up; an uncapped plan does not (0 means unlimited).
-func TestAdjustBucketTraffic_PoolVsUnlimitedPlan(t *testing.T) {
+// Zero is an empty finite balance for both pool and plan buckets, so an admin can
+// add traffic to either one.
+func TestAdjustBucketTraffic_ZeroBucketsCanBeFunded(t *testing.T) {
 	st := newRefundStore(t)
 	uid := mkUser(t, st, "dina")
 	if err := st.EnsurePoolBucket(uid, "qz_dina_pool", "u", "s"); err != nil {
@@ -129,14 +130,21 @@ func TestAdjustBucketTraffic_PoolVsUnlimitedPlan(t *testing.T) {
 		t.Errorf("pool limit = %d GiB, want 10", got.TrafficLimit/giB)
 	}
 
-	pkg := mkPlan(t, st, "不限量", 100, 0, 30)
+	pkg := mkPlan(t, st, "待补额度", 100, 1, 30)
 	buy(t, st, uid, pkg)
 	bs := planBuckets(t, st, uid, pkg.ID)
 	if len(bs) != 1 {
-		t.Fatalf("setup: want 1 unlimited plan, got %d", len(bs))
+		t.Fatalf("setup: want 1 plan, got %d", len(bs))
 	}
-	if _, err := st.AdjustBucketTraffic(uid, bs[0].ID, 10*giB); !errors.Is(err, ErrBucketUnlimited) {
-		t.Errorf("unlimited plan err = %v, want ErrBucketUnlimited", err)
+	if _, err := st.db.Exec(`UPDATE user_plans SET traffic_limit=0 WHERE id=?`, bs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.AdjustBucketTraffic(uid, bs[0].ID, 10*giB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrafficLimit != 10*giB {
+		t.Errorf("plan limit = %d GiB, want 10", got.TrafficLimit/giB)
 	}
 }
 

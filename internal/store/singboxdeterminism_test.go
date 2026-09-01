@@ -26,7 +26,7 @@ func TestBuildSingboxConfigIsByteStable(t *testing.T) {
 	st := openMigrated(t)
 	now := time.Now().Unix()
 
-	plan, err := st.CreatePackage(Package{Type: "plan", Name: "月付", DurationDays: 30, Stock: -1, Enabled: true})
+	plan, err := st.CreatePackage(Package{Type: "plan", Name: "月付", TrafficBytes: 1 << 30, DurationDays: 30, Stock: -1, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

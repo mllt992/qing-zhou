@@ -98,7 +98,7 @@ func (a *API) notifyExpiry(b *store.TelegramBind, username string, buckets []*st
 		if bk.Kind == store.KindFree || bk.Status == "queued" {
 			continue
 		}
-		if bk.Kind == "pool" && bk.TrafficLimit <= 0 {
+		if bk.TrafficLimit <= 0 {
 			continue
 		}
 		if bk.ExpiryAt <= 0 {
@@ -151,9 +151,8 @@ func (a *API) notifyExpiry(b *store.TelegramBind, username string, buckets []*st
 
 func (a *API) notifyTraffic(b *store.TelegramBind, username string, buckets []*store.Bucket, pct int64, panel, site string, send bool) {
 	tr := dashboardTraffic(buckets)
-	// Uncapped traffic has no "remaining percent" that means anything; an
-	// empty roll-up is "no quota", not "0% left".
-	if tr.Unlimited || tr.Total <= 0 {
+	// An empty roll-up is "no quota", not "0% left".
+	if tr.Total <= 0 {
 		_ = a.st.ClearNotify(b.UserID, notifyKindTrafficLow, notifyTrafficSubject)
 		_ = a.st.ClearNotify(b.UserID, notifyKindTrafficOut, notifyTrafficSubject)
 		return

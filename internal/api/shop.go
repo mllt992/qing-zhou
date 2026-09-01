@@ -69,6 +69,8 @@ func (a *API) handlePurchase(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusPaymentRequired, "积分不足")
 		case errors.Is(err, store.ErrPackageDisabled):
 			fail(w, http.StatusBadRequest, "商品已下架")
+		case errors.Is(err, store.ErrPackageNoTraffic):
+			fail(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, store.ErrPackageNotAllowed):
 			fail(w, http.StatusForbidden, "该商品仅限指定用户组购买")
 		case errors.Is(err, store.ErrOutOfStock):

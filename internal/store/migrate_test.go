@@ -131,7 +131,7 @@ func TestMigrate_FreshDBDoesNotBackfillEmailGateExemption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkgID, err := st.CreatePackage(Package{Type: "plan", Name: "fresh plan", DurationDays: 30, Stock: -1, Enabled: true})
+	pkgID, err := st.CreatePackage(Package{Type: "plan", Name: "fresh plan", TrafficBytes: 1 << 30, DurationDays: 30, Stock: -1, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestMigrate_EmailGateExemptionOnlyWhenColumnAdded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkgID, err := st.CreatePackage(Package{Type: "plan", Name: "新购套餐", DurationDays: 30, Stock: -1, Enabled: true})
+	pkgID, err := st.CreatePackage(Package{Type: "plan", Name: "新购套餐", TrafficBytes: 1 << 30, DurationDays: 30, Stock: -1, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestMigrate_EmailGateExemptionOnlyWhenColumnAdded(t *testing.T) {
 
 func TestMigrate_ZeroConfigPreservesOnlyHistoricalPaidPackages(t *testing.T) {
 	st := openMigrated(t)
-	paid, err := st.CreatePackage(Package{Type: "plan", Name: "旧套餐", DurationDays: 30, Stock: -1, Enabled: true})
+	paid, err := st.CreatePackage(Package{Type: "plan", Name: "旧套餐", TrafficBytes: 1 << 30, DurationDays: 30, Stock: -1, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestMigrate_ZeroConfigPreservesOnlyHistoricalPaidPackages(t *testing.T) {
 		t.Fatalf("plan-less user inherited migrated all-node group: %v", gids)
 	}
 
-	newPkg, err := st.CreatePackage(Package{Type: "plan", Name: "新套餐", DurationDays: 30, Stock: -1, Enabled: true})
+	newPkg, err := st.CreatePackage(Package{Type: "plan", Name: "新套餐", TrafficBytes: 1 << 30, DurationDays: 30, Stock: -1, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -424,6 +424,45 @@ func TestRegister_CodeDoesNotRequireEmailWhenVerifyOn(t *testing.T) {
 	}
 }
 
+// A duration setting without traffic must not be staged in users.* while email
+// verification defers provisioning. Zero traffic means no welcome entitlement.
+func TestRegister_ZeroTrafficDoesNotCreateLegacyEntitlement(t *testing.T) {
+	a, st := newUserEditAPI(t)
+	if err := st.SetSetting("register_mode", "open"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSettingBool("email_verify_required", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting("default_traffic", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting("default_expiry_days", "30"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	body := `{"username":"zeroquota","email":"zero@example.com","password":"secret1"}`
+	a.handleRegister(w, httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body)))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "need_verify") {
+		t.Fatalf("register = %d: %s", w.Code, w.Body.String())
+	}
+	u, err := st.UserByUsername("zeroquota")
+	if err != nil || u == nil {
+		t.Fatalf("UserByUsername: %v %#v", err, u)
+	}
+	if u.TrafficLimit != 0 || u.ExpiryAt != 0 {
+		t.Fatalf("legacy aggregate = traffic %d / expiry %d, want 0 / 0", u.TrafficLimit, u.ExpiryAt)
+	}
+	buckets, err := st.ListBuckets(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buckets) != 0 {
+		t.Fatalf("unverified zero-quota signup created buckets: %+v", buckets)
+	}
+}
+
 // Turning the setting off must not keep withholding nodes from unverified
 // accounts — otherwise flipping the toggle would silently lock everyone out.
 func TestUnverified_SubPassesWhenVerifyNotRequired(t *testing.T) {

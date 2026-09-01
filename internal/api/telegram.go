@@ -544,9 +544,6 @@ func (a *API) tgCmdUnbind(msg *telegram.Message) {
 }
 
 func formatPlanTraffic(p planView) string {
-	if p.Remaining < 0 {
-		return "不限 · 已用 " + fmtBytes(p.Used)
-	}
 	return fmt.Sprintf("已用 %s / %s，剩余 %s", fmtBytes(p.Used), fmtBytes(p.TrafficLimit), fmtBytes(p.Remaining))
 }
 

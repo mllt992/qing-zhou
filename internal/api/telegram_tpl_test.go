@@ -16,8 +16,8 @@ func TestApplyTplReplacesKnownLeavesUnknown(t *testing.T) {
 }
 
 func TestTGBar(t *testing.T) {
-	if !strings.Contains(tgBar(0, 0, true), "不限") {
-		t.Fatal("unlimited bar")
+	if !strings.Contains(tgBar(0, 0, true), "暂无") {
+		t.Fatal("legacy unlimited flag must not turn zero into unlimited")
 	}
 	if !strings.Contains(tgBar(0, 0, false), "暂无") {
 		t.Fatal("empty bar")

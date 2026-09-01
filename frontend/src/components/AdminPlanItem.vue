@@ -36,27 +36,23 @@ defineEmits<{ (e: 'remove'): void; (e: 'adjust'): void }>()
 const meta = computed(() => planStatusMeta(props.plan))
 const bucket = computed<'active' | 'queued' | 'finished'>(() =>
   meta.value.label === '使用中' ? 'active' : meta.value.label === '排队中' ? 'queued' : 'finished')
-// 不限量没有可改的数字；已过期的份加流量也不会重新生效。已用尽仍可加，好把这一份救回来。
+// 已过期的份加流量不会重新生效；零额度/已用尽仍可加，好把这一份救回来。
 const canAdjust = computed(() => {
-  const p = props.plan
-  if (p.traffic_limit <= 0 && p.kind !== 'pool') return false
   return meta.value.label !== '已过期'
 })
 
 const usedPct = computed(() => pct(props.plan.used, props.plan.traffic_limit))
 const fillWidth = computed(() =>
-  props.plan.traffic_limit > 0 ? Math.min(usedPct.value, 100) + '%' : '100%')
+  props.plan.traffic_limit > 0 ? Math.min(usedPct.value, 100) + '%' : '0%')
 const fillColor = computed(() => {
   if (bucket.value === 'finished') return 'var(--text-3)'
-  if (props.plan.traffic_limit <= 0) return '#6f8f76'
+  if (props.plan.traffic_limit <= 0) return 'var(--text-3)'
   return usedPct.value > 90 ? '#c2685c' : usedPct.value > 70 ? '#bf9540' : '#6f8f76'
 })
 
 const amountText = computed(() => {
   const p = props.plan
-  if (p.traffic_limit > 0) return `${fmtBytes(p.used)} / ${fmtBytes(p.traffic_limit)}`
-  // 不限量的份没有分母，报已用即可——写成 "x / 0 B" 或 "100%" 都是假的
-  return `不限量 · 已用 ${fmtBytes(p.used)}`
+  return `${fmtBytes(p.used)} / ${fmtBytes(p.traffic_limit)}`
 })
 
 const whenText = computed(() => {

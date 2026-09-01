@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 )
@@ -298,30 +299,40 @@ func (s *Store) PlanGroupIDs(packageID int64) ([]int64, error) {
 
 // ---- aggregation ----
 
-// AccessibleGroupIDs returns the groups a user can use: the free group (if set)
-// plus the union of the groups bound to every NON-EXPIRED plan the user holds.
-// (Traffic exhaustion only cuts off metered self-built nodes — enforced per
-// bucket in BuildUsersByTag — so access here is gated by time, not quota, which
-// keeps unmetered external nodes reachable until the plan actually expires.)
+// AccessibleGroupIDs returns the groups a user can use. It deliberately derives
+// access through orderBuckets, the same ownership calculation used for native
+// sing-box inbounds: exhausted plans stop granting groups, while a funded pool
+// or active general grant can cover groups from a positive plan entitlement.
+// A zero-limit plan never establishes that entitlement.
 func (s *Store) AccessibleGroupIDs(u *User) ([]int64, error) {
 	set := map[int64]bool{}
-	if free, _ := s.GetSettingInt64("free_group_id", 0); free > 0 {
+	free, _ := s.GetSettingInt64("free_group_id", 0)
+	if free > 0 {
+		// Preserve legacy external-free-node visibility even if an old account has
+		// not received its separate metering bucket yet.
 		set[free] = true
 	}
 	buckets, err := s.ListBuckets(u.ID)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().Unix()
+	groupsByPackage := map[int64][]int64{}
 	for _, b := range buckets {
-		if b.Kind != "plan" || !b.NotExpired(now) {
+		if b.Kind != "plan" || b.PackageID <= 0 || b.Status == "queued" || b.TrafficLimit <= 0 {
 			continue
 		}
-		gids, err := s.PlanGroupIDs(b.PackageID)
+		if _, ok := groupsByPackage[b.PackageID]; ok {
+			continue
+		}
+		groupsByPackage[b.PackageID], err = s.PlanGroupIDs(b.PackageID)
 		if err != nil {
 			return nil, err
 		}
-		for _, g := range gids {
+	}
+	for _, owned := range orderBuckets(buckets, time.Now().Unix(), free, func(packageID int64) []int64 {
+		return groupsByPackage[packageID]
+	}) {
+		for g := range owned.groups {
 			set[g] = true
 		}
 	}
@@ -329,6 +340,7 @@ func (s *Store) AccessibleGroupIDs(u *User) ([]int64, error) {
 	for g := range set {
 		out = append(out, g)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
 }
 

@@ -139,12 +139,15 @@ func TestSubInfoNumbers(t *testing.T) {
 	if over.RemainText() != "已用尽" {
 		t.Errorf("over-quota remain = %q", over.RemainText())
 	}
-	unlimited := subInfo{Used: 5 << 30}
-	if unlimited.TotalText() != "不限" || unlimited.RemainText() != "不限" || unlimited.UsedPercent() != 0 {
-		t.Errorf("unlimited rendered as %q/%q/%d", unlimited.TotalText(), unlimited.RemainText(), unlimited.UsedPercent())
+	empty := subInfo{Used: 5 << 30}
+	if empty.TotalText() != "0 B" || empty.RemainText() != "0 B" || empty.UsedPercent() != 0 {
+		t.Errorf("zero quota rendered as %q/%q/%d", empty.TotalText(), empty.RemainText(), empty.UsedPercent())
 	}
-	if (subInfo{}).ExpiryText() != "永久" {
-		t.Error("zero expiry should read as 永久")
+	if (subInfo{}).ExpiryText() != "无套餐" {
+		t.Error("empty subscription should read as 无套餐")
+	}
+	if (subInfo{Total: 1}).ExpiryText() != "永久" {
+		t.Error("positive quota with zero expiry should read as 永久")
 	}
 }
 

@@ -89,27 +89,23 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	traffic, _ := a.st.GetSettingInt64("default_traffic", 10<<30)
-	expiryDays, _ := a.st.GetSettingInt64("default_expiry_days", 30)
 	bonus, _ := a.st.GetSettingInt64("signup_bonus_points", 0)
 	subToken, err := idgen.RandToken(24)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "服务器错误")
 		return
 	}
-	expiryAt := int64(0)
-	if expiryDays > 0 {
-		expiryAt = time.Now().Unix() + expiryDays*86400
-	}
-
 	id, err := a.st.CreateUser(store.NewUser{
 		Username:     req.Username,
 		Email:        req.Email,
 		PasswordHash: hash,
 		Points:       bonus,
 		SubToken:     subToken,
-		TrafficLimit: traffic,
-		ExpiryAt:     expiryAt,
+		// Aggregate quota fields start empty. provisionClient creates the actual
+		// welcome bucket (when its traffic is positive) and recomputes them. Writing
+		// the settings here would leave a fake dated entitlement when traffic is 0.
+		TrafficLimit: 0,
+		ExpiryAt:     0,
 		// A valid invite is a trusted admission path and remains exempt from
 		// open-registration email verification. This decision is persisted now;
 		// it is never inferred from a package bought later.
@@ -312,12 +308,11 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"status":   u.Status,
 		"traffic": J{
 			"used":      tr.Used,
-			"total":     tr.Total, // 0 = no metered quota at all; read Unlimited to tell which
+			"total":     tr.Total,
 			"remaining": tr.Remaining,
-			// Unlimited says "0 total" means 不限, not 没额度 — the two render
-			// completely differently and the number alone cannot distinguish them.
-			"unlimited":      tr.Unlimited,
-			"unmetered_used": tr.UnmeteredUsed,
+			// Kept for wire compatibility with older frontends. Traffic is always
+			// finite now, so zero means zero and this can never be true.
+			"unlimited": false,
 		},
 		// Plans stay per-bucket so the UI can show every active/queued份 with its
 		// own quota and expiry; there is deliberately no single "current plan" —
@@ -656,7 +651,7 @@ type planView struct {
 	Name         string `json:"name"`
 	TrafficLimit int64  `json:"traffic_limit"`
 	Used         int64  `json:"used"`
-	Remaining    int64  `json:"remaining"` // -1 = unlimited
+	Remaining    int64  `json:"remaining"`
 	ExpiryAt     int64  `json:"expiry_at"`
 	Status       string `json:"status"` // active | queued | expired | exhausted
 	// ActivateBy is a queued plan's estimated LATEST activation time (unix): the
@@ -753,11 +748,9 @@ func queueActivations(buckets []*store.Bucket, now int64) map[int64]int64 {
 // Pass nil to fall back to the snapshot everywhere.
 // dashTraffic is the control-panel's top-line traffic roll-up.
 type dashTraffic struct {
-	Total         int64 // metered quota the user owns right now
-	Used          int64 // usage counted against Total
-	Remaining     int64
-	Unlimited     bool  // at least one owned份 has no cap
-	UnmeteredUsed int64 // usage on those uncapped份 — real, but not part of any ratio
+	Total     int64 // finite quota the user owns right now
+	Used      int64 // usage counted against Total
+	Remaining int64
 }
 
 // dashboardTraffic rolls the buckets up into one headline figure.
@@ -770,13 +763,6 @@ type dashTraffic struct {
 // to prevent. Exhausted-but-live份 DO stay in: 100% of a quota the user still
 // holds is a fact worth showing.
 //
-// The subtlety is TrafficLimit == 0, which means "uncapped", not "zero quota".
-// Summing such a bucket the naive way adds its Used() to the numerator and
-// nothing to the denominator, so a user holding one unlimited plan alongside a
-// metered one sees an inflated used-percentage — and once the metered份 ran
-// low, a "流量已用尽" banner while an unlimited plan is still live. Keep the
-// ratio over capped buckets only and report the uncapped usage on the side.
-//
 // Display-only: enforcement (handleSub) still reads the buckets directly.
 func dashboardTraffic(buckets []*store.Bucket) dashTraffic {
 	var d dashTraffic
@@ -788,15 +774,9 @@ func dashboardTraffic(buckets []*store.Bucket) dashTraffic {
 		if !b.NotExpired(now) {
 			continue
 		}
-		// An empty pool is inert bookkeeping, not an uncapped份 — buildPlanViews
-		// hides it for the same reason. Every account has one, so reading its 0
-		// limit as "unlimited" would tell literally everyone their traffic is 不限.
-		if b.Kind == "pool" && b.TrafficLimit <= 0 {
-			continue
-		}
+		// Zero is an empty bucket for every quota-bearing kind. It contributes
+		// neither usable traffic nor an "unlimited" side channel.
 		if b.TrafficLimit <= 0 {
-			d.Unlimited = true
-			d.UnmeteredUsed += b.Used()
 			continue
 		}
 		d.Total += b.TrafficLimit
@@ -833,7 +813,7 @@ func buildPlanViews(buckets []*store.Bucket, pkgNames map[int64]string) []planVi
 		if b.Kind == store.KindFree {
 			continue // internal unmetered metering identity, not a user-facing package
 		}
-		if b.Kind == "pool" && b.TrafficLimit == 0 {
+		if b.Kind == "pool" && b.TrafficLimit <= 0 {
 			continue // empty/inert pool — nothing to show
 		}
 		name := b.Name
@@ -843,7 +823,7 @@ func buildPlanViews(buckets []*store.Bucket, pkgNames map[int64]string) []planVi
 			}
 		}
 		pv := planView{ID: b.ID, Kind: b.Kind, PackageID: b.PackageID, QueueKey: b.QueueKey, Name: name, TrafficLimit: b.TrafficLimit,
-			Used: b.Used(), ExpiryAt: b.ExpiryAt, Remaining: -1, CreatedAt: b.CreatedAt, OrderID: b.OrderID,
+			Used: b.Used(), ExpiryAt: b.ExpiryAt, Remaining: 0, CreatedAt: b.CreatedAt, OrderID: b.OrderID,
 			DurationDays: b.DurationDays, StartedAt: startedAt(b)}
 		if b.TrafficLimit > 0 {
 			if rem := b.TrafficLimit - b.Used(); rem > 0 {
@@ -918,15 +898,11 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 	// likely first contact after service stops — and re-read the user, because the
 	// serviceable check below reads exactly the fields the promotion just rewrote.
 	u = a.refreshAfterPromotion(u, a.advanceQueueOnRead(u.ID))
-	// Over-quota / expired users are served an empty node list (still a valid,
-	// well-formed config) rather than working links. sing-box self-built access is
-	// enforced separately, but external-node links must be withheld here too.
+	// Entitlement is resolved per bucket by AccessibleGroupIDs/UserOwnedInbounds.
+	// That preserves an explicitly configured free group while ensuring a zero,
+	// exhausted or expired plan cannot contribute any plan-bound node.
 	now := time.Now().Unix()
-	serviceable := (u.ExpiryAt == 0 || u.ExpiryAt > now) &&
-		(u.TrafficLimit == 0 || u.UsedUp+u.UsedDown < u.TrafficLimit)
-	if a.emailBlocksSub(u) {
-		serviceable = false
-	}
+	serviceable := !a.emailBlocksSub(u)
 
 	// Build the link list plus the user's accessible AI-node set, honoring the
 	// per-node blocklist. Group membership never grants access here; it only marks
@@ -971,8 +947,11 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 			SiteName: siteName, SubURL: subURL,
 			Used: u.UsedUp + u.UsedDown, Total: u.TrafficLimit, ExpiryAt: u.ExpiryAt,
 			NodeCount: len(links),
-			Expired:   u.ExpiryAt != 0 && u.ExpiryAt <= now,
-			OverQuota: u.TrafficLimit != 0 && u.UsedUp+u.UsedDown >= u.TrafficLimit,
+			// A free group or funded fallback may still provide nodes after a paid
+			// plan ends. Only describe expiry/quota as blocking when entitlement
+			// resolution actually returned no links.
+			Expired:   len(links) == 0 && u.ExpiryAt != 0 && u.ExpiryAt <= now,
+			OverQuota: len(links) == 0 && u.TrafficLimit > 0 && u.UsedUp+u.UsedDown >= u.TrafficLimit,
 		})
 		if err == nil {
 			a.recordSubscriptionFetch(u, "info", subscriptionClientForUA(r.Header.Get("User-Agent")))

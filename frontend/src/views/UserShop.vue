@@ -145,7 +145,7 @@ function specsOf(pkg: any) {
   const opt = optOf(pkg)
   const s: { label: string; value: string }[] = []
   if (pkg.type === 'traffic' || pkg.type === 'plan') {
-    s.push({ label: '流量', value: opt.traffic_bytes ? fmtTotal(opt.traffic_bytes) : '不限' })
+    s.push({ label: '流量', value: fmtTotal(opt.traffic_bytes) })
   }
   s.push({ label: '有效期', value: opt.days ? `${opt.days} 天` : '永久' })
   return s

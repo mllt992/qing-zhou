@@ -115,15 +115,62 @@ func TestWelcomeGrant_Idempotent(t *testing.T) {
 	}
 }
 
-// A disabled signup grant (both settings zero) must not create a bucket.
+// A zero-traffic signup grant must not create a bucket even when a duration is
+// still configured; zero is zero, not "unlimited for N days".
 func TestWelcomeGrant_SkippedWhenDisabled(t *testing.T) {
 	st := newRefundStore(t)
 	uid := mkUser(t, st, "wilma")
-	if err := st.EnsureWelcomeBucket(uid, "wilma", 0, 0); err != nil {
+	future := time.Now().Unix() + 30*86400
+	if _, err := st.db.Exec(`UPDATE users SET used_up=?, expiry_at=? WHERE id=?`, giB, future, uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureWelcomeBucket(uid, "wilma", 0, future); err != nil {
 		t.Fatal(err)
 	}
 	if welcomeBucket(t, st, uid) != nil {
 		t.Error("no grant configured, but a bucket was created")
+	}
+	u, err := st.UserByID(uid)
+	if err != nil || u == nil {
+		t.Fatalf("UserByID: %v %#v", err, u)
+	}
+	if u.TrafficLimit != 0 || u.UsedUp != 0 || u.ExpiryAt != 0 {
+		t.Fatalf("stale aggregate survived disabled grant: %+v", u)
+	}
+}
+
+func TestFiniteTrafficMigration_RemovesZeroWelcomeAndRepairsAggregate(t *testing.T) {
+	st := newRefundStore(t)
+	uid := mkUser(t, st, "legacy-zero-welcome")
+	future := time.Now().Unix() + 30*86400
+	if _, err := insertBucket(st.db, &Bucket{
+		UserID: uid, Kind: "plan", PackageID: WelcomePackageID, Name: "注册赠送",
+		ClientName: "qz_legacy_zero_welcome", TrafficLimit: 0, ExpiryAt: future,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`UPDATE users SET traffic_limit=0, used_up=?, expiry_at=? WHERE id=?`, giB, future, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM schema_migrations WHERE version=?`, finiteTrafficAggregateMigration); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if welcomeBucket(t, st, uid) != nil {
+		t.Fatal("zero-byte welcome bucket survived finite-traffic migration")
+	}
+	u, err := st.UserByID(uid)
+	if err != nil || u == nil {
+		t.Fatalf("UserByID: %v %#v", err, u)
+	}
+	if u.TrafficLimit != 0 || u.UsedUp != 0 || u.UsedDown != 0 || u.ExpiryAt != 0 {
+		t.Fatalf("aggregate after migration = %+v, want zero quota/usage/expiry", u)
+	}
+	// The marker makes the data migration idempotent.
+	if err := st.Migrate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

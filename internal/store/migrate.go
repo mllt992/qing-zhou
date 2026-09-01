@@ -375,7 +375,7 @@ CREATE TABLE IF NOT EXISTS sb_egresses (
 -- several plans that expire and run out independently.
 --   kind='plan': package_id → plan_groups; has expiry. kind='pool': package_id=0,
 --   no expiry, covers the union of the user's plan groups + free group, drained
---   last. traffic_limit 0 = unlimited (plans only); pool with 0 limit is inert.
+--   last. traffic_limit 0 = no quota for every bucket kind.
 CREATE TABLE IF NOT EXISTS user_plans (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id        INTEGER NOT NULL,
@@ -1104,6 +1104,12 @@ func (s *Store) Migrate() error {
 	}
 	// Collapse duplicate plan buckets left by pre-renewal repurchases (idempotent).
 	if err := s.mergeDuplicatePlanBuckets(); err != nil {
+		return err
+	}
+	// Remove the synthetic zero-byte welcome rows created by the old 0=unlimited
+	// interpretation and rebuild users.* from real finite buckets. One-shot: a
+	// restart must not rewrite live aggregates unnecessarily.
+	if err := s.migrateFiniteTrafficAggregates(); err != nil {
 		return err
 	}
 	// Give every existing provisioned user a free bucket (idempotent). This is

@@ -36,8 +36,8 @@ func validatePackage(p *store.Package) string {
 	if p.PricePoints < 0 {
 		return "价格不能为负"
 	}
-	if p.TrafficBytes < 0 {
-		return "流量不能为负"
+	if p.TrafficBytes <= 0 {
+		return "流量必须大于 0"
 	}
 	if p.DurationDays < 0 {
 		return "有效期不能为负"
@@ -82,8 +82,8 @@ func validateOptions(p *store.Package) string {
 		if o.PricePoints < 0 {
 			return "时长选项的价格不能为负"
 		}
-		if o.TrafficBytes < 0 {
-			return "时长选项的流量不能为负"
+		if o.TrafficBytes <= 0 {
+			return "每个时长选项的流量必须大于 0"
 		}
 	}
 	return ""
@@ -425,7 +425,6 @@ func (a *API) handleAdminAdjustUserPlanTraffic(w http.ResponseWriter, r *http.Re
 			fail(w, http.StatusNotFound, err.Error())
 		case errors.Is(err, store.ErrBucketProtected),
 			errors.Is(err, store.ErrZeroDelta),
-			errors.Is(err, store.ErrBucketUnlimited),
 			errors.Is(err, store.ErrTrafficFloor),
 			errors.Is(err, store.ErrBucketFinished):
 			fail(w, http.StatusBadRequest, err.Error())
