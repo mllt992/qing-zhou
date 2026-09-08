@@ -17,9 +17,12 @@ import (
 type ctxKey string
 
 const (
-	ctxUserID ctxKey = "uid"
-	ctxRole   ctxKey = "role"
-	ctxJti    ctxKey = "jti"
+	ctxUserID   ctxKey = "uid"
+	ctxRole     ctxKey = "role"
+	ctxJti      ctxKey = "jti"
+	ctxAuthKind ctxKey = "auth_kind" // "jwt" | "api_token"
+	ctxScopes   ctxKey = "scopes"    // []string when auth_kind=api_token
+	ctxTokenID  ctxKey = "token_id"
 
 	cookieName = "qz_token"
 	tokenTTL   = 7 * 24 * time.Hour
@@ -202,6 +205,23 @@ func (a *API) authMiddleware(next http.Handler) http.Handler {
 			fail(w, http.StatusUnauthorized, "未登录")
 			return
 		}
+		// Machine API tokens (Bearer only). Cookie-bound browser sessions stay on JWT.
+		if strings.HasPrefix(tokStr, "qz_at_") && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			at, err := a.st.LookupAPIToken(tokStr)
+			if err != nil || at == nil {
+				// Same message as a bad JWT — do not advertise token existence.
+				fail(w, http.StatusUnauthorized, "登录已失效，请重新登录")
+				return
+			}
+			a.st.TouchAPIToken(at.ID)
+			ctx := context.WithValue(r.Context(), ctxUserID, at.CreatedBy)
+			ctx = context.WithValue(ctx, ctxRole, "admin")
+			ctx = context.WithValue(ctx, ctxAuthKind, "api_token")
+			ctx = context.WithValue(ctx, ctxScopes, at.Scopes)
+			ctx = context.WithValue(ctx, ctxTokenID, at.ID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		claims, err := auth.Parse(a.secret, tokStr)
 		if err != nil {
 			fail(w, http.StatusUnauthorized, "登录已过期，请重新登录")
@@ -216,6 +236,7 @@ func (a *API) authMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
 		ctx = context.WithValue(ctx, ctxRole, claims.Role)
 		ctx = context.WithValue(ctx, ctxJti, claims.ID)
+		ctx = context.WithValue(ctx, ctxAuthKind, "jwt")
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

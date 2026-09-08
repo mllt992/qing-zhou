@@ -317,12 +317,14 @@ systemctl daemon-reload && systemctl enable --now qingzhou
 
 ## 🔌 API 概览
 
-鉴权：`Authorization: Bearer <token>` 或 `qz_token` Cookie。
+鉴权：`Authorization: Bearer <JWT 或 API Token>` 或 `qz_token` Cookie。
+
+机器用 **API Token**（`qz_at_…`，管理页 `/admin/api-tokens`）：可 scope / 过期 / 吊销；首批 scope 为 `stats:read`、`users:read`、`nodes:read`、`servers:read`、`backup:write`。Token **不能**调用 `update/*`；管理 Token 本身只能用管理员登录会话。明文只在创建时返回一次，库内仅存哈希。
 
 - **公开**：`GET /api/health`、`GET /api/config`、`POST /api/auth/{login,register,forgot,reset}`、`GET /api/auth/verify`、`GET /sub/{token}`（聚合订阅，UA 自适应或 `?format=clash|singbox|surge`）、`GET /install-singbox.sh`、`GET /api/monitor/{public,heatmap,install.sh,agent/{arch}}`
 - **用户**：`/api/user/{dashboard,plans,subscription,reset-sub,reset-node-creds,packages,purchase,orders,points,announcements,sessions,nodes,proxies,stats/traffic,password,email}`、`GET /api/auth/me`
 - **管理**：
-  - 业务 `/api/admin/{users,user-groups,packages,orders,reg-codes,announcements,help,settings}`（含 `orders/{id}/refund-preview`、`packages/{id}/retire`）
+  - 业务 `/api/admin/{users,user-groups,packages,orders,reg-codes,announcements,help,settings,tokens}`（含 `orders/{id}/refund-preview`、`packages/{id}/retire`；`tokens` 为 API Token 创建/列表/吊销）
   - 节点 `/api/admin/{nodes,node-groups,node-sources,servers}`（含 `nodes/singbox` 版本探测与 `nodes/{id}/singbox/upgrade` 一键重装）
   - 原生 sing-box `/api/admin/sb/*`（TLS、入站、代理出口 `sb/egresses`、`sb/preview`、`sb/port-check`、`sb/sni-test`、`sb/import-remote/*`）
   - 证书中心 `/api/admin/certs/*`

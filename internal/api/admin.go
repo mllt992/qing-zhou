@@ -116,6 +116,10 @@ func (a *API) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if all["sub_clash_template"] == "" {
 		all["sub_clash_template"] = subconv.DefaultClashTemplate
 	}
+	// Default on: missing key means advertise udp:true (historical behaviour).
+	if all["sub_clash_udp"] == "" {
+		all["sub_clash_udp"] = "1"
+	}
 	if all["sub_singbox_template"] == "" {
 		all["sub_singbox_template"] = subconv.DefaultSingboxTemplate
 	}

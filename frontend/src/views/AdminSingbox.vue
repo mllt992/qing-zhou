@@ -633,8 +633,44 @@
             <n-form-item label="下行 Mbps"><n-input-number v-model:value="ie.down_mbps" :min="0" style="width:100%;" /></n-form-item>
           </template>
           <template v-if="ie.type === 'hysteria2'">
-            <n-form-item label="混淆密码"><n-input v-model:value="ie.obfs_password" placeholder="留空不混淆" /></n-form-item>
+            <n-form-item label="混淆类型">
+              <n-select v-model:value="ie.obfs_type" :options="[
+                {label:'关闭',value:''},
+                {label:'salamander',value:'salamander'},
+                {label:'gecko（1.14+）',value:'gecko'}
+              ]" />
+            </n-form-item>
+            <n-form-item v-if="ie.obfs_type" label="混淆密码"><n-input v-model:value="ie.obfs_password" placeholder="必填" /></n-form-item>
+            <template v-if="ie.obfs_type === 'gecko'">
+              <n-form-item label="gecko 最小包">
+                <n-input-number v-model:value="ie.obfs_min_packet" :min="0" placeholder="默认 512" style="width:100%;" />
+              </n-form-item>
+              <n-form-item label="gecko 最大包">
+                <n-input-number v-model:value="ie.obfs_max_packet" :min="0" placeholder="默认 1200" style="width:100%;" />
+              </n-form-item>
+            </template>
+            <n-form-item label="BBR 配置">
+              <n-select v-model:value="ie.bbr_profile" :options="[
+                {label:'默认（standard）',value:''},
+                {label:'conservative',value:'conservative'},
+                {label:'standard',value:'standard'},
+                {label:'aggressive',value:'aggressive'}
+              ]" />
+            </n-form-item>
+            <n-form-item label="关闭 Chrome QUIC 鹦鹉">
+              <n-switch v-model:value="ie.disable_chrome_parrot" />
+              <template #feedback>默认开启鹦鹉；Ed25519 证书或不兼容客户端可关闭。仅写入订阅出站，不下发入站。</template>
+            </n-form-item>
+            <n-form-item label="跳港间隔">
+              <n-input v-model:value="ie.hop_interval" placeholder="如 30s，留空不写" />
+            </n-form-item>
+            <n-form-item label="跳港间隔上限">
+              <n-input v-model:value="ie.hop_interval_max" placeholder="如 60s，与间隔组成随机区间" />
+            </n-form-item>
             <n-form-item label="伪装 URL"><n-input v-model:value="ie.masquerade" placeholder="留空不伪装" /></n-form-item>
+            <n-alert type="info" :bordered="false" style="margin-bottom:12px;">
+              Hysteria Realm（NAT 穿透）本版暂不提供表单；需要时请在自定义配置里写 realm 块，或等后续跟进。节点需 sing-box ≥ 1.14 才能使用 gecko / bbr_profile / parrot / hop。跳港字段为客户端提示，需配合 server_ports 才生效。
+            </n-alert>
           </template>
           <template v-if="ie.type === 'shadowsocks'">
             <n-form-item label="加密方式"><n-select v-model:value="ie.ss_method" :options="ssOpts" /></n-form-item>
@@ -1449,7 +1485,7 @@ function normFlow(v: any): string {
 const ie = reactive({
   id: 0, type: 'vless', tag: '', listen: '::', listen_port: 443, tls_id: 0, server_id: 0, enabled: true,
   tfo: false, mptcp: false, cc: 'bbr', zero_rtt: false,
-  up_mbps: 0, down_mbps: 0, obfs_password: '', masquerade: '',
+  up_mbps: 0, down_mbps: 0, obfs_type: '', obfs_password: '', obfs_min_packet: 0, obfs_max_packet: 0, bbr_profile: '', disable_chrome_parrot: false, hop_interval: '', hop_interval_max: '', masquerade: '',
   net: 'tcp', ws_path: '/', ws_host: '', ws_early_data: 0, grpc_service: '', grpc_multi: false,
   ss_method: '2022-blake3-aes-128-gcm', flow: 'xtls-rprx-vision',
   anytls_idle_check: 0, anytls_idle_timeout: 0, anytls_min_idle: 0,
@@ -1460,7 +1496,7 @@ function resetIe() {
   Object.assign(ie, {
     id: 0, type: 'vless', tag: '', listen: '::', listen_port: 443, tls_id: 0, server_id: 0, enabled: true,
     tfo: false, mptcp: false, cc: 'bbr', zero_rtt: false,
-    up_mbps: 0, down_mbps: 0, obfs_password: '', masquerade: '',
+    up_mbps: 0, down_mbps: 0, obfs_type: '', obfs_password: '', obfs_min_packet: 0, obfs_max_packet: 0, bbr_profile: '', disable_chrome_parrot: false, hop_interval: '', hop_interval_max: '', masquerade: '',
     net: 'tcp', ws_path: '/', ws_host: '', ws_early_data: 0, grpc_service: '', grpc_multi: false,
     ss_method: '2022-blake3-aes-128-gcm', flow: 'xtls-rprx-vision',
     anytls_idle_check: 0, anytls_idle_timeout: 0, anytls_min_idle: 0,
@@ -1477,7 +1513,12 @@ function openInbound(n?: any, clone = false) {
       tls_id: n.tls_id || 0, server_id: n.server_id || 0, enabled: clone ? false : n.enabled,
       tfo: !!o.tcp_fast_open, mptcp: !!o.tcp_multi_path, cc: o.congestion_control || 'bbr', zero_rtt: !!o.zero_rtt_handshake,
       up_mbps: o.up_mbps || 0, down_mbps: o.down_mbps || 0,
-      obfs_password: obfs.password || '', masquerade: typeof o.masquerade === 'string' ? o.masquerade : (o.masquerade?.url || ''),
+      obfs_type: obfs.type || (obfs.password ? 'salamander' : ''), obfs_password: obfs.password || '',
+      obfs_min_packet: obfs.min_packet_size || 0, obfs_max_packet: obfs.max_packet_size || 0,
+      bbr_profile: o.bbr_profile || '',
+      disable_chrome_parrot: !!o.disable_chrome_parrot,
+      hop_interval: o.hop_interval || '', hop_interval_max: o.hop_interval_max || '',
+      masquerade: typeof o.masquerade === 'string' ? o.masquerade : (o.masquerade?.url || ''),
       net: tr.type || 'tcp', ws_path: tr.path || '/', ws_host: tr.host || '', ws_early_data: tr.max_early_data || 0,
       grpc_service: tr.service_name || '', grpc_multi: !!tr.multi_mode,
       ss_method: o.method || '2022-blake3-aes-128-gcm', flow: normFlow(o.flow),
@@ -1530,7 +1571,21 @@ async function saveInbound() {
     if (ie.type === 'vless') o.flow = ie.flow
     if (ie.type === 'tuic') { o.congestion_control = ie.cc; o.zero_rtt_handshake = ie.zero_rtt }
     if (ie.type === 'hysteria2' || ie.type === 'hysteria') { if (ie.up_mbps) o.up_mbps = ie.up_mbps; if (ie.down_mbps) o.down_mbps = ie.down_mbps }
-    if (ie.type === 'hysteria2') { if (ie.obfs_password) o.obfs = { type: 'salamander', password: ie.obfs_password }; if (ie.masquerade) o.masquerade = ie.masquerade }
+    if (ie.type === 'hysteria2') {
+      if (ie.obfs_type && ie.obfs_password) {
+        const obfs: any = { type: ie.obfs_type, password: ie.obfs_password }
+        if (ie.obfs_type === 'gecko') {
+          if (ie.obfs_min_packet > 0) obfs.min_packet_size = ie.obfs_min_packet
+          if (ie.obfs_max_packet > 0) obfs.max_packet_size = ie.obfs_max_packet
+        }
+        o.obfs = obfs
+      }
+      if (ie.bbr_profile) o.bbr_profile = ie.bbr_profile
+      if (ie.disable_chrome_parrot) o.disable_chrome_parrot = true
+      if (ie.hop_interval) o.hop_interval = ie.hop_interval
+      if (ie.hop_interval_max) o.hop_interval_max = ie.hop_interval_max
+      if (ie.masquerade) o.masquerade = ie.masquerade
+    }
     if (ie.type === 'shadowsocks') o.method = ie.ss_method
     if (ie.type === 'anytls') {
       if (ie.anytls_idle_check) o.idle_session_check_interval = ie.anytls_idle_check

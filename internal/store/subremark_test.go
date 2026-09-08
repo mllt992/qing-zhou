@@ -87,3 +87,36 @@ func TestSelfBuiltLinks_RemarkFallsBackToTag(t *testing.T) {
 		t.Fatalf("unbound inbound should fall back to its tag, got %q", remark)
 	}
 }
+
+func TestSelfBuiltLinks_RemarkPrefersNodeRemark(t *testing.T) {
+	st := newRefundStore(t)
+	uid := mkUser(t, st, "carol")
+	pkg := mkPlan(t, st, "P", 10, 100, 30)
+	buy(t, st, uid, pkg)
+
+	if _, err := st.SaveSbInbound(&SbInbound{
+		Type: "vless", Tag: "vless-in", Listen: "::", ListenPort: 8443,
+		Options: "{}", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateNode(Node{
+		Type: "self_built", Name: "香港 01", Remark: "HK-VIP", Protocol: "vless",
+		InboundTag: "vless-in", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bindPlanToInbound(t, st, pkg.ID, "vless-in")
+
+	u, err := st.UserByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := st.BuildSelfBuiltLinks(u, "example.com")
+	if len(links) != 1 {
+		t.Fatalf("want 1 link, got %d", len(links))
+	}
+	if remark := subconv.LinkRemark(links[0].Link); remark != "HK-VIP" {
+		t.Fatalf("remark should prefer node remark, got %q", remark)
+	}
+}

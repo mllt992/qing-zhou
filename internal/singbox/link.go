@@ -69,10 +69,20 @@ type LinkParams struct {
 	UpMbps   int
 	DownMbps int
 
-	// hysteria2 obfs (salamander). Both must be set on the client link or the
-	// handshake fails when the inbound has obfs enabled.
-	Obfs         string // obfs type, e.g. "salamander"
+	// hysteria2 obfs (salamander / gecko). Type+password must be set on the
+	// client link or the handshake fails when the inbound has obfs enabled.
+	Obfs         string // obfs type, e.g. "salamander" | "gecko"
 	ObfsPassword string
+	// Gecko-only on-wire packet size hints (sing-box 1.14+). 0 = omit (defaults).
+	ObfsMinPacket int
+	ObfsMaxPacket int
+	// Optional BBR profile mirrored from the inbound (sing-box 1.14+).
+	BBRProfile string
+	// Client-only Hy2 hints (sing-box 1.14+). Stored on the inbound as options
+	// and stripped before server config emit — they belong on the outbound.
+	DisableChromeParrot bool
+	HopInterval         string // duration, e.g. "30s"
+	HopIntervalMax      string // duration upper bound for hop randomization
 
 	// TCP dial tuning (TCP-based protocols only). TCP Fast Open and MPTCP each
 	// need BOTH ends enabled to do anything, so 轻舟 mirrors the inbound's
@@ -301,6 +311,24 @@ func BuildShareLink(p LinkParams) string {
 			if p.ObfsPassword != "" {
 				q = append(q, "obfs-password="+url.QueryEscape(p.ObfsPassword))
 			}
+			if p.ObfsMinPacket > 0 {
+				q = append(q, "obfs-min-packet="+strconv.Itoa(p.ObfsMinPacket))
+			}
+			if p.ObfsMaxPacket > 0 {
+				q = append(q, "obfs-max-packet="+strconv.Itoa(p.ObfsMaxPacket))
+			}
+		}
+		if p.BBRProfile != "" {
+			q = append(q, "bbr-profile="+esc(p.BBRProfile))
+		}
+		if p.DisableChromeParrot {
+			q = append(q, "disable-chrome-parrot=1")
+		}
+		if p.HopInterval != "" {
+			q = append(q, "hop-interval="+esc(p.HopInterval))
+		}
+		if p.HopIntervalMax != "" {
+			q = append(q, "hop-interval-max="+esc(p.HopIntervalMax))
 		}
 		if p.NoUDP {
 			q = append(q, noUDPParam)

@@ -147,6 +147,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   source_id       INTEGER NOT NULL DEFAULT 0,
   enabled         INTEGER NOT NULL DEFAULT 1,
   sort_order      INTEGER NOT NULL DEFAULT 0,
+  -- Optional subscription display remark; preferred over name in #fragment.
+  remark          TEXT    NOT NULL DEFAULT '',
   created_at      INTEGER NOT NULL
 );
 
@@ -659,6 +661,22 @@ CREATE TABLE IF NOT EXISTS manual_notification_recipients (
   sent_at         INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (notification_id, user_id)
 );
+
+-- Machine API tokens for scripts / Telegram / ops automation. Plaintext is
+-- shown once at creation; only the hash is stored. Scopes are a JSON string
+-- array; expires_at/revoked_at 0 mean never.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT    NOT NULL,
+  token_prefix TEXT    NOT NULL,
+  token_hash   TEXT    NOT NULL UNIQUE,
+  scopes       TEXT    NOT NULL DEFAULT '[]',
+  created_by   INTEGER NOT NULL DEFAULT 0,
+  expires_at   INTEGER NOT NULL DEFAULT 0,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
+  revoked_at   INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL
+);
 `
 
 // indexes is the index DDL, kept OUT of schema above and applied AFTER the
@@ -715,6 +733,8 @@ CREATE INDEX IF NOT EXISTS idx_tg_bind_tokens_exp ON telegram_bind_tokens(expire
 CREATE INDEX IF NOT EXISTS idx_notify_log_user ON user_notify_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_manual_notifications_created ON manual_notifications(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_manual_notify_recipients_status ON manual_notification_recipients(notification_id, status);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_active ON api_tokens(revoked_at, expires_at);
 `
 
 // Migrate brings the schema up to date in three ordered phases: tables, then
@@ -843,6 +863,9 @@ func (s *Store) Migrate() error {
 		// the legacy behaviour of inheriting the physical inbound's own chain.
 		`ALTER TABLE nodes ADD COLUMN route_upstream_inbound_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN route_upstream_broken INTEGER NOT NULL DEFAULT 0`,
+		// Subscription display remark (optional). Preferred over name in share-link
+		// #fragment; never used as metering identity / v2ray_api user name.
+		`ALTER TABLE nodes ADD COLUMN remark TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE servers ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`,
 		// sudo password for accounts without NOPASSWD (encrypted at rest, like the
 		// SSH password beside it), and the name of a key file in the panel's key

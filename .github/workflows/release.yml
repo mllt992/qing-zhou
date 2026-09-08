@@ -121,25 +121,25 @@ jobs:
       # release therefore produces a node whose traffic is never metered and
       # whose quotas are never enforced, silently — the panel just shows zero.
       #
-      # The tag list is exactly what official 1.13.x ships, plus with_v2ray_api
-      # and the with_grpc it needs, so nothing an existing config relies on
-      # (TUN/gvisor, QUIC for hysteria/tuic, uTLS for Reality...) is lost.
+      # The tag list follows official 1.14.x DEFAULT_BUILD_TAGS for linux, plus
+      # with_v2ray_api and with_grpc (needed for StatsService), and with_purego
+      # so NaiveProxy outbound works on amd64/arm64 without CGO. New 1.14
+      # defaults (cloudflared / usbip / openvpn / openconnect) are included so
+      # a node reinstall does not silently lose protocol support relative to
+      # upstream's own linux build.
       #
       # SB_VERSION is pinned so a release is reproducible, which means it only
       # moves when someone moves it — and this binary is what every node ends up
-      # running, so a stale pin quietly holds every landing machine back. Worth
-      # re-checking against the current 1.13.x stable at each release: the
-      # v1.13.14 → v1.13.18 bump alone carried two server-side resource leaks
-      # (v2rayhttp upgrade, quic-go write), which is exactly the kind of thing
-      # that degrades a 1H1G box over days rather than failing outright.
+      # running, so a stale pin quietly holds every landing machine back. Re-check
+      # against the current 1.14.x stable at each release.
       - name: Build sing-box with v2ray_api
         env:
-          SB_VERSION: v1.13.19
+          SB_VERSION: v1.14.0
         run: |
           set -e
           git clone --depth 1 --branch "$SB_VERSION" https://github.com/SagerNet/sing-box.git /tmp/sing-box
           cd /tmp/sing-box
-          TAGS="with_gvisor,with_quic,with_grpc,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_v2ray_api,with_tailscale,with_ccm,with_ocm,with_naive_outbound,with_purego,badlinkname,tfogo_checklinkname0"
+          TAGS="with_gvisor,with_quic,with_grpc,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_v2ray_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_usbip,with_openvpn,with_openconnect,with_purego,badlinkname,tfogo_checklinkname0"
           for arch in amd64 arm64; do
             echo "== sing-box linux/$arch =="
             # -checklinkname=0 is required: sing-box's badtls reaches into

@@ -105,12 +105,41 @@ func Render(format string, links []string, aiNodes map[string]bool, clashTpl, si
 // pre-profile behavior, including Surge's historical CN bypass and base64's
 // node-only output.
 func RenderWithProfile(format string, links []string, aiNodes map[string]bool, clashTpl, singboxTpl, subURL string, profile RoutingProfile) (body string, contentType string, err error) {
-	if profile == ProfileLegacy {
+	return RenderWithOptions(format, links, aiNodes, clashTpl, singboxTpl, subURL, RenderOptions{Profile: profile})
+}
+
+// RenderOptions carries subscription render toggles beyond format selection.
+type RenderOptions struct {
+	Profile RoutingProfile
+	// ClashDisableUDP turns off Clash udp:true advertisement (setting sub_clash_udp=0).
+	ClashDisableUDP bool
+}
+
+// RenderWithOptions is the full render entry used by the subscription handler.
+func RenderWithOptions(format string, links []string, aiNodes map[string]bool, clashTpl, singboxTpl, subURL string, opt RenderOptions) (body string, contentType string, err error) {
+	profile := opt.Profile
+	clashOpt := ClashOptions{DisableUDP: opt.ClashDisableUDP}
+	if profile == ProfileLegacy && !opt.ClashDisableUDP {
 		return Render(format, links, aiNodes, clashTpl, singboxTpl, subURL)
+	}
+	if profile == ProfileLegacy {
+		// Legacy profile but with Clash UDP overridden — still use ClashWithOptions.
+		switch NormalizeFormat(format) {
+		case FormatClash:
+			out, e := ClashWithOptions(parseWithAI(links, aiNodes), clashTpl, ProfileLegacy, clashOpt)
+			return out, "text/yaml; charset=utf-8", e
+		case FormatSingbox:
+			out, e := Singbox(parseWithAI(links, aiNodes), singboxTpl)
+			return out, "application/json; charset=utf-8", e
+		case FormatSurge:
+			return Surge(parseWithAI(links, aiNodes), subURL), "text/plain; charset=utf-8", nil
+		default:
+			return Base64(links), "text/plain; charset=utf-8", nil
+		}
 	}
 	switch NormalizeFormat(format) {
 	case FormatClash:
-		out, e := ClashWithProfile(parseWithAI(links, aiNodes), clashTpl, profile)
+		out, e := ClashWithOptions(parseWithAI(links, aiNodes), clashTpl, profile, clashOpt)
 		return out, "text/yaml; charset=utf-8", e
 	case FormatSingbox:
 		out, e := SingboxWithProfile(parseWithAI(links, aiNodes), singboxTpl, profile)

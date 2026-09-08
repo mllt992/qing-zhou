@@ -357,7 +357,15 @@ func (s *Store) relayOutbound(landing *SbInbound, serverCache map[int64]*Server,
 	if obfs, ok := opts["obfs"].(map[string]interface{}); ok {
 		lp.Obfs = mapStr(obfs, "type")
 		lp.ObfsPassword = mapStr(obfs, "password")
+		lp.ObfsMinPacket = mapInt(obfs, "min_packet_size")
+		lp.ObfsMaxPacket = mapInt(obfs, "max_packet_size")
 	}
+	if v := mapStr(opts, "bbr_profile"); v != "" {
+		lp.BBRProfile = v
+	}
+	lp.DisableChromeParrot = mapBool(opts, "disable_chrome_parrot")
+	lp.HopInterval = mapStr(opts, "hop_interval")
+	lp.HopIntervalMax = mapStr(opts, "hop_interval_max")
 	if tr, ok := opts["transport"].(map[string]interface{}); ok {
 		lp.Network = mapStr(tr, "type")
 		lp.Path = mapStr(tr, "path")
