@@ -147,6 +147,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   source_id       INTEGER NOT NULL DEFAULT 0,
   enabled         INTEGER NOT NULL DEFAULT 1,
   sort_order      INTEGER NOT NULL DEFAULT 0,
+  -- Optional subscription display remark; preferred over name in #fragment.
+  remark          TEXT    NOT NULL DEFAULT '',
   created_at      INTEGER NOT NULL
 );
 
@@ -861,6 +863,9 @@ func (s *Store) Migrate() error {
 		// the legacy behaviour of inheriting the physical inbound's own chain.
 		`ALTER TABLE nodes ADD COLUMN route_upstream_inbound_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN route_upstream_broken INTEGER NOT NULL DEFAULT 0`,
+		// Subscription display remark (optional). Preferred over name in share-link
+		// #fragment; never used as metering identity / v2ray_api user name.
+		`ALTER TABLE nodes ADD COLUMN remark TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE servers ADD COLUMN ssh_password TEXT NOT NULL DEFAULT ''`,
 		// sudo password for accounts without NOPASSWD (encrypted at rest, like the
 		// SSH password beside it), and the name of a key file in the panel's key

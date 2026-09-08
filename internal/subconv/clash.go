@@ -11,17 +11,30 @@ import (
 // Clash renders a mihomo/Clash YAML config, merging the anti-leak template
 // (dns/tun/sniffer/rules) with the generated proxies and a "Proxy" selector.
 func Clash(proxies []*Proxy, template string) (string, error) {
-	return clashWithProfile(proxies, template, ProfileLegacy)
+	return ClashWithOptions(proxies, template, ProfileLegacy, ClashOptions{})
 }
 
 // ClashWithProfile renders an explicitly selected routing profile. Clash keeps
 // the old entry point separate so no-profile subscriptions remain byte-for-byte
 // on the legacy path.
 func ClashWithProfile(proxies []*Proxy, template string, profile RoutingProfile) (string, error) {
-	return clashWithProfile(proxies, template, profile)
+	return ClashWithOptions(proxies, template, profile, ClashOptions{})
 }
 
-func clashWithProfile(proxies []*Proxy, template string, profile RoutingProfile) (string, error) {
+// ClashOptions tunes Clash subscription rendering.
+type ClashOptions struct {
+	// DisableUDP omits udp:true (and related packet-encoding keys) on proxies
+	// that would otherwise advertise UDP. Egress-blocked nodes still force
+	// udp:false when the key is already present. Default false = historical.
+	DisableUDP bool
+}
+
+// ClashWithOptions is ClashWithProfile plus render toggles.
+func ClashWithOptions(proxies []*Proxy, template string, profile RoutingProfile, opt ClashOptions) (string, error) {
+	return clashWithProfile(proxies, template, profile, opt)
+}
+
+func clashWithProfile(proxies []*Proxy, template string, profile RoutingProfile, opt ClashOptions) (string, error) {
 	if strings.TrimSpace(template) == "" {
 		template = DefaultClashTemplate
 	}
@@ -38,7 +51,7 @@ func clashWithProfile(proxies []*Proxy, template string, profile RoutingProfile)
 	}
 	var cs []conv
 	for _, p := range proxies {
-		if m := clashProxy(p); m != nil {
+		if m := clashProxy(p, opt); m != nil {
 			cs = append(cs, conv{m: m, p: p})
 		}
 	}
@@ -292,7 +305,7 @@ func clashFallback(name string, proxies []string) map[string]any {
 	}
 }
 
-func clashProxy(p *Proxy) map[string]any {
+func clashProxy(p *Proxy, opt ClashOptions) map[string]any {
 	m := map[string]any{"name": p.Name, "server": p.Server, "port": p.Port}
 	switch p.Protocol {
 	case "vless":
@@ -510,6 +523,12 @@ func clashProxy(p *Proxy) map[string]any {
 		if _, emitted := m["udp"]; emitted {
 			m["udp"] = false
 		}
+		delete(m, "xudp")
+		delete(m, "packet-addr")
+	} else if opt.DisableUDP {
+		// Global admin switch: do not advertise UDP. Omit the key rather than
+		// writing false, matching protocols that never had udp (hy2/tuic).
+		delete(m, "udp")
 		delete(m, "xudp")
 		delete(m, "packet-addr")
 	}

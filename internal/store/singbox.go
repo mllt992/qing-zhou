@@ -854,9 +854,10 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		}
 		_ = json.Unmarshal([]byte(ib.Options), &opts)
 
-		// Remark = the node's display name from the 节点 page; the raw inbound tag
-		// is only a fallback for an inbound no node is bound to.
-		remark := n.Name
+		// Remark = node remark (preferred) or name from the 节点 page; the raw
+		// inbound tag is only a fallback for an inbound no node is bound to.
+		// Metering identity (v2ray_api user name) is never derived from this.
+		remark := NodeDisplayName(n)
 		if logicalID == 0 {
 			remark = legacyNames[ib.Tag]
 		}

@@ -236,6 +236,12 @@
       <n-drawer-content :title="editingNode ? '编辑节点' : '添加节点'" closable>
         <n-form label-placement="left" label-width="80">
           <n-form-item label="名称"><n-input v-model:value="nodeForm.name" /></n-form-item>
+          <n-form-item label="订阅备注">
+            <div style="width:100%;">
+              <n-input v-model:value="nodeForm.remark" placeholder="可选；优先作为订阅展示名，不影响计量 identity" />
+              <div class="form-tip">留空则用上方名称。客户端手动选中靠展示名记忆，请保持稳定。</div>
+            </div>
+          </n-form-item>
           <n-form-item label="类型">
             <n-radio-group v-model:value="nodeForm.type">
               <n-radio value="self_built">自建</n-radio>
@@ -709,13 +715,13 @@ const editingNode = ref<any>(null)
 // share_link must match store.Node's JSON tag — it was `link`, so the field was
 // never sent: created external nodes had no link at all, and saving an existing
 // one blanked its stored link.
-const nodeForm = reactive({ name: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [] as number[], enabled: true })
+const nodeForm = reactive({ name: '', remark: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [] as number[], enabled: true })
 function openNode(n?: any) {
   editingNode.value = n || null
   if (n) {
-    Object.assign(nodeForm, { name: n.name, type: n.type || 'self_built', inbound_tag: n.inbound_tag || '', route_upstream_inbound_id: n.route_upstream_inbound_id || 0, route_upstream_broken: !!n.route_upstream_broken, share_link: n.share_link || '', group_ids: n.group_ids || [], enabled: n.enabled })
+    Object.assign(nodeForm, { name: n.name, remark: n.remark || '', type: n.type || 'self_built', inbound_tag: n.inbound_tag || '', route_upstream_inbound_id: n.route_upstream_inbound_id || 0, route_upstream_broken: !!n.route_upstream_broken, share_link: n.share_link || '', group_ids: n.group_ids || [], enabled: n.enabled })
   } else {
-    Object.assign(nodeForm, { name: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [], enabled: true })
+    Object.assign(nodeForm, { name: '', remark: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [], enabled: true })
   }
   showNode.value = true
 }

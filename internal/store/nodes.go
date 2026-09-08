@@ -13,6 +13,7 @@ type Node struct {
 	ID                     int64   `json:"id"`
 	Type                   string  `json:"type"` // self_built | external
 	Name                   string  `json:"name"`
+	Remark                 string  `json:"remark"`
 	Protocol               string  `json:"protocol"`
 	InboundTag             string  `json:"inbound_tag"`
 	RouteUpstreamInboundID int64   `json:"route_upstream_inbound_id"`
@@ -25,12 +26,12 @@ type Node struct {
 	GroupIDs               []int64 `json:"group_ids,omitempty"`
 }
 
-const nodeCols = `id, type, name, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, sort_order, created_at`
+const nodeCols = `id, type, name, remark, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, sort_order, created_at`
 
 func scanNode(sc scanner) (*Node, error) {
 	var n Node
 	var routeBroken int
-	err := sc.Scan(&n.ID, &n.Type, &n.Name, &n.Protocol, &n.InboundTag,
+	err := sc.Scan(&n.ID, &n.Type, &n.Name, &n.Remark, &n.Protocol, &n.InboundTag,
 		&n.RouteUpstreamInboundID, &routeBroken, &n.ShareLink, &n.SourceID, &n.Enabled, &n.SortOrder, &n.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -74,14 +75,15 @@ func (s *Store) ListNodes() ([]*Node, error) {
 	return out, nil
 }
 
-// SelfBuiltNodeNames maps each bound inbound tag to the display name the admin
-// gave that node on the 节点 page. Used as the subscription remark so clients
-// show the configured name instead of the raw inbound tag. A tag bound by more
-// than one node keeps the first (sort_order, id) — the same order the node page
-// lists them in.
+// SelfBuiltNodeNames maps each bound inbound tag to the subscription display
+// name (remark if set, otherwise name). A tag bound by more than one node keeps
+// the first (sort_order, id) — the same order the node page lists them in.
 func (s *Store) SelfBuiltNodeNames() (map[string]string, error) {
-	rows, err := s.db.Query(`SELECT inbound_tag, name FROM nodes
-		WHERE type='self_built' AND inbound_tag != '' AND name != ''
+	rows, err := s.db.Query(`SELECT inbound_tag,
+		CASE WHEN trim(remark) != '' THEN remark ELSE name END
+		FROM nodes
+		WHERE type='self_built' AND inbound_tag != ''
+		  AND (trim(remark) != '' OR name != '')
 		  AND route_upstream_inbound_id=0 AND route_upstream_broken=0
 		ORDER BY sort_order, id`)
 	if err != nil {
@@ -101,11 +103,22 @@ func (s *Store) SelfBuiltNodeNames() (map[string]string, error) {
 	return out, rows.Err()
 }
 
+// NodeDisplayName returns the subscription-facing name: remark preferred, else name.
+func NodeDisplayName(n *Node) string {
+	if n == nil {
+		return ""
+	}
+	if r := strings.TrimSpace(n.Remark); r != "" {
+		return r
+	}
+	return n.Name
+}
+
 func (s *Store) CreateNode(n Node) (int64, error) {
 	res, err := s.db.Exec(`INSERT INTO nodes
-		(type, name, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, sort_order, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		n.Type, n.Name, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, n.SourceID,
+		(type, name, remark, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, sort_order, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		n.Type, n.Name, n.Remark, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, n.SourceID,
 		boolToInt(n.Enabled), n.SortOrder, time.Now().Unix())
 	if err != nil {
 		return 0, err
@@ -121,8 +134,8 @@ func (s *Store) CreateNode(n Node) (int64, error) {
 
 func (s *Store) UpdateNode(n Node) error {
 	_, err := s.db.Exec(`UPDATE nodes SET
-		type=?, name=?, protocol=?, inbound_tag=?, route_upstream_inbound_id=?, route_upstream_broken=?, share_link=?, enabled=?, sort_order=? WHERE id=?`,
-		n.Type, n.Name, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, boolToInt(n.Enabled), n.SortOrder, n.ID)
+		type=?, name=?, remark=?, protocol=?, inbound_tag=?, route_upstream_inbound_id=?, route_upstream_broken=?, share_link=?, enabled=?, sort_order=? WHERE id=?`,
+		n.Type, n.Name, n.Remark, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, boolToInt(n.Enabled), n.SortOrder, n.ID)
 	if err != nil {
 		return err
 	}

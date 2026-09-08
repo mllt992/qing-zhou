@@ -964,7 +964,15 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 		format = subconv.FormatForUA(r.Header.Get("User-Agent"))
 	}
 	format = subconv.NormalizeFormat(format)
-	body, ctype, err := subconv.RenderWithProfile(format, links, aiNodes, clashTpl, singboxTpl, subURL, profile)
+	clashUDP, _ := a.st.GetSettingBool("sub_clash_udp")
+	// Default true when unset: GetSettingBool returns false for missing keys.
+	if v, _ := a.st.GetSetting("sub_clash_udp"); strings.TrimSpace(v) == "" {
+		clashUDP = true
+	}
+	body, ctype, err := subconv.RenderWithOptions(format, links, aiNodes, clashTpl, singboxTpl, subURL, subconv.RenderOptions{
+		Profile:         profile,
+		ClashDisableUDP: !clashUDP,
+	})
 	if err != nil {
 		http.Error(w, "render error", http.StatusBadGateway)
 		return
