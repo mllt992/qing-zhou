@@ -46,8 +46,16 @@ func (a *API) handleAdminListServers(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "读取服务器失败")
 		return
 	}
+	machineToken, _ := r.Context().Value(ctxAuthKind).(string)
 	for _, sv := range servers {
 		maskServerSecrets(sv)
+		// The probe token is a write credential for /api/monitor/report. A
+		// servers:read machine token must never receive it, otherwise read-only
+		// access can be exchanged for forged metrics and server status updates.
+		// Browser admins still need the token to copy the probe install command.
+		if machineToken == "api_token" {
+			sv.ProbeToken = ""
+		}
 	}
 	ok(w, servers)
 }

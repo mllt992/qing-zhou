@@ -29,17 +29,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # workflow_dispatch can rebuild an older tag. Fetch its commit so the
+          # assets cannot be built from the workflow's current branch by mistake.
+          fetch-depth: 0
 
       - name: Resolve tag
         id: ver
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="$INPUT_TAG"
           else
-            TAG="${{ github.event.release.tag_name }}"
+            TAG="$RELEASE_TAG"
           fi
+          REVISION="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Building version $TAG"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          git checkout --detach "$REVISION"
+          echo "Building version $TAG from $REVISION"
 
       - uses: actions/setup-node@v4
         with:

@@ -50,3 +50,22 @@ func TestAPIToken_ExpiryAndUnknownScope(t *testing.T) {
 		t.Fatalf("unknown must be nil,nil got=%v err=%v", got, err)
 	}
 }
+
+func TestDeleteUserRemovesOwnedAPITokens(t *testing.T) {
+	st := openMigrated(t)
+	uid := mkUser(t, st, "token-owner-delete")
+	plain, _, err := st.CreateAPIToken("cleanup", []string{"stats:read"}, uid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteUser(uid); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.LookupAPIToken(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatal("deleted account left an operational API token behind")
+	}
+}

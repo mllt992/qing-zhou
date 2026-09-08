@@ -213,6 +213,14 @@ func (a *API) authMiddleware(next http.Handler) http.Handler {
 				fail(w, http.StatusUnauthorized, "登录已失效，请重新登录")
 				return
 			}
+			// A machine token inherits the authority of its creator; it must not
+			// outlive that authority. Checking the live account also closes gaps
+			// caused by direct database maintenance or future role changes.
+			owner, err := a.st.UserByID(at.CreatedBy)
+			if err != nil || owner == nil || owner.Status != "active" || owner.Role != "admin" {
+				fail(w, http.StatusUnauthorized, "登录已失效，请重新登录")
+				return
+			}
 			a.st.TouchAPIToken(at.ID)
 			ctx := context.WithValue(r.Context(), ctxUserID, at.CreatedBy)
 			ctx = context.WithValue(ctx, ctxRole, "admin")

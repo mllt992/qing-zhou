@@ -414,6 +414,7 @@ func (s *Store) DeleteUser(id int64) error {
 		`DELETE FROM telegram_binds WHERE user_id=?`,
 		`DELETE FROM telegram_bind_tokens WHERE user_id=?`,
 		`DELETE FROM user_notify_log WHERE user_id=?`,
+		`DELETE FROM api_tokens WHERE created_by=?`,
 		`DELETE FROM users WHERE id=?`,
 	} {
 		if _, err := tx.Exec(q, id); err != nil {
@@ -468,6 +469,14 @@ func (s *Store) AdminUpdateUser(id int64, status string, resetUsed bool, manual 
 
 	if _, err := tx.Exec(`UPDATE users SET status=?, updated_at=? WHERE id=?`, status, now, id); err != nil {
 		return err
+	}
+	if status == "banned" {
+		// Suspending the owner must also retire its long-lived machine
+		// credentials. Keep this in the same transaction as the status change so
+		// neither half can succeed alone; a later unban must not resurrect them.
+		if _, err := tx.Exec(`UPDATE api_tokens SET revoked_at=? WHERE created_by=? AND revoked_at=0`, now, id); err != nil {
+			return err
+		}
 	}
 	if resetUsed {
 		// Zero the authoritative bucket counters (not just the users.* mirror, which a

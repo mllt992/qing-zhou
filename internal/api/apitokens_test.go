@@ -24,6 +24,11 @@ func openAPITokenTestAPI(t *testing.T) (*API, *store.Store) {
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.CreateUser(store.NewUser{
+		Username: "api-token-owner", PasswordHash: "test", Role: "admin",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return &API{st: st, secret: []byte("test-secret-32-bytes-pad-pad-pad!")}, st
 }
 
@@ -149,5 +154,130 @@ func TestAPIToken_RejectedOnUserRoutes(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("password mutation with scoped api token: got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIToken_ServersReadDoesNotExposeProbeCredential(t *testing.T) {
+	a, st := openAPITokenTestAPI(t)
+	st.SetSecretKey([]byte("api-token-test-encryption-key"))
+	if _, err := st.CreateServer(store.Server{
+		Name: "edge", Host: "192.0.2.10", Enabled: true,
+		ProbeEnabled: true, ProbeToken: "probe-write-credential",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plain, _, err := st.CreateAPIToken("read-only", []string{"servers:read"}, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Use(a.authMiddleware)
+	r.Use(a.requireAdmin)
+	r.Use(a.enforceAPITokenScope)
+	r.Get("/api/admin/servers", a.handleAdminListServers)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/servers", nil)
+	req.Header.Set("Authorization", "Bearer "+plain)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list servers: %d %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data []store.Server `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Data) != 1 {
+		t.Fatalf("servers = %d, want 1", len(env.Data))
+	}
+	if env.Data[0].ProbeToken != "" {
+		t.Fatalf("servers:read exposed probe write credential %q", env.Data[0].ProbeToken)
+	}
+
+	// A browser admin still needs the credential to copy the one-click probe
+	// install command. The redaction applies only to scoped machine tokens.
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/servers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxAuthKind, "jwt"))
+	rec = httptest.NewRecorder()
+	a.handleAdminListServers(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Data) != 1 || env.Data[0].ProbeToken != "probe-write-credential" {
+		t.Fatalf("browser admin lost probe install credential: %+v", env.Data)
+	}
+}
+
+func TestAPIToken_BannedOwnerIsRejectedAndTokenStaysRevoked(t *testing.T) {
+	a, st := openAPITokenTestAPI(t)
+	plain, tok, err := st.CreateAPIToken("ops", []string{"servers:read"}, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AdminUpdateUser(1, "banned", false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Use(a.authMiddleware)
+	r.Get("/api/admin/servers", func(w http.ResponseWriter, r *http.Request) { ok(w, nil) })
+	call := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/admin/servers", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := call(plain); got != http.StatusUnauthorized {
+		t.Fatalf("banned owner token: got %d, want 401", got)
+	}
+	// Defense in depth: even an unrevoked row (for example, created by direct
+	// database maintenance) cannot authenticate while its owner is suspended.
+	latePlain, _, err := st.CreateAPIToken("late", []string{"servers:read"}, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := call(latePlain); got != http.StatusUnauthorized {
+		t.Fatalf("unrevoked token with banned owner: got %d, want 401", got)
+	}
+	if err := st.AdminUpdateUser(1, "active", false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := call(plain); got != http.StatusUnauthorized {
+		t.Fatalf("unban resurrected token: got %d, want 401", got)
+	}
+	list, err := st.ListAPITokens()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original *store.APIToken
+	for _, item := range list {
+		if item.ID == tok.ID {
+			original = item
+			break
+		}
+	}
+	if original == nil || original.RevokedAt == 0 {
+		t.Fatalf("token was not persistently revoked: list=%+v err=%v", list, err)
+	}
+}
+
+func TestAPIToken_MissingOwnerIsRejected(t *testing.T) {
+	a, st := openAPITokenTestAPI(t)
+	plain, _, err := st.CreateAPIToken("orphan", []string{"servers:read"}, 999, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := chi.NewRouter()
+	r.Use(a.authMiddleware)
+	r.Get("/api/admin/servers", func(w http.ResponseWriter, r *http.Request) { ok(w, nil) })
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/servers", nil)
+	req.Header.Set("Authorization", "Bearer "+plain)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("orphan token: got %d, want 401", rec.Code)
 	}
 }
