@@ -398,6 +398,13 @@ func clashProxy(p *Proxy) map[string]any {
 		if p.tlsInsecure() {
 			m["skip-cert-verify"] = true
 		}
+		// Share-link carries obfs (+ password). mihomo uses obfs / obfs-password.
+		if v := p.param("obfs"); v != "" {
+			m["obfs"] = v
+		}
+		if v := p.param("obfs-password"); v != "" {
+			m["obfs-password"] = v
+		}
 	case "anytls":
 		// Requires mihomo >= v1.19.3. An older core does not skip an unknown
 		// proxy type — ParseProxy returns "unsupport proxy type" and parseProxies

@@ -357,6 +357,11 @@ func (s *Store) relayOutbound(landing *SbInbound, serverCache map[int64]*Server,
 	if obfs, ok := opts["obfs"].(map[string]interface{}); ok {
 		lp.Obfs = mapStr(obfs, "type")
 		lp.ObfsPassword = mapStr(obfs, "password")
+		lp.ObfsMinPacket = mapInt(obfs, "min_packet_size")
+		lp.ObfsMaxPacket = mapInt(obfs, "max_packet_size")
+	}
+	if v := mapStr(opts, "bbr_profile"); v != "" {
+		lp.BBRProfile = v
 	}
 	if tr, ok := opts["transport"].(map[string]interface{}); ok {
 		lp.Network = mapStr(tr, "type")
