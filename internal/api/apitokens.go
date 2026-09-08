@@ -127,6 +127,21 @@ func scopeForAdminRequest(r *http.Request) string {
 	return ""
 }
 
+// rejectAPIToken denies machine API-token auth on user-facing routes.
+// API tokens impersonate their creator (admin) via authMiddleware; without this
+// gate a scoped token (e.g. stats:read) could call /api/user/* mutations.
+// Machine tokens are admin-API only; JWT/session remains for /api/user/* and /api/auth/me|logout.
+func (a *API) rejectAPIToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		kind, _ := r.Context().Value(ctxAuthKind).(string)
+		if kind == "api_token" {
+			fail(w, http.StatusForbidden, "权限不足")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // enforceAPITokenScope denies API-token callers that lack the mapped scope.
 // JWT sessions pass through unchanged.
 func (a *API) enforceAPITokenScope(next http.Handler) http.Handler {

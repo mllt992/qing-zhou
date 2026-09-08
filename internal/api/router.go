@@ -227,6 +227,7 @@ func (a *API) Router() http.Handler {
 	// Authenticated (any logged-in user)
 	r.Group(func(pr chi.Router) {
 		pr.Use(a.authMiddleware)
+		pr.Use(a.rejectAPIToken) // API tokens are admin-API only; never /api/user/*
 		pr.Get("/api/auth/me", a.handleMe)
 		pr.Post("/api/auth/logout", a.handleLogout)
 		pr.Get("/api/user/dashboard", a.handleDashboard)
