@@ -117,3 +117,37 @@ func TestAPIToken_CreateHandlerJWT(t *testing.T) {
 		t.Fatalf("envelope: %v body=%s", err, rec.Body.String())
 	}
 }
+
+func TestAPIToken_RejectedOnUserRoutes(t *testing.T) {
+	a, st := openAPITokenTestAPI(t)
+	plain, _, err := st.CreateAPIToken("ci", []string{"stats:read"}, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Use(a.authMiddleware)
+	r.Use(a.rejectAPIToken)
+	r.Get("/api/user/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		ok(w, J{"ok": true})
+	})
+	r.Post("/api/user/password", func(w http.ResponseWriter, r *http.Request) {
+		ok(w, nil)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/user/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer "+plain)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("dashboard with scoped api token: got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/user/password", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Authorization", "Bearer "+plain)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("password mutation with scoped api token: got %d %s", rec.Code, rec.Body.String())
+	}
+}
