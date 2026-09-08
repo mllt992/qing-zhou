@@ -1,1 +1,1 @@
-PLACEHOLDER_DO_NOT_USE
+@file:///tmp/qz39-restore-content-only.txt
