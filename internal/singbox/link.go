@@ -78,6 +78,11 @@ type LinkParams struct {
 	ObfsMaxPacket int
 	// Optional BBR profile mirrored from the inbound (sing-box 1.14+).
 	BBRProfile string
+	// Client-only Hy2 hints (sing-box 1.14+). Stored on the inbound as options
+	// and stripped before server config emit — they belong on the outbound.
+	DisableChromeParrot bool
+	HopInterval         string // duration, e.g. "30s"
+	HopIntervalMax      string // duration upper bound for hop randomization
 
 	// TCP dial tuning (TCP-based protocols only). TCP Fast Open and MPTCP each
 	// need BOTH ends enabled to do anything, so 轻舟 mirrors the inbound's
@@ -315,6 +320,15 @@ func BuildShareLink(p LinkParams) string {
 		}
 		if p.BBRProfile != "" {
 			q = append(q, "bbr-profile="+esc(p.BBRProfile))
+		}
+		if p.DisableChromeParrot {
+			q = append(q, "disable-chrome-parrot=1")
+		}
+		if p.HopInterval != "" {
+			q = append(q, "hop-interval="+esc(p.HopInterval))
+		}
+		if p.HopIntervalMax != "" {
+			q = append(q, "hop-interval-max="+esc(p.HopIntervalMax))
 		}
 		if p.NoUDP {
 			q = append(q, noUDPParam)

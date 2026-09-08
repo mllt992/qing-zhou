@@ -217,6 +217,11 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 		m["users"] = users
 		// flow 是 per-user 字段，从 inbound 级别移除，否则 sing-box check 会报错
 		delete(m, "flow")
+		// Hy2 client-only hints live in inbound options so share links / subconv
+		// can mirror them, but they are outbound fields — strip before emit.
+		delete(m, "disable_chrome_parrot")
+		delete(m, "hop_interval")
+		delete(m, "hop_interval_max")
 		ibList = append(ibList, m)
 		if tag, _ := m["tag"].(string); tag != "" {
 			emittedTags = append(emittedTags, tag)

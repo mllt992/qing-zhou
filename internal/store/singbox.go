@@ -915,7 +915,15 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		if obfs, ok := opts["obfs"].(map[string]interface{}); ok {
 			p.Obfs = mapStr(obfs, "type")
 			p.ObfsPassword = mapStr(obfs, "password")
+			p.ObfsMinPacket = mapInt(obfs, "min_packet_size")
+			p.ObfsMaxPacket = mapInt(obfs, "max_packet_size")
 		}
+		if v := mapStr(opts, "bbr_profile"); v != "" {
+			p.BBRProfile = v
+		}
+		p.DisableChromeParrot = mapBool(opts, "disable_chrome_parrot")
+		p.HopInterval = mapStr(opts, "hop_interval")
+		p.HopIntervalMax = mapStr(opts, "hop_interval_max")
 		// transport (ws/grpc/httpupgrade) for vless/vmess/trojan
 		if tr, ok := opts["transport"].(map[string]interface{}); ok {
 			p.Network = mapStr(tr, "type")
