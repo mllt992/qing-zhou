@@ -427,6 +427,34 @@ func canonicalLink(link string) string {
 	return base + "?" + strings.Join(kept, "&")
 }
 
+// WithLinkRemark overrides only the display name, preserving credentials and
+// protocol options. An empty remark keeps the original link byte-for-byte.
+func WithLinkRemark(link, remark string) string {
+	remark = strings.TrimSpace(remark)
+	if remark == "" || link == "" {
+		return link
+	}
+	if strings.HasPrefix(link, "vmess://") {
+		payload, _, _ := strings.Cut(strings.TrimPrefix(link, "vmess://"), "#")
+		decoded, err := b64decode(payload)
+		if err != nil {
+			return link
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(decoded, &fields) != nil || fields == nil {
+			return link
+		}
+		fields["ps"], _ = json.Marshal(remark)
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			return link
+		}
+		return "vmess://" + base64.StdEncoding.EncodeToString(encoded)
+	}
+	base, _, _ := strings.Cut(link, "#")
+	return base + "#" + url.QueryEscape(remark)
+}
+
 // LinkRemark returns the (url-decoded) #fragment remark of a share link.
 func LinkRemark(link string) string {
 	if i := strings.LastIndex(link, "#"); i >= 0 {

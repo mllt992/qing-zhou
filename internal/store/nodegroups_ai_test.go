@@ -13,7 +13,7 @@ func TestNodeGroupAIFlagPersistsAndAggregatesAcrossMemberships(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodeID, err := st.CreateNode(Node{
-		Type: "external", Name: "shared", ShareLink: "trojan://pw@example.com:443#shared",
+		Type: "external", Name: "shared", Remark: "订阅备注", ShareLink: "trojan://pw@example.com:443#shared",
 		Enabled: true, GroupIDs: []int64{ordinary, aiGroup},
 	})
 	if err != nil {
@@ -33,6 +33,9 @@ func TestNodeGroupAIFlagPersistsAndAggregatesAcrossMemberships(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].ID != nodeID || !nodes[0].IsAI {
 		t.Fatalf("multi-group AI aggregation = %+v", nodes)
+	}
+	if nodes[0].Remark != "订阅备注" || nodes[0].ShareLink != "trojan://pw@example.com:443#shared" {
+		t.Fatalf("grouped node fields were not preserved: %+v", nodes[0].Node)
 	}
 
 	groups[1].IsAI = false

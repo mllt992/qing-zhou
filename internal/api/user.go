@@ -1127,7 +1127,7 @@ func (a *API) computeNodeEntries(u *store.User) []nodeEntry {
 	for _, n := range nodes {
 		switch n.Type {
 		case "external":
-			add(n.ShareLink, n.GroupID, gname[n.GroupID], "", 0, false, n.IsAI)
+			add(subconv.WithLinkRemark(n.ShareLink, n.Remark), n.GroupID, gname[n.GroupID], "", 0, false, n.IsAI)
 		case "self_built":
 			if n.InboundTag != "" {
 				if n.RouteUpstreamInboundID == 0 {

@@ -396,7 +396,7 @@ func (s *Store) NodesInGroupsTagged(groupIDs []int64) ([]GroupedNode, error) {
 		var gid int64
 		var isAI bool
 		var routeBroken int
-		if err := rows.Scan(&n.ID, &n.Type, &n.Name, &n.Protocol, &n.InboundTag, &n.RouteUpstreamInboundID, &routeBroken, &n.ShareLink,
+		if err := rows.Scan(&n.ID, &n.Type, &n.Name, &n.Remark, &n.Protocol, &n.InboundTag, &n.RouteUpstreamInboundID, &routeBroken, &n.ShareLink,
 			&n.SourceID, &n.Enabled, &n.SortOrder, &n.CreatedAt, &gid, &isAI); err != nil {
 			return nil, err
 		}
