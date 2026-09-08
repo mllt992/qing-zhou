@@ -69,10 +69,15 @@ type LinkParams struct {
 	UpMbps   int
 	DownMbps int
 
-	// hysteria2 obfs (salamander). Both must be set on the client link or the
-	// handshake fails when the inbound has obfs enabled.
-	Obfs         string // obfs type, e.g. "salamander"
+	// hysteria2 obfs (salamander / gecko). Type+password must be set on the
+	// client link or the handshake fails when the inbound has obfs enabled.
+	Obfs         string // obfs type, e.g. "salamander" | "gecko"
 	ObfsPassword string
+	// Gecko-only on-wire packet size hints (sing-box 1.14+). 0 = omit (defaults).
+	ObfsMinPacket int
+	ObfsMaxPacket int
+	// Optional BBR profile mirrored from the inbound (sing-box 1.14+).
+	BBRProfile string
 
 	// TCP dial tuning (TCP-based protocols only). TCP Fast Open and MPTCP each
 	// need BOTH ends enabled to do anything, so 轻舟 mirrors the inbound's
@@ -301,6 +306,15 @@ func BuildShareLink(p LinkParams) string {
 			if p.ObfsPassword != "" {
 				q = append(q, "obfs-password="+url.QueryEscape(p.ObfsPassword))
 			}
+			if p.ObfsMinPacket > 0 {
+				q = append(q, "obfs-min-packet="+strconv.Itoa(p.ObfsMinPacket))
+			}
+			if p.ObfsMaxPacket > 0 {
+				q = append(q, "obfs-max-packet="+strconv.Itoa(p.ObfsMaxPacket))
+			}
+		}
+		if p.BBRProfile != "" {
+			q = append(q, "bbr-profile="+esc(p.BBRProfile))
 		}
 		if p.NoUDP {
 			q = append(q, noUDPParam)
