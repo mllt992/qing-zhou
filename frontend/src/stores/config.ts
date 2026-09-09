@@ -3,6 +3,8 @@ import { ref } from 'vue'
 import { apiGet } from '@/api'
 
 export interface SiteConfig {
+  oauth2_enabled: boolean
+  oauth2_name: string
   site_name: string
   site_description: string
   register_mode: string
@@ -21,6 +23,8 @@ export interface SiteConfig {
 
 export const useConfigStore = defineStore('config', () => {
   const config = ref<SiteConfig>({
+    oauth2_enabled: false,
+    oauth2_name: '认证中心',
     site_name: '轻舟',
     site_description: '',
     register_mode: 'open',

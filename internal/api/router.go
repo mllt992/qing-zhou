@@ -19,7 +19,18 @@ import (
 	"qingzhou/internal/updater"
 )
 
+// RequestTimeout is cooperative: network handlers must honor r.Context().
+// ServerWriteTimeout leaves time to return the middleware's 504 and flush gzip,
+// including request body reads and TLS setup covered by the server deadline.
+const RequestTimeout = 30 * time.Second
+const ServerWriteTimeout = RequestTimeout + 15*time.Second
+
 type API struct {
+	sourceClient  *http.Client
+	pingSlots     chan struct{}
+	oauthSlots    chan struct{}
+	oauthFinalize chan struct{}
+
 	st       *store.Store
 	secret   []byte
 	mailer   *mailer.Mailer // may be nil if SMTP is not configured
@@ -129,10 +140,14 @@ func (a *API) sbScheduleServer(serverIDs ...int64) {
 func New(st *store.Store, secret []byte, mail *mailer.Mailer) *API {
 	a := &API{
 		st: st, secret: secret, mailer: mail,
-		authRL:   newRateLimiter(20, time.Minute),   // 20 auth attempts / IP / min
-		resendRL: newRateLimiter(3, 10*time.Minute), // 3 verify resends / user / 10min
-		probeRL:  newRateLimiter(60, time.Minute),   // 60 probe reports / IP / min
-		pwRL:     newRateLimiter(5, 10*time.Minute), // 5 修改密码 attempts / user / 10min
+		sourceClient:  safeFetchClient(),
+		pingSlots:     make(chan struct{}, 64),
+		oauthSlots:    make(chan struct{}, 8),
+		oauthFinalize: make(chan struct{}, 1),
+		authRL:        newRateLimiter(20, time.Minute),   // 20 auth attempts / IP / min
+		resendRL:      newRateLimiter(3, 10*time.Minute), // 3 verify resends / user / 10min
+		probeRL:       newRateLimiter(60, time.Minute),   // 60 probe reports / IP / min
+		pwRL:          newRateLimiter(5, 10*time.Minute), // 5 修改密码 attempts / user / 10min
 		// Each address swap revokes the previous one, so a loop of them — a stuck
 		// retry, a double-click, a misbehaving script — leaves the user with a
 		// subscription that never stays valid long enough to import. Generous
@@ -190,7 +205,7 @@ func (a *API) Router() http.Handler {
 	// gzip responses (JSON API + the embedded JS/CSS bundle). Cheap CPU for a large
 	// bandwidth win on the small boxes this targets; skips already-compressed types.
 	r.Use(middleware.Compress(5))
-	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(middleware.Timeout(RequestTimeout))
 	// Cap request bodies so an authenticated client can't drive the process into
 	// memory pressure with a multi-GB POST. 8 MiB comfortably covers the largest
 	// legitimate payload (pasted airport lists / sing-box config templates).
@@ -200,12 +215,14 @@ func (a *API) Router() http.Handler {
 	r.Get("/api/health", a.handleHealth)
 	r.Get("/api/config", a.handleConfig)
 	r.Get("/api/auth/verify", a.handleVerify)
+	r.Get(oauthCallbackPath, a.handleOAuthCallback)
 	r.Get("/sub/{token}", a.handleSub)
 
 	// Auth POST endpoints — rate limited per IP (brute-force / email-bomb).
 	r.Group(func(pub chi.Router) {
 		pub.Use(a.limit(a.authRL))
 		pub.Post("/api/auth/login", a.handleLogin)
+		pub.Post("/api/auth/oauth2/start", a.handleOAuthStart)
 		pub.Post("/api/auth/register", a.handleRegister)
 		pub.Post("/api/auth/forgot", a.handleForgot)
 		pub.Post("/api/auth/reset", a.handleReset)
@@ -231,6 +248,8 @@ func (a *API) Router() http.Handler {
 		pr.Get("/api/auth/me", a.handleMe)
 		pr.Post("/api/auth/logout", a.handleLogout)
 		pr.Get("/api/user/dashboard", a.handleDashboard)
+		pr.Get("/api/user/oauth2", a.handleUserOAuth)
+		pr.Post("/api/user/oauth2/bind", a.handleOAuthBind)
 		pr.Get("/api/user/plans", a.handleUserPlans)
 		pr.Get("/api/user/subscription", a.handleSubscription)
 		pr.Get("/api/user/proxies", a.handleUserProxies)
@@ -273,6 +292,9 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/tokens", a.handleAdminCreateAPIToken)
 		ar.Delete("/api/admin/tokens/{id}", a.handleAdminRevokeAPIToken)
 		ar.Get("/api/admin/settings", a.handleGetSettings)
+		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Get("/api/admin/oauth2", a.handleGetOAuth)
+		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Put("/api/admin/oauth2", a.handlePutOAuth)
+		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Post("/api/admin/oauth2/test", a.handleTestOAuth)
 		ar.Put("/api/admin/settings", a.handlePutSettings)
 		ar.Get("/api/admin/settings/default-templates", a.handleGetDefaultTemplates)
 		ar.Post("/api/admin/settings/test-smtp", a.handleTestSMTP)
@@ -474,3 +496,6 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	_, _ = io.WriteString(w, assets.InstallScript())
 }
+
+// Close releases idle source connections after handlers and sync have drained.
+func (a *API) Close() { a.sourceClient.CloseIdleConnections() }

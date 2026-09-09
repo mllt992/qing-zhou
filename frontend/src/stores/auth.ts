@@ -19,7 +19,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loaded = ref(false)
   let initPromise: Promise<void> | null = null
 
-  const isLoggedIn = computed(() => !!token.value && !!user.value)
+  const isLoggedIn = computed(() => !!user.value)
   const isAdmin = computed(() => !!user.value?.is_admin)
 
   async function login(username: string, password: string) {
@@ -47,16 +47,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function fetchMe() {
-    if (!token.value) return
     try {
       user.value = await apiGet<User>('/api/auth/me')
     } catch (e: any) {
-      if (e.status === 401) logout()
+      if (e.status === 401) logout(true)
     }
   }
 
-  function logout() {
-    if (token.value) {
+  function logout(localOnly = false) {
+    if (!localOnly && (token.value || user.value)) {
       apiPost('/api/auth/logout').catch(() => {})
     }
     token.value = ''
@@ -69,13 +68,18 @@ export const useAuthStore = defineStore('auth', () => {
     if (loaded.value) return
     if (initPromise) return initPromise
     initPromise = (async () => {
-      if (token.value) {
-        await fetchMe()
-      }
+      try { await fetchMe() } catch {}
       loaded.value = true
     })()
     return initPromise
   }
 
-  return { token, user, loaded, isLoggedIn, isAdmin, login, register, fetchMe, logout, init }
+  async function loginFromCookie() {
+    logout(true)
+    user.value = await apiGet<User>('/api/auth/me')
+    if (!user.value) throw new Error("登录会话未建立，请重新登录")
+    loaded.value = true
+  }
+
+  return { loginFromCookie, token, user, loaded, isLoggedIn, isAdmin, login, register, fetchMe, logout, init }
 })

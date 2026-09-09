@@ -59,7 +59,8 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npx vite build
+          npm test
+          npm run build
 
       - uses: actions/setup-go@v5
         with:

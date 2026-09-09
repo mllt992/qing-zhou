@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
+    { path: '/oauth2/callback', name: 'oauth-callback', component: () => import('@/views/OAuthCallback.vue') },
     {
       path: '/',
       name: 'monitor',
@@ -46,6 +47,7 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  if (to.name === 'oauth-callback') return
   const auth = useAuthStore()
 
   // 等待 auth 初始化完成（首次加载时从 localStorage 恢复 token 并 fetchMe）

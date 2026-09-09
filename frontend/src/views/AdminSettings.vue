@@ -41,6 +41,7 @@
         {{ loadError }}。为防止空表单覆盖原配置，“保存设置”已禁用。请稍候重试；如果持续失败，请检查服务日志和数据库路径。
         <n-button size="small" :loading="loading" class="settings-retry" @click="loadSettings">重新读取</n-button>
       </n-alert>
+    <OAuth2Settings v-show="activeSectionId === 'settings-oauth'" />
     <n-spin :show="loading">
       <n-card v-show="activeSectionId === 'settings-basic'" id="settings-basic" class="settings-section" size="small">
         <n-form label-placement="top">
@@ -593,6 +594,7 @@
 </template>
 
 <script setup lang="ts">
+import OAuth2Settings from '@/components/OAuth2Settings.vue'
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { NAlert, NCard, NCheckbox, NForm, NFormItem, NInput, NInputGroup, NInputNumber, NSelect, NSwitch, NButton, NSpace, NSpin, useDialog, useMessage } from 'naive-ui'
@@ -610,6 +612,7 @@ type SettingsSection = { id: string; label: string; note: string; description: s
 type SettingsGroup = { label: string; sections: SettingsSection[] }
 const settingsGroups: SettingsGroup[] = [
   { label: '通用设置', sections: [
+    { id: 'settings-oauth', label: 'OAuth2 / OIDC', note: '认证中心登录', description: '配置认证中心，支持单点登录和已有账号绑定。此分区单独保存。', keywords: 'OAuth2 OIDC auth2 认证中心 Client ID Secret SSO' },
     { id: 'settings-basic', label: '基本设置', note: '注册与积分', description: '配置站点信息、注册规则和新用户默认权益。', keywords: '站点名称 描述 注册 邮箱验证 积分 流量 免费节点 凭据' },
     { id: 'settings-access', label: '访问地址', note: '面板与节点', description: '设置面板公开地址、节点连接地址和安装命令。', keywords: '域名 public base 节点 IP sing-box 安装 命令' },
     { id: 'settings-home', label: '首页设置', note: '入口展示', description: '选择访客首页显示监控大屏或自定义页面。', keywords: '首页 监控 自定义 URL' },

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -205,8 +206,6 @@ func (a *API) handleUserNodesPing(w http.ResponseWriter, r *http.Request) {
 	entries := a.computeNodeEntries(u)
 	disabled, _ := a.st.DisabledNodeKeys(u.ID)
 	out := make([]pingResult, len(entries))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 64) // cap concurrent dials (lists can be hundreds of nodes)
 	for i := range entries {
 		p, err := subconv.ParseLink(entries[i].Link)
 		if err != nil || p == nil {
@@ -219,23 +218,62 @@ func (a *API) handleUserNodesPing(w http.ResponseWriter, r *http.Request) {
 			out[i].UDP = true
 			continue
 		}
-		if p.Server == "" || p.Port == 0 {
+	}
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	pingNodes(r.Context(), out, a.pingSlots, dialer.DialContext)
+	if r.Context().Err() != nil {
+		return
+	}
+	ok(w, out)
+}
+
+// Fixed workers bound goroutines as well as dials. slots also bounds dials
+// across overlapping requests; both queueing and dialing honor cancellation.
+func pingNodes(ctx context.Context, out []pingResult, slots chan struct{}, dial func(context.Context, string, string) (net.Conn, error)) {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for n := 0; n < min(32, len(out)); n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case slots <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				if ctx.Err() != nil {
+					<-slots
+					return
+				}
+				start := time.Now()
+				conn, err := dial(ctx, "tcp", net.JoinHostPort(out[idx].Server, strconv.Itoa(out[idx].Port)))
+				if err == nil {
+					_ = conn.Close()
+					out[idx].OK = true
+					out[idx].Latency = time.Since(start).Milliseconds()
+				}
+				<-slots
+			}
+		}()
+	}
+send:
+	for i := range out {
+		if ctx.Err() != nil {
+			break
+		}
+		if out[i].UDP || out[i].Server == "" || out[i].Port == 0 {
 			continue
 		}
-		wg.Add(1)
-		go func(idx int, server string, port int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			start := time.Now()
-			conn, err := net.DialTimeout("tcp", net.JoinHostPort(server, strconv.Itoa(port)), 2*time.Second)
-			if err == nil {
-				_ = conn.Close()
-				out[idx].OK = true
-				out[idx].Latency = time.Since(start).Milliseconds()
-			}
-		}(i, p.Server, p.Port)
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break send
+		}
 	}
+	close(jobs)
 	wg.Wait()
-	ok(w, out)
 }

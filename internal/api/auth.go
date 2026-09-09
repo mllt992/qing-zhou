@@ -52,6 +52,10 @@ func clientIP(r *http.Request) string {
 // issueLogin records a login session and returns a JWT bound to it (so it can
 // be listed and revoked). Also sets the auth cookie.
 func (a *API) issueLogin(w http.ResponseWriter, r *http.Request, u *store.User) (string, error) {
+	return a.issueLoginWithSecurity(w, r, u, a.isHTTPS(r))
+}
+
+func (a *API) issueLoginWithSecurity(w http.ResponseWriter, r *http.Request, u *store.User, secure bool) (string, error) {
 	jti, err := idgen.RandToken(12)
 	if err != nil {
 		return "", err
@@ -63,7 +67,7 @@ func (a *API) issueLogin(w http.ResponseWriter, r *http.Request, u *store.User) 
 	if err != nil {
 		return "", err
 	}
-	setAuthCookie(w, tok, a.isHTTPS(r))
+	setAuthCookie(w, tok, secure)
 	return tok, nil
 }
 
@@ -86,6 +90,7 @@ func (a *API) registerMode() string {
 
 // handleConfig exposes public site config the frontend needs before login.
 func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
+	oauth, _ := a.oauthConfig()
 	verify, _ := a.st.GetSettingBool("email_verify_required")
 	rate, _ := a.st.GetSettingInt64("points_per_cny", 10)
 	mode := a.registerMode()
@@ -105,6 +110,8 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	helpURL, _ := a.st.GetSetting("help_docs_url")
 	ok(w, J{
+		"oauth2_enabled":        oauth.Enabled,
+		"oauth2_name":           oauth.Name,
 		"register_mode":         mode,
 		"registration_open":     mode != "closed",
 		"email_verify_required": verify,

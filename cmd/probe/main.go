@@ -11,14 +11,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"qingzhou/internal/intervalcfg"
@@ -71,15 +75,14 @@ func main() {
 		log.Printf("WARNING: -token on the command line is visible via ps/proc; prefer the QZ_PROBE_TOKEN env var")
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Build HTTP client.
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-	}
+	client := newReportClient(*flagInsecure)
+	defer client.CloseIdleConnections()
 	if *flagInsecure {
 		log.Printf("WARNING: -insecure disables TLS certificate verification; the probe token and metrics are exposed to a man-in-the-middle. Use only for local testing.")
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
 	}
 
 	reportURL := server + "/api/monitor/report"
@@ -96,17 +99,29 @@ func main() {
 	// primed above, so even this first report has a real CPU/network delta.
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
-	for range timer.C {
+	failures := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
 		m := sampler.Sample()
 		m.ProbeVersion = version.Current()
-		next, err := report(client, reportURL, token, m)
+		next, err := reportContext(ctx, client, reportURL, token, m)
 		if err != nil {
+			failures++
 			log.Printf("report failed: %v", err)
-		} else if next >= int(intervalcfg.MinProbeSeconds) && next <= int(intervalcfg.MaxProbeSeconds) && next != interval {
-			log.Printf("collection interval updated by panel: %ds -> %ds", interval, next)
-			interval = next
+		} else {
+			failures = 0
+			if next >= int(intervalcfg.MinProbeSeconds) && next <= int(intervalcfg.MaxProbeSeconds) && next != interval {
+				log.Printf("collection interval updated by panel: %ds -> %ds", interval, next)
+				interval = next
+			}
 		}
-		timer.Reset(time.Duration(interval) * time.Second)
+		// Never replay a metrics POST: a lost response may already be committed.
+		// Back off the next fresh sample instead, without a queue of stale reports.
+		timer.Reset(nextReportDelay(time.Duration(interval)*time.Second, failures, rand.Float64()))
 	}
 }
 
@@ -115,12 +130,16 @@ func main() {
 // keeps its current interval. The unified API envelope is decoded explicitly;
 // treating the top-level object as the payload would silently ignore updates.
 func report(client *http.Client, url, token string, m sysmetrics.Metrics) (int, error) {
+	return reportContext(context.Background(), client, url, token, m)
+}
+
+func reportContext(ctx context.Context, client *http.Client, url, token string, m sysmetrics.Metrics) (int, error) {
 	body, err := json.Marshal(m)
 	if err != nil {
 		return 0, fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return 0, fmt.Errorf("new request: %w", err)
 	}
@@ -132,13 +151,16 @@ func report(client *http.Client, url, token string, m sysmetrics.Metrics) (int, 
 		return 0, fmt.Errorf("post: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 
 	if resp.StatusCode != 200 {
 		return 0, fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	if readErr != nil {
 		return 0, fmt.Errorf("read response: %w", readErr)
+	}
+	if len(respBody) > 64<<10 {
+		return 0, fmt.Errorf("response exceeds 64 KiB")
 	}
 	var envelope struct {
 		Data struct {
@@ -149,4 +171,34 @@ func report(client *http.Client, url, token string, m sysmetrics.Metrics) (int, 
 		return 0, fmt.Errorf("decode response: %w", err)
 	}
 	return envelope.Data.ProbeIntervalSeconds, nil
+}
+
+// Exponential equal jitter, bounded between the configured interval and five
+// minutes (or the interval if longer). Success resets to the live panel cadence.
+func nextReportDelay(base time.Duration, failures int, random float64) time.Duration {
+	if failures <= 0 {
+		return base
+	}
+	ceiling := min(base*time.Duration(1<<min(failures, 10)), max(base, 5*time.Minute))
+	floor := max(base, ceiling/2)
+	return floor + time.Duration(float64(ceiling-floor)*random)
+}
+
+func newReportClient(insecure bool) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 2
+	transport.MaxIdleConnsPerHost = 2
+	transport.MaxConnsPerHost = 2
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 5 * time.Second
+	transport.ResponseHeaderTimeout = 10 * time.Second
+	if insecure {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	return &http.Client{
+		Timeout: 15 * time.Second, Transport: transport,
+		// A 307/308 could replay a committed metrics POST. Use the configured panel
+		// endpoint directly; redirects are failures and only a new sample is sent.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }

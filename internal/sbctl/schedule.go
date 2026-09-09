@@ -169,10 +169,14 @@ func (c *Controller) RunOnServer(ctx context.Context, serverID int64, cmd string
 		if sv == nil {
 			return "", fmt.Errorf("服务器 %d 不存在（可能已被删除）", serverID)
 		}
-		if !isLocalHost(sv.Host) {
+		if !isLocalHostContext(ctx, sv.Host) {
 			if c.remoteMgr == nil {
 				return "", fmt.Errorf("remote manager not configured")
 			}
+			if err := c.acquireRemote(ctx); err != nil {
+				return "", err
+			}
+			defer c.releaseRemote()
 			return c.remoteMgr.RunCommand(ctx, SSHConfigFor(sv), cmd)
 		}
 	}

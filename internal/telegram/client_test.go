@@ -21,6 +21,29 @@ func TestEscape(t *testing.T) {
 	}
 }
 
+func TestCallRejectsHTTPErrorAndOversizedResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"HTTP error", 502, `{"ok":true,"result":{}}`},
+		{"oversized", 200, `{"ok":true,"result":{}}` + strings.Repeat(" ", 1<<20)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			c := &Client{Token: "fixture", APIBase: srv.URL, HTTP: srv.Client()}
+			if _, err := GetMe(context.Background(), c); err == nil {
+				t.Fatal("invalid response accepted")
+			}
+		})
+	}
+}
+
 func TestGetMeAndSend(t *testing.T) {
 	var gotSend map[string]any
 	var gotCommands map[string]any

@@ -29,29 +29,59 @@ func isInternalIP(ip net.IP) bool {
 // host and dialing a vetted IP directly) so it also defeats DNS rebinding and
 // redirects that point at internal hosts.
 func safeFetchClient() *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return &http.Client{
 		Timeout: 20 * time.Second,
 		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, port, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, err
-				}
-				ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-				if err != nil {
-					return nil, err
-				}
-				for _, ip := range ips {
-					if isInternalIP(ip.IP) {
-						return nil, fmt.Errorf("拒绝连接到内网地址 %s", ip.IP)
-					}
-				}
-				// Dial a vetted IP directly to avoid a re-resolve (rebinding) window;
-				// TLS ServerName still verifies against the original hostname.
-				return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
-			},
+			MaxIdleConns:          32,
+			MaxIdleConnsPerHost:   2,
+			MaxConnsPerHost:       4,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			DialContext:           safeFetchDialContext(net.DefaultResolver.LookupIPAddr, dialer.DialContext),
 		},
+	}
+}
+
+// Resolve exactly once, validate every answer, then dial only vetted IPs. No
+// environment proxy is used: it would move DNS and SSRF enforcement elsewhere.
+func safeFetchDialContext(lookup func(context.Context, string) ([]net.IPAddr, error), dial func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		// Transport may keep a dial alive for reuse after a request is canceled.
+		// Bound DNS and all fallback addresses together, not just each TCP dial.
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := lookup(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("主机没有可用地址")
+		}
+		for _, ip := range ips {
+			if isInternalIP(ip.IP) {
+				return nil, fmt.Errorf("拒绝连接到内网地址 %s", ip.IP)
+			}
+		}
+		// Dial a vetted IP directly to avoid a re-resolve (rebinding) window;
+		// TLS ServerName still verifies against the original hostname.
+		var lastErr error
+		for _, ip := range ips {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
 	}
 }
 

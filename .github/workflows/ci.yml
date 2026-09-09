@@ -59,10 +59,8 @@ jobs:
           node-version: "20"
       - name: Build frontend
         working-directory: frontend
-        # npx vite build, not npm run build: the latter runs vue-tsc first and
-        # the repo carries pre-existing type errors unrelated to any given change.
-        # This still catches real compile errors (a `const` reassignment slipped
-        # through review once and only the bundler caught it).
+        # Keep the same type and network checks required before a release.
         run: |
           npm ci
-          npx vite build
+          npm test
+          npm run build

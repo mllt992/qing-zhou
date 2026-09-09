@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -345,17 +348,19 @@ func (a *API) handleAdminFetchSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GroupIDs []int64 `json:"group_ids"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	// Group binding lives on the source so it survives periodic auto-sync. If
-	// the request explicitly carries group_ids, persist them as the new binding;
-	// otherwise reuse whatever the source already has.
-	groups := src.GroupIDs
-	if req.GroupIDs != nil {
-		groups = req.GroupIDs
-		src.GroupIDs = req.GroupIDs
-		_ = a.st.UpdateSource(*src)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		fail(w, http.StatusBadRequest, "请求格式错误")
+		return
 	}
-	count, ferr := a.fetchSource(src, groups)
+	// Group binding lives on the source so it survives periodic auto-sync. If
+	// the request explicitly carries group_ids, commit them with successful nodes;
+	// otherwise reuse whatever the source already has.
+	// nil means reuse the live binding inside the replacement transaction, so
+	// a slow refresh cannot overwrite a group edit made while it was fetching.
+	count, ferr := a.fetchSource(r.Context(), src, req.GroupIDs)
+	if r.Context().Err() != nil {
+		return
+	}
 	if ferr != "" {
 		fail(w, http.StatusBadGateway, "抓取失败: "+ferr)
 		return
@@ -365,34 +370,68 @@ func (a *API) handleAdminFetchSource(w http.ResponseWriter, r *http.Request) {
 
 // fetchSource downloads a source URL, parses links, and replaces the source's
 // nodes. Returns the imported count and an error string (empty on success).
-func (a *API) fetchSource(src *store.NodeSource, groupIDs []int64) (int, string) {
-	if msg := validFetchURL(src.URL); msg != "" {
-		_ = a.st.ReplaceSourceNodes(src.ID, nil, groupIDs, msg)
+const maxSourceBytes = 8 << 20
+
+func (a *API) fetchSource(ctx context.Context, src *store.NodeSource, groupIDs []int64) (int, string) {
+	failed := func(err error) (int, string) {
+		msg := err.Error()
+		if saveErr := a.st.ReplaceSourceNodes(src.ID, nil, groupIDs, msg); saveErr != nil {
+			msg += "; 保存抓取错误失败: " + saveErr.Error()
+		}
 		return 0, msg
 	}
-	// Verify TLS and block SSRF to internal addresses (metadata/LAN/localhost).
-	client := safeFetchClient()
-	resp, err := client.Get(src.URL)
+	if msg := validFetchURL(src.URL); msg != "" {
+		return failed(fmt.Errorf("%s", msg))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {
-		_ = a.st.ReplaceSourceNodes(src.ID, nil, groupIDs, err.Error())
-		return 0, err.Error()
+		return failed(err)
+	}
+	// One API-owned client is shared by manual fetches and periodic sync.
+	resp, err := a.sourceClient.Do(req)
+	if err != nil {
+		return failed(err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// Only a complete representation may replace the last successful snapshot.
+	// In particular, 204 and 206 are not valid subscription responses.
+	if resp.StatusCode != http.StatusOK {
+		return failed(fmt.Errorf("HTTP %d", resp.StatusCode))
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSourceBytes+1))
+	if err != nil {
+		return failed(fmt.Errorf("读取订阅失败: %w", err))
+	}
+	if len(body) > maxSourceBytes {
+		return failed(fmt.Errorf("订阅响应超过 8 MiB"))
+	}
+	// Some subscriptions mislabel plain/base64 bodies as text/html; inspect the
+	// actual body so those existing sources continue to work.
+	if strings.HasPrefix(http.DetectContentType(body), "text/html") {
+		return failed(fmt.Errorf("订阅返回 HTML 页面，保留上次成功结果"))
+	}
 	proxies := subconv.ParseList(string(body))
+	if len(proxies) == 0 {
+		return failed(fmt.Errorf("订阅未包含有效节点，保留上次成功结果"))
+	}
+	if err := ctx.Err(); err != nil {
+		return failed(err)
+	}
 	nodes := make([]store.Node, 0, len(proxies))
 	for _, p := range proxies {
 		nodes = append(nodes, store.Node{Name: p.Name, Protocol: p.Protocol, ShareLink: p.Raw})
 	}
 	if err := a.st.ReplaceSourceNodes(src.ID, nodes, groupIDs, ""); err != nil {
-		return 0, err.Error()
+		return failed(err)
 	}
 	return len(nodes), ""
 }
 
 // StartSourceSync periodically refreshes enabled node sources.
-func (a *API) StartSourceSync(ctx context.Context, interval time.Duration) {
+func (a *API) StartSourceSync(ctx context.Context, interval time.Duration, wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -405,10 +444,13 @@ func (a *API) StartSourceSync(ctx context.Context, interval time.Duration) {
 					continue
 				}
 				for _, s := range srcs {
+					if ctx.Err() != nil {
+						return
+					}
 					if !s.Enabled {
 						continue
 					}
-					if _, ferr := a.fetchSource(s, s.GroupIDs); ferr != "" {
+					if _, ferr := a.fetchSource(ctx, s, nil); ferr != "" {
 						log.Printf("source sync %q: %s", s.Name, ferr)
 					}
 				}

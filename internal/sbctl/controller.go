@@ -59,6 +59,15 @@ type StatsFetcher interface {
 	QueryUserTraffic(ctx context.Context) (map[string]*sbstats.Traffic, error)
 }
 
+// remoteManager keeps the SSH boundary testable without opening real sessions.
+type remoteManager interface {
+	SupportsStatsAPI(context.Context, *sshctl.ServerConfig) (bool, string, error)
+	ForgetSingBoxBin(int64)
+	ApplyConfig(context.Context, *sshctl.ServerConfig, []byte) (bool, error)
+	DialTunnel(context.Context, *sshctl.ServerConfig, string) (net.Conn, error)
+	RunCommand(context.Context, *sshctl.ServerConfig, string) (string, error)
+}
+
 // Controller orchestrates config regeneration and stats collection.
 type Controller struct {
 	st  ConfigStore
@@ -70,7 +79,7 @@ type Controller struct {
 	stats       StatsFetcher
 	baseConfig  string
 	v2rayListen string
-	remoteMgr   *sshctl.RemoteManager // SSH manager for remote servers; nil if not configured
+	remoteMgr   remoteManager // SSH manager for remote servers; nil if not configured
 
 	// restartObserver is told about every sing-box restart caused by the PERIODIC
 	// sync pass — the ones nobody asked for. Restarts from an admin edit are
@@ -88,6 +97,8 @@ type Controller struct {
 	circuitOpenChecker func(serverID int64) bool
 	circuitObserver    func(RestartCircuitEvent)
 	restartCircuit     *restartCircuit
+
+	remoteSlots chan struct{} // shared SSH budget for applies, probes and stats
 
 	mu sync.Mutex // serializes Rebuild
 
@@ -165,6 +176,7 @@ func New(st ConfigStore, mgr Applier, stats StatsFetcher, baseConfig, v2rayListe
 	return &Controller{
 		st: st, mgr: mgr, stats: stats, baseConfig: baseConfig, v2rayListen: v2rayListen,
 		restartFailed:  map[int64]bool{},
+		remoteSlots:    make(chan struct{}, remoteConcurrency),
 		statsCap:       map[int64]statsProbe{},
 		pendingServer:  map[int64]bool{},
 		syncStatus:     map[int64]SyncStatus{},
@@ -272,6 +284,10 @@ func (c *Controller) rememberDesired(serverID int64, cfg []byte) {
 
 // SetRemoteManager attaches the SSH remote manager for multi-server support.
 func (c *Controller) SetRemoteManager(rm *sshctl.RemoteManager) {
+	if rm == nil {
+		c.remoteMgr = nil
+		return
+	}
 	c.remoteMgr = rm
 }
 
@@ -279,7 +295,12 @@ func (c *Controller) SetRemoteManager(rm *sshctl.RemoteManager) {
 // an IP assigned to a local interface). This lets the controller apply config
 // directly instead of SSH-ing to itself when a server entry happens to point
 // at the panel's own host.
-func isLocalHost(host string) bool {
+func isLocalHost(host string) bool { return isLocalHostContext(context.Background(), host) }
+
+func isLocalHostContext(parent context.Context, host string) bool {
+	if parent.Err() != nil {
+		return false
+	}
 	if host == "" || host == "localhost" {
 		return true
 	}
@@ -290,7 +311,7 @@ func isLocalHost(host string) bool {
 		// server row stalls the whole rebuild and every admin-triggered
 		// RebuildServer queued behind the mutex. The 90s per-server apply timeout
 		// sits further down and does not cover this.
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 		addrs, err := net.DefaultResolver.LookupHost(ctx, host)
 		if err != nil || len(addrs) == 0 {
@@ -481,14 +502,18 @@ func (c *Controller) applyLocal(sv *store.Server, cfg []byte) (bool, error) {
 // cached, because guessing wrong in the permissive direction breaks config
 // deployment to that node permanently.
 func (c *Controller) statsListenFor(sv *store.Server) string {
-	if sv.ID == 0 || isLocalHost(sv.Host) {
+	return c.statsListenForContext(context.Background(), sv)
+}
+
+func (c *Controller) statsListenForContext(ctx context.Context, sv *store.Server) string {
+	if sv.ID == 0 || isLocalHostContext(ctx, sv.Host) {
 		return c.v2rayListen
 	}
 	listen := sv.V2rayListen
 	if listen == "" {
 		return "" // no address configured for this node — nothing to expose
 	}
-	if !c.statsSupported(sv) {
+	if !c.statsSupportedContext(ctx, sv) {
 		return ""
 	}
 	return listen
@@ -499,6 +524,10 @@ func (c *Controller) statsListenFor(sv *store.Server) string {
 // line; the next Rebuild re-probes, so a node that was merely unreachable
 // recovers on its own.
 func (c *Controller) statsSupported(sv *store.Server) bool {
+	return c.statsSupportedContext(context.Background(), sv)
+}
+
+func (c *Controller) statsSupportedContext(parent context.Context, sv *store.Server) bool {
 	c.capMu.Lock()
 	if p, seen := c.statsCap[sv.ID]; seen && (p.ok || time.Since(p.at) < negativeProbeTTL) {
 		c.capMu.Unlock()
@@ -509,9 +538,16 @@ func (c *Controller) statsSupported(sv *store.Server) bool {
 	if c.remoteMgr == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if err := c.acquireRemote(parent); err != nil {
+		return false
+	}
+	defer c.releaseRemote()
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	ok, version, err := c.remoteMgr.SupportsStatsAPI(ctx, SSHConfigFor(sv))
+	if parent.Err() != nil {
+		return false
+	}
 	// Record what the probe saw either way. This is the panel's only window onto
 	// which sing-box a node actually ended up with after the one-line installer,
 	// and an operator otherwise has to SSH in to find out.
@@ -710,9 +746,12 @@ func (c *Controller) rebuild(periodic, forceHealth bool) error {
 			continue
 		}
 		serverCfg := SSHConfigFor(sv)
+		// Acquire before spawning: waiting servers do not consume goroutines.
+		_ = c.acquireRemote(context.Background())
 		wg.Add(1)
 		go func(sv *store.Server, serverCfg *sshctl.ServerConfig, cfg []byte) {
 			defer wg.Done()
+			defer c.releaseRemote()
 			// Bound the apply so one unreachable / half-open node can't block on
 			// session.Wait() indefinitely and wedge Rebuild (which holds c.mu).
 			applyCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -822,6 +861,8 @@ func (c *Controller) RebuildServer(serverID int64) error {
 		return fmt.Errorf("remote manager not configured")
 	}
 	serverCfg := SSHConfigFor(sv)
+	_ = c.acquireRemote(context.Background())
+	defer c.releaseRemote()
 	applyCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	restarted, err := c.remoteMgr.ApplyConfig(applyCtx, serverCfg, cfg)
@@ -935,19 +976,38 @@ func (c *Controller) remoteStats(ctx context.Context) []remoteResult {
 		out []remoteResult
 	)
 	for _, sv := range servers {
-		if !sv.Enabled || isLocalHost(sv.Host) {
+		if ctx.Err() != nil {
+			mu.Lock()
+			out = append(out, remoteResult{err: ctx.Err()})
+			mu.Unlock()
+			break
+		}
+		if !sv.Enabled || isLocalHostContext(ctx, sv.Host) {
 			continue // the local instance is polled directly
 		}
 		// Only poll nodes whose config actually carries the stats API. Polling a
 		// node without the v2ray_api plugin just logs a refused connection every
 		// interval; statsListenFor already decided to omit the block for it.
-		listen := c.statsListenFor(sv)
+		listen := c.statsListenForContext(ctx, sv)
+		if err := ctx.Err(); err != nil {
+			mu.Lock()
+			out = append(out, remoteResult{serverID: sv.ID, err: err})
+			mu.Unlock()
+			break
+		}
 		if listen == "" {
 			continue
+		}
+		if err := c.acquireRemote(ctx); err != nil {
+			mu.Lock()
+			out = append(out, remoteResult{serverID: sv.ID, err: err})
+			mu.Unlock()
+			break
 		}
 		wg.Add(1)
 		go func(sv *store.Server, listen string) {
 			defer wg.Done()
+			defer c.releaseRemote()
 			cfg := SSHConfigFor(sv)
 			sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -1063,3 +1123,25 @@ func (c *Controller) Run(ctx context.Context, intervals IntervalProvider, errFn 
 		}
 	}
 }
+
+// One shared limit prevents a rebuild plus concurrent traffic collection from
+// each exhausting SSH resources independently. Per-server deadlines start only
+// after admission, so a large fleet does not time out merely waiting its turn.
+const remoteConcurrency = 8
+
+func (c *Controller) acquireRemote(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case c.remoteSlots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			c.releaseRemote()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (c *Controller) releaseRemote() { <-c.remoteSlots }

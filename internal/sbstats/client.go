@@ -143,9 +143,16 @@ func (c *Client) QueryUserTraffic(ctx context.Context) (map[string]*Traffic, err
 	// Bound the read: the peer is normally the local sing-box, but a
 	// malfunctioning/hostile listener on the configured address could otherwise
 	// stream an unbounded body and OOM the panel.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats HTTP %d", resp.StatusCode)
+	}
+	const maxStatsBytes = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxStatsBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxStatsBytes {
+		return nil, fmt.Errorf("stats response exceeds 16 MiB")
 	}
 	// gRPC status lives in trailers; non-zero = error.
 	if st := resp.Trailer.Get("grpc-status"); st != "" && st != "0" {

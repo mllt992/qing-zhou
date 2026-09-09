@@ -69,6 +69,25 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at      INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS oauth_identities (
+  issuer TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provisioned INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(issuer, subject),
+  UNIQUE(issuer, user_id)
+);
+CREATE TABLE IF NOT EXISTS oauth_states (
+  state_hash TEXT PRIMARY KEY,
+  browser_hash TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  verifier TEXT NOT NULL,
+  config_hash TEXT NOT NULL,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  session_id TEXT NOT NULL DEFAULT '',
+  expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS packages (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   type          TEXT    NOT NULL,            -- traffic | plan

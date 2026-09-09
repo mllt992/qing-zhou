@@ -17,9 +17,10 @@ import (
 
 // secretSettings are never returned in plaintext and cannot be cleared blindly.
 var secretSettings = map[string]bool{
-	"jwt_secret":   true,
-	"smtp_pass":    true,
-	"cf_api_token": true,
+	"oauth2_config": true,
+	"jwt_secret":    true,
+	"smtp_pass":     true,
+	"cf_api_token":  true,
 	// A GitHub PAT. It only lifts the unauthenticated rate limit on release
 	// lookups, but it is still a bearer credential for the admin's account —
 	// it must not come back out of the settings API the way a hostname does.
@@ -54,8 +55,9 @@ var clearableSecrets = map[string]bool{
 // panel's uid, which on a typical deployment is root. It stays overridable via
 // QZ_UPDATE_REPO, which requires host access the attacker doesn't have.
 var immutableSettings = map[string]bool{
-	"jwt_secret":  true, // never rotate the signing key through the API
-	"update_repo": true,
+	"oauth2_config": true, // validated and saved atomically by the dedicated OAuth2 endpoint
+	"jwt_secret":    true, // never rotate the signing key through the API
+	"update_repo":   true,
 }
 
 // settingEnv maps a setting key to the env var that overrides it (env wins in

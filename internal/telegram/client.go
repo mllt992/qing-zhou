@@ -101,13 +101,20 @@ func (c *Client) call(ctx context.Context, method string, payload any, out any) 
 		return err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	const maxResponseBytes = 1 << 20
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxResponseBytes {
+		return fmt.Errorf("telegram: response exceeds 1 MiB")
 	}
 	var wrap apiResp
 	if err := json.Unmarshal(raw, &wrap); err != nil {
 		return fmt.Errorf("telegram: bad response (%d): %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	if resp.StatusCode != http.StatusOK && wrap.OK {
+		return &APIError{Code: resp.StatusCode, Description: http.StatusText(resp.StatusCode)}
 	}
 	if !wrap.OK {
 		return &APIError{Code: wrap.ErrorCode, Description: wrap.Description}

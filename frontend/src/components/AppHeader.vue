@@ -47,7 +47,7 @@ import BrandMark from './BrandMark.vue'
 const router = useRouter()
 const auth = useAuthStore()
 const config = useConfigStore()
-const showLogin = ref(false)
+const showLogin = ref(router.currentRoute.value.query.login === '1')
 
 // Store the unregister fn and drop the hook on unmount so it doesn't accumulate
 // across remounts (each stale hook could re-open the login dialog).

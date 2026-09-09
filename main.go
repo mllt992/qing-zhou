@@ -79,6 +79,7 @@ func main() {
 	}
 
 	app := api.New(st, []byte(secret), mail)
+	defer app.Close()
 	app.SetSSHKeyDir(cfg.SSHKeyDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -100,7 +101,7 @@ func main() {
 		}, func(err error) { log.Printf("sing-box controller: %v", err) })
 	}()
 
-	app.StartSourceSync(ctx, time.Hour)
+	app.StartSourceSync(ctx, time.Hour, &bgWG)
 	app.StartMaintenance(ctx, time.Hour)
 	app.StartMonitorTasks(ctx)
 	app.StartHostedProbeSync(ctx)
@@ -115,7 +116,7 @@ func main() {
 		Addr:         cfg.ListenAddr,
 		Handler:      app.Router(),
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: api.ServerWriteTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 

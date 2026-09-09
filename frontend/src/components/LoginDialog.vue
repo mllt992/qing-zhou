@@ -1,5 +1,5 @@
 <template>
-  <n-modal :show="show" @update:show="$emit('update:show', $event)" preset="card" class="login-modal" style="max-width: 400px;" title="">
+  <n-modal :show="show" @update:show="$emit('update:show', $event)" preset="card" class="login-modal" style="width: calc(100vw - 32px); max-width: 420px;" title="">
     <div class="login-brand">
       <div class="login-brand-inner">
         <div class="login-logo"><BrandMark :size="42" /></div>
@@ -7,21 +7,21 @@
       </div>
     </div>
 
-    <n-tabs v-model:value="tab" animated>
+    <n-tabs v-model:value="tab" animated class="auth-tabs">
       <n-tab-pane name="login" tab="登录">
-        <n-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-placement="left">
+        <n-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-placement="top">
           <n-form-item label="用户名" path="username">
-            <n-input v-model:value="loginForm.username" placeholder="请输入用户名" @keyup.enter="handleLogin" />
+            <n-input :input-props="{ autocomplete: 'username' }" v-model:value="loginForm.username" placeholder="请输入用户名" @keyup.enter="handleLogin" />
           </n-form-item>
           <n-form-item label="密码" path="password">
-            <n-input v-model:value="loginForm.password" type="password" show-password-on="click" placeholder="请输入密码" @keyup.enter="handleLogin" />
+            <n-input :input-props="{ autocomplete: 'current-password' }" v-model:value="loginForm.password" type="password" show-password-on="click" placeholder="请输入密码" @keyup.enter="handleLogin" />
           </n-form-item>
           <n-button type="primary" block :loading="loading" @click="handleLogin">登录</n-button>
         </n-form>
       </n-tab-pane>
 
       <n-tab-pane v-if="config.config.registration_open" name="register" tab="注册">
-        <n-form ref="regFormRef" :model="regForm" :rules="regRules" label-placement="left">
+        <n-form ref="regFormRef" :model="regForm" :rules="regRules" label-placement="top">
           <n-form-item label="用户名" path="username">
             <n-input v-model:value="regForm.username" placeholder="请输入用户名" />
           </n-form-item>
@@ -45,7 +45,7 @@
           本站未配置邮件服务，无法自助重置密码。<br>
           请联系管理员帮你重置。
         </div>
-        <n-form v-else label-placement="left">
+        <n-form v-else label-placement="top">
           <n-form-item label="邮箱">
             <n-input v-model:value="forgotEmail" placeholder="请输入注册邮箱" @keyup.enter="handleForgot" />
           </n-form-item>
@@ -53,6 +53,7 @@
         </n-form>
       </n-tab-pane>
     </n-tabs>
+    <n-button v-if="config.config.oauth2_enabled" block secondary :loading="oauthLoading" style="margin-top: 16px" @click="handleOAuth">使用{{ config.config.oauth2_name }}登录</n-button>
   </n-modal>
 </template>
 
@@ -75,6 +76,14 @@ const config = useConfigStore()
 const message = useMessage()
 const tab = ref('login')
 const loading = ref(false)
+const oauthLoading = ref(false)
+async function handleOAuth() {
+  oauthLoading.value = true
+  try {
+    const data = await apiPost<{ authorization_url: string }>('/api/auth/oauth2/start', {})
+    window.location.assign(data.authorization_url)
+  } catch (e: any) { message.error(e.message) } finally { oauthLoading.value = false }
+}
 
 const loginForm = reactive({ username: '', password: '' })
 const regForm = reactive({ username: '', password: '', code: '', email: '' })
@@ -175,6 +184,10 @@ watch(() => props.show, (v) => {
 .login-copy { display: flex; flex-direction: column; line-height: 1.2; }
 .login-copy strong { color: var(--text); font-size: 19px; font-weight: 700; letter-spacing: -.02em; }
 .login-copy span { margin-top: 4px; color: var(--text-3); font-size: 10.5px; font-weight: 500; }
+.auth-tabs :deep(.n-form-item-blank),
+.auth-tabs :deep(.n-input) { width: 100%; min-width: 0; }
+.auth-tabs :deep(.n-form-item-label) { padding-bottom: 6px; }
+.auth-tabs :deep(.n-form-item-feedback-wrapper) { min-height: 14px !important; }
 .forgot-off {
   padding: 18px 14px; text-align: center; line-height: 1.8;
   font-size: 13px; color: var(--text-2);

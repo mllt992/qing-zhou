@@ -543,13 +543,28 @@ func (s *Store) DeleteSource(id int64) error {
 }
 
 // ReplaceSourceNodes swaps in freshly-fetched nodes for a source and records the
-// fetch result. groupIDs (optional) are applied to all imported nodes.
+// fetch result. A non-nil groupIDs updates the source binding atomically with
+// its nodes; nil reuses the current stored binding, not an earlier fetch snapshot.
 func (s *Store) ReplaceSourceNodes(sourceID int64, nodes []Node, groupIDs []int64, fetchErr string) error {
+	// A failed refresh changes only the diagnostic; the last successful snapshot,
+	// timestamp, count and group memberships remain intact.
+	if fetchErr != "" {
+		_, err := s.db.Exec(`UPDATE node_sources SET last_error=? WHERE id=?`, fetchErr, sourceID)
+		return err
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var storedGroups string
+	if err := tx.QueryRow(`SELECT group_ids FROM node_sources WHERE id=?`, sourceID).Scan(&storedGroups); err != nil {
+		return err // source deleted during fetch: do not recreate orphaned nodes
+	}
+	if groupIDs == nil {
+		groupIDs = unmarshalGroupIDs(storedGroups)
+	}
 	now := time.Now().Unix()
 	if fetchErr == "" {
 		// Group memberships are keyed by node id and are not ON DELETE CASCADE, so
@@ -576,8 +591,8 @@ func (s *Store) ReplaceSourceNodes(sourceID int64, nodes []Node, groupIDs []int6
 			}
 		}
 	}
-	if _, err := tx.Exec(`UPDATE node_sources SET last_fetched=?, last_count=?, last_error=? WHERE id=?`,
-		now, len(nodes), fetchErr, sourceID); err != nil {
+	if _, err := tx.Exec(`UPDATE node_sources SET last_fetched=?, last_count=?, last_error=?, group_ids=? WHERE id=?`,
+		now, len(nodes), fetchErr, marshalGroupIDs(groupIDs), sourceID); err != nil {
 		return err
 	}
 	return tx.Commit()

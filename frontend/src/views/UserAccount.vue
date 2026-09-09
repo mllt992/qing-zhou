@@ -22,6 +22,7 @@
       </n-descriptions>
     </n-card>
 
+    <OAuth2Account />
     <!-- 邮箱设置 -->
     <n-card title="邮箱设置" size="small" style="margin-bottom:16px;">
       <n-form label-placement="left" label-width="80" style="max-width:400px;">
@@ -93,6 +94,7 @@
 </template>
 
 <script setup lang="ts">
+import OAuth2Account from '@/components/OAuth2Account.vue'
 import { ref, reactive, computed, onMounted, onUnmounted, h } from 'vue'
 import {
   NCard, NForm, NFormItem, NInput, NButton, NDescriptions, NDescriptionsItem,
