@@ -6,9 +6,11 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -201,6 +203,76 @@ func TestOAuthLoginAndReplay(t *testing.T) {
 		t.Fatal("existing mapping must login when auto-registration disabled")
 	}
 }
+
+// Tabs share a cookie jar. Starting or completing one login must not replace
+// the browser proof for another in-flight login (issue #51).
+func TestOAuthOverlappingLogins(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprint("reverse=", reverse), func(t *testing.T) {
+			f := newOAuthFixture(t)
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			panel, _ := url.Parse(f.c.RedirectURL)
+			type flow struct{ state, nonce, challenge string }
+			var flows []flow
+			for i := 0; i < 2; i++ {
+				state, cookie := f.start(t)
+				jar.SetCookies(panel, []*http.Cookie{cookie})
+				flows = append(flows, flow{state, f.nonce, f.challenge})
+			}
+			if reverse {
+				flows[0], flows[1] = flows[1], flows[0]
+			}
+			for _, flow := range flows {
+				f.nonce, f.challenge = flow.nonce, flow.challenge
+				w := f.callback(flow.state, jar.Cookies(panel)...)
+				if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "https://panel.example/#/oauth2/callback" {
+					t.Fatalf("overlapping login: %d %s", w.Code, w.Header().Get("Location"))
+				}
+				jar.SetCookies(panel, w.Result().Cookies())
+			}
+			if f.exchanges != 2 {
+				t.Fatalf("exchanges = %d, want 2", f.exchanges)
+			}
+			for _, cookie := range jar.Cookies(panel) {
+				if strings.HasPrefix(cookie.Name, oauthCookie) {
+					t.Fatal("completed login left a browser proof cookie")
+				}
+			}
+		})
+	}
+}
+
+func TestOAuthLegacyStateCookie(t *testing.T) {
+	f := newOAuthFixture(t)
+	state, cookie := f.start(t)
+	// Older releases used one fixed name; an in-flight flow must survive an
+	// upgrade without accepting a different browser proof or a replay.
+	cookie.Name = oauthCookie
+	wrong := *cookie
+	wrong.Value = strings.Repeat("x", 43)
+	if loc := f.callback(state, &wrong).Header().Get("Location"); !strings.Contains(loc, "error=state") {
+		t.Fatalf("accepted wrong legacy proof: %s", loc)
+	}
+	w := f.callback(state, cookie)
+	if loc := w.Header().Get("Location"); loc != "https://panel.example/#/oauth2/callback" {
+		t.Fatalf("legacy callback: %s", loc)
+	}
+	cleared := false
+	for _, c := range w.Result().Cookies() {
+		if c.Name == oauthCookie && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatal("legacy proof cookie was not cleared")
+	}
+	if loc := f.callback(state, cookie).Header().Get("Location"); !strings.Contains(loc, "error=state") || f.exchanges != 1 {
+		t.Fatalf("accepted legacy replay: %s", loc)
+	}
+}
 func TestOAuthRejectsUntrustedClaims(t *testing.T) {
 	for _, fault := range []string{"nonce", "audience", "issuer", "expired", "signature", "at_hash", "subject"} {
 		t.Run(fault, func(t *testing.T) {
@@ -220,7 +292,7 @@ func TestOAuthRejectsUntrustedClaims(t *testing.T) {
 	}
 }
 func TestOAuthStateAndPolicy(t *testing.T) {
-	for _, mode := range []string{"missing_cookie", "wrong_cookie", "changed_config", "closed", "unverified", "email_collision", "banned"} {
+	for _, mode := range []string{"missing_cookie", "wrong_cookie", "other_flow_cookie", "changed_config", "closed", "unverified", "email_collision", "banned"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newOAuthFixture(t)
 			if mode == "closed" {
@@ -247,6 +319,8 @@ func TestOAuthStateAndPolicy(t *testing.T) {
 				cookie = &http.Cookie{Name: "other", Value: "other"}
 			case "wrong_cookie":
 				cookie.Value = strings.Repeat("x", 43)
+			case "other_flow_cookie":
+				_, cookie = f.start(t)
 			case "changed_config":
 				f.c.Name = "changed"
 				f.save(t)

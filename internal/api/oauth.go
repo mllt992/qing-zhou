@@ -25,6 +25,10 @@ import (
 const oauthCallbackPath = "/api/auth/oauth2/callback"
 const oauthCookie = "__Host-qz_oauth"
 
+// Each flow needs its own browser proof: tabs share cookies, so a single name
+// lets a later start (or another callback's cleanup) invalidate an earlier one.
+func oauthStateCookie(rawState string) string { return oauthCookie + "_" + oauthHash(rawState) }
+
 type oauthConfig struct {
 	Enabled      bool   `json:"enabled"`
 	Name         string `json:"name"`
@@ -310,7 +314,7 @@ func (a *API) startOAuth(w http.ResponseWriter, r *http.Request, bind bool) {
 		fail(w, 503, "暂时无法发起认证，请稍后再试")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: values[1], Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie(values[0]), Value: values[1], Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
 	w.Header().Set("Cache-Control", "no-store")
 	ok(w, J{"authorization_url": oc.AuthCodeURL(values[0], oidc.Nonce(state.Nonce), oauth2.S256ChallengeOption(state.Verifier))})
 }
@@ -345,9 +349,18 @@ func (a *API) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	u, _ := url.Parse(c.RedirectURL)
 	dest := u.Scheme + "://" + u.Host + "/#/oauth2/callback"
 	finish := func(code string) { http.Redirect(w, r, dest+"?error="+code, http.StatusSeeOther) }
-	cookie, err := r.Cookie(oauthCookie)
 	raw := r.URL.Query().Get("state")
-	if err != nil || len(raw) != 43 || len(cookie.Value) != 43 {
+	if len(raw) != 43 {
+		finish("state")
+		return
+	}
+	cookie, err := r.Cookie(oauthStateCookie(raw))
+	if errors.Is(err, http.ErrNoCookie) {
+		// Allow a login started before an upgrade to finish. The database still
+		// checks the exact browser hash, expiry and single use for this state.
+		cookie, err = r.Cookie(oauthCookie)
+	}
+	if err != nil || len(cookie.Value) != 43 {
 		finish("state")
 		return
 	}
@@ -356,7 +369,7 @@ func (a *API) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		finish("state")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: cookie.Name, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	if r.URL.Query().Get("error") != "" {
 		finish("denied")
 		return
