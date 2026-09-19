@@ -123,7 +123,7 @@
               <template #trigger>
                 <n-switch :value="s.public_visible" size="small" :loading="visSaving === s.id" @update:value="(v:boolean) => setPublicVisible(s, v)" />
               </template>
-              {{ s.public_visible ? '显示在公开状态页' : '不显示在公开状态页' }}
+              {{ s.public_visible ? '显示在首页' : '不显示在首页' }}
             </n-tooltip>
             <n-button size="tiny" @click="openAsset(s)">编辑</n-button>
             <!-- 本机是面板自采集，没有探针可装 -->
@@ -608,7 +608,7 @@ async function setPublicVisible(s: any, v: boolean) {
   try {
     await apiPut(`/api/admin/servers/${s.id}/monitor`, { public_visible: v })
     s.public_visible = v
-    message.success(v ? `「${s.name}」已显示在公开状态页` : `「${s.name}」已从公开状态页隐藏`)
+    message.success(v ? `「${s.name}」已显示在首页` : `「${s.name}」已从首页隐藏`)
   } catch (e: any) { message.error(e.message) } finally { visSaving.value = null }
 }
 

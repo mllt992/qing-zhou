@@ -8,6 +8,21 @@
       <n-button secondary :loading="loading" @click="load">刷新配置与余额</n-button>
     </div>
 
+    <n-card size="small" class="homepage-toggle-card">
+      <div class="homepage-toggle-row">
+        <div>
+          <div class="homepage-toggle-label">首页显示上游余额</div>
+          <div class="homepage-toggle-hint">打开后仅管理员首页显示该卡片，不影响公开状态页。</div>
+        </div>
+        <n-switch
+          :value="showOnHomepage"
+          size="small"
+          :disabled="homepageSettingSaving"
+          @update:value="toggleHomepageVisible"
+        />
+      </div>
+    </n-card>
+
     <n-alert type="info" :bordered="false" class="upstream-notice">
       OCI 直接查询 <b>Usage API</b> 当月已返回的出站用量，配置额度默认 10 TB/月，实际免费额度和计量范围需按账户合同核验。
       查询时间不代表官方数据已完整入账；参考余额不包含尚未返回的用量，不使用网卡流量或 EdgeTunnel 估算值替代。
@@ -126,7 +141,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NInputNumber, NProgress, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NInputNumber, NProgress, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/api'
 import { fmtBytes } from '@/utils/format'
 
@@ -175,6 +190,8 @@ const cfUsage = computed(() => usages.cloudflare)
 const upstreamOrder = ref<Provider[]>(['oci', 'cloudflare'])
 const draggingProvider = ref<Provider | null>(null)
 const dragOverProvider = ref<Provider | null>(null)
+const showOnHomepage = ref(false)
+const homepageSettingSaving = ref(false)
 
 function assignView(target: ProviderView, source?: ProviderView) {
   Object.assign(target, { provider: target.provider, configured: false, limit: target.provider === 'oci' ? 10_000_000_000_000 : 100_000 }, source || {})
@@ -197,6 +214,7 @@ async function load() {
     assignView(cfView, views.find(v => v.provider === 'cloudflare'))
     setForms()
     upstreamOrder.value = normalizeProviderOrder(settings?.admin_upstream_balance_order)
+    showOnHomepage.value = settings?.admin_upstream_balance_visible === 'true'
     await Promise.all([ociView.configured ? refreshUsage('oci', true) : Promise.resolve(), cfView.configured ? refreshUsage('cloudflare', true) : Promise.resolve()])
   } catch (error: any) {
     message.error(error.message || '读取上游配置失败')
@@ -241,6 +259,20 @@ async function handleProviderDrop(provider: Provider) {
 function handleProviderDragEnd() {
   draggingProvider.value = null
   dragOverProvider.value = null
+}
+async function toggleHomepageVisible(value: boolean) {
+  const previous = showOnHomepage.value
+  showOnHomepage.value = value
+  homepageSettingSaving.value = true
+  try {
+    await apiPut('/api/admin/settings', { admin_upstream_balance_visible: String(value) })
+    message.success(value ? '已在首页显示上游余额' : '已从首页隐藏上游余额')
+  } catch (error: any) {
+    showOnHomepage.value = previous
+    message.error(error.message || '保存首页显示设置失败')
+  } finally {
+    homepageSettingSaving.value = false
+  }
 }
 async function refreshUsage(provider: Provider, quiet = false) {
   refreshing[provider] = true
@@ -327,6 +359,11 @@ onUnmounted(() => {
 
 <style scoped>
 .upstream-head { margin-bottom: 14px; }
+.homepage-toggle-card { margin-bottom: 14px; }
+.homepage-toggle-card :deep(.n-card__content) { padding: 12px 14px; }
+.homepage-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.homepage-toggle-label { font-size: 13px; font-weight: 650; color: var(--text); }
+.homepage-toggle-hint { margin-top: 3px; font-size: 12px; color: var(--text-3); line-height: 1.55; }
 .upstream-notice { margin-bottom: 16px; line-height: 1.75; }
 .upstream-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .upstream-sort-item { min-width: 0; order: 0; cursor: grab; transition: opacity .2s ease, transform .2s ease; }

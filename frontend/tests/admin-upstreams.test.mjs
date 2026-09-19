@@ -26,9 +26,19 @@ test('upstream cards persist drag order and the public monitor keeps balance dat
   assert.match(source, /admin_upstream_balance_order/)
   assert.match(source, /draggable="true"/)
   assert.match(source, /handleProviderDrop/)
-  assert.match(monitor, /auth\.isAdmin \? apiList<any>\('\/api\/admin\/monitor\/servers'\)/)
   assert.match(monitor, /\/api\/admin\/upstreams\/\$\{provider\}\/refresh/)
   assert.match(monitor, /handleUpstreamDrop/)
+  assert.doesNotMatch(monitor, /apiList<any>\('\/api\/admin\/monitor\/servers'\)/)
+})
+
+test('homepage balance card is independently gated from the upstream management page', () => {
+  assert.match(source, /首页显示上游余额/)
+  assert.match(source, /admin_upstream_balance_visible/)
+  assert.match(source, /toggleHomepageVisible/)
+  assert.match(monitor, /homepageCards/)
+  assert.match(monitor, /s\.name === UPSTREAM_BALANCE_CARD/)
+  assert.match(monitor, /settings\?\.admin_upstream_balance_visible === 'true'/)
+  assert.doesNotMatch(monitor, /s\.name === '面板本机' && upstreamBalanceVisible/)
 })
 
 test('node cards use drag-and-drop for the shared subscription order', () => {
