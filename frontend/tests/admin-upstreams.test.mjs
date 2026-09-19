@@ -26,9 +26,9 @@ test('upstream cards persist drag order and the public monitor keeps balance dat
   assert.match(source, /admin_upstream_balance_order/)
   assert.match(source, /draggable="true"/)
   assert.match(source, /handleProviderDrop/)
+  assert.match(monitor, /auth\.isAdmin \? apiList<any>\('\/api\/admin\/monitor\/servers'\)/)
   assert.match(monitor, /\/api\/admin\/upstreams\/\$\{provider\}\/refresh/)
   assert.match(monitor, /handleUpstreamDrop/)
-  assert.doesNotMatch(monitor, /apiList<any>\('\/api\/admin\/monitor\/servers'\)/)
 })
 
 test('homepage balance card is independently gated from the upstream management page', () => {

@@ -320,7 +320,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, reactive, watch } from 'vue'
 import { NEmpty } from 'naive-ui'
-import { apiGet, apiPost, apiPut } from '@/api'
+import { apiGet, apiList, apiPost, apiPut } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { fmtBytes, fmtUptime, timeAgo, pct } from '@/utils/format'
@@ -614,14 +614,38 @@ function sparkArea(arr: number[]) {
 
 async function fetchData() {
   try {
-    const [pub, spk] = await Promise.all([
+    const [pub, spk, adminServers] = await Promise.all([
       apiGet<{ servers: Server[] }>('/api/monitor/public'),
       apiGet<{ servers: Spark[] }>('/api/monitor/public/sparklines?range=1h').catch(() => null),
+      auth.isAdmin ? apiList<any>('/api/admin/monitor/servers').catch(() => []) : Promise.resolve([] as any[]),
     ])
     const sparks: Record<string, Spark> = {}
     if (spk?.servers) for (const s of spk.servers) sparks[s.name] = s
     const list = Array.isArray(pub?.servers) ? [...pub.servers] : []
-    // 面板本机与其它机器一样走 public_visible：关闭后公开首页和已登录首页都不显示。
+    // 本机开关只控制未登录公开页。管理员首页仍注入面板本机，便于看本机指标。
+    if (auth.isAdmin) {
+      const local = adminServers.find(s => s.local || s.id === 0 || s.name === '面板本机')
+      if (local) {
+        const localServer: Server = {
+          name: local.name || '面板本机', status: local.status === 'online' ? 'online' : 'offline',
+          location: local.location || '', provider: local.provider || '', spec: local.spec || '',
+          days_left: local.days_left ?? null, price: local.price,
+          metrics: local.metrics ? {
+            cpu_percent: local.metrics.cpu_percent || 0, mem_used: local.metrics.mem_used || 0, mem_total: local.metrics.mem_total || 0,
+            swap_used: local.metrics.swap_used || 0, swap_total: local.metrics.swap_total || 0,
+            disk_used: local.metrics.disk_used || 0, disk_total: local.metrics.disk_total || 0,
+            net_up: local.metrics.net_tx || 0, net_down: local.metrics.net_rx || 0,
+            load1: local.metrics.load1 || 0, load5: local.metrics.load5 || 0, load15: local.metrics.load15 || 0,
+            tcp_connections: local.metrics.tcp_connections || 0, process_count: local.metrics.process_count || 0,
+            uptime: local.metrics.uptime || 0, platform: local.metrics.platform || '', arch: local.metrics.arch || '',
+          } : null,
+          last_seen: local.last_seen || 0,
+        }
+        const existing = list.findIndex(server => server.name === localServer.name)
+        if (existing >= 0) list[existing] = localServer
+        else list.unshift(localServer)
+      }
+    }
     for (const s of list) s.spark = sparks[s.name] || null
     servers.value = list
   } catch {}
