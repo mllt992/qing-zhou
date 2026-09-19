@@ -119,7 +119,16 @@
         </template>
         <template #header-extra>
           <n-space :size="4" align="center" wrap>
-            <n-tooltip trigger="hover">
+            <n-select
+              v-if="s.local"
+              :value="localHomeVisibility(s)"
+              :options="localHomeOpts"
+              size="tiny"
+              :loading="visSaving === s.id"
+              style="width:132px;"
+              @update:value="(v:string) => setLocalHomeVisibility(s, v)"
+            />
+            <n-tooltip v-else trigger="hover">
               <template #trigger>
                 <n-switch :value="s.public_visible" size="small" :loading="visSaving === s.id" @update:value="(v:boolean) => setPublicVisible(s, v)" />
               </template>
@@ -603,6 +612,30 @@ async function dismissAll() {
 // 公开状态页是不鉴权的，所以「监控它」和「对外公布它」分成两件事。其他机器默认
 // 公开（和加这个开关之前的行为一致），面板本机默认不公开。
 const visSaving = ref<number | null>(null)
+const localHomeOpts = [
+  { label: '公开显示', value: 'public' },
+  { label: '仅管理员', value: 'admin' },
+  { label: '不显示', value: 'hidden' },
+]
+function localHomeVisibility(s: any) {
+  if (s?.home_visibility === 'public' || s?.home_visibility === 'admin' || s?.home_visibility === 'hidden') return s.home_visibility
+  return s?.public_visible ? 'public' : 'admin'
+}
+async function setLocalHomeVisibility(s: any, v: string) {
+  visSaving.value = s.id
+  const previous = localHomeVisibility(s)
+  s.home_visibility = v
+  s.public_visible = v === 'public'
+  try {
+    await apiPut(`/api/admin/servers/${s.id}/monitor`, { home_visibility: v })
+    const labels: Record<string, string> = { public: '已公开显示', admin: '仅管理员首页显示', hidden: '已从首页隐藏' }
+    message.success(`「${s.name}」${labels[v] || '已更新显示方式'}`)
+  } catch (e: any) {
+    s.home_visibility = previous
+    s.public_visible = previous === 'public'
+    message.error(e.message)
+  } finally { visSaving.value = null }
+}
 async function setPublicVisible(s: any, v: boolean) {
   visSaving.value = s.id
   try {

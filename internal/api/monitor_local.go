@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -21,11 +22,23 @@ import (
 //
 // No probe binary, no token, no systemd unit, no server row.
 
-// settingLocalPublic gates whether the panel's own machine appears on the
-// unauthenticated status page. Default off — the panel host is the one machine
-// an attacker most wants fingerprinted, and unlike a landing node its name says
-// exactly what it is.
+// settingLocalPublic is the legacy boolean for the unauthenticated status page.
+// New installs and explicit three-state writes use settingLocalHomeVisibility.
 const settingLocalPublic = "monitor_local_public"
+
+// settingLocalHomeVisibility is the three-state homepage gate for 面板本机:
+// public (everyone), admin (logged-in administrators only), hidden (nobody).
+// Default admin — the old homepage always injected the local card for admins,
+// while keeping it off the public page until opted in.
+const settingLocalHomeVisibility = "monitor_local_home_visibility"
+
+const (
+	localHomePublic = "public"
+	localHomeAdmin  = "admin"
+	localHomeHidden = "hidden"
+)
+
+var errLocalHomeVisibility = errors.New("本机首页显示方式无效")
 
 // StartLocalMetrics samples this host into the metrics table until ctx ends.
 func (a *API) StartLocalMetrics(ctx context.Context) {
@@ -82,11 +95,47 @@ func resetAPITimer(t *time.Timer, d time.Duration) {
 	t.Reset(d)
 }
 
+// localHomeVisibility reports where the panel's own machine appears.
+// Missing three-state setting falls back to the legacy public boolean:
+// true → public, false/absent → admin (the historical admin-homepage inject).
+func (a *API) localHomeVisibility() string {
+	if v, err := a.st.GetSetting(settingLocalHomeVisibility); err == nil {
+		switch v {
+		case localHomePublic, localHomeAdmin, localHomeHidden:
+			return v
+		}
+	}
+	legacy, _ := a.st.GetSettingBool(settingLocalPublic)
+	if legacy {
+		return localHomePublic
+	}
+	return localHomeAdmin
+}
+
 // localPublicVisible reports whether the panel's own machine is listed on the
 // public status page.
 func (a *API) localPublicVisible() bool {
-	v, _ := a.st.GetSettingBool(settingLocalPublic)
-	return v
+	return a.localHomeVisibility() == localHomePublic
+}
+
+func normalizeLocalHomeVisibility(v string) (string, bool) {
+	switch v {
+	case localHomePublic, localHomeAdmin, localHomeHidden:
+		return v, true
+	default:
+		return "", false
+	}
+}
+
+func (a *API) setLocalHomeVisibility(v string) error {
+	mode, ok := normalizeLocalHomeVisibility(v)
+	if !ok {
+		return errLocalHomeVisibility
+	}
+	if err := a.st.SetSetting(settingLocalHomeVisibility, mode); err != nil {
+		return err
+	}
+	return a.st.SetSettingBool(settingLocalPublic, mode == localHomePublic)
 }
 
 // localMonitorServer builds the synthetic servers row standing for the panel's
@@ -139,6 +188,13 @@ func (a *API) localMonitorServer(latest map[int64]*store.ServerMetrics) *store.S
 		LastSeen: m.Ts,
 		Status:   "online",
 	}
+}
+
+func (a *API) homeVisibilityFor(sv *store.Server) string {
+	if sv != nil && sv.ID == store.LocalNodeID {
+		return a.localHomeVisibility()
+	}
+	return ""
 }
 
 // serversWithLocal is ListServers plus the panel's own machine at the head.

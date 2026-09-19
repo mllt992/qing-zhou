@@ -31,6 +31,15 @@ test('upstream cards persist drag order and the public monitor keeps balance dat
   assert.match(monitor, /handleUpstreamDrop/)
 })
 
+test('local panel homepage visibility is a three-state control on the admin monitor page', async () => {
+  const adminMonitor = await readFile(new URL('../src/views/AdminMonitor.vue', import.meta.url), 'utf8')
+  assert.match(adminMonitor, /公开显示/)
+  assert.match(adminMonitor, /仅管理员/)
+  assert.match(adminMonitor, /不显示/)
+  assert.match(adminMonitor, /home_visibility/)
+  assert.match(monitor, /localHomeVisibility\(local\) !== 'hidden'/)
+})
+
 test('homepage balance card is independently gated from the upstream management page', () => {
   assert.match(source, /首页显示上游余额/)
   assert.match(source, /admin_upstream_balance_visible/)

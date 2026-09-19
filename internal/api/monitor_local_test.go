@@ -61,13 +61,14 @@ func TestLocalNodeAppearsInMonitorList(t *testing.T) {
 
 	var after struct {
 		Data []struct {
-			ID            int64  `json:"id"`
-			Name          string `json:"name"`
-			Local         bool   `json:"local"`
-			ProbeEnabled  bool   `json:"probe_enabled"`
-			ProbeToken    string `json:"probe_token"`
-			PublicVisible bool   `json:"public_visible"`
-			Status        string `json:"status"`
+			ID             int64  `json:"id"`
+			Name           string `json:"name"`
+			Local          bool   `json:"local"`
+			ProbeEnabled   bool   `json:"probe_enabled"`
+			ProbeToken     string `json:"probe_token"`
+			PublicVisible  bool   `json:"public_visible"`
+			HomeVisibility string `json:"home_visibility"`
+			Status         string `json:"status"`
 			Metrics       *struct {
 				CPUPercent float64 `json:"cpu_percent"`
 			} `json:"metrics"`
@@ -91,6 +92,9 @@ func TestLocalNodeAppearsInMonitorList(t *testing.T) {
 	}
 	if !row.ProbeEnabled || row.Status != "online" {
 		t.Fatalf("local node should read as a live, monitored machine: %+v", row)
+	}
+	if row.HomeVisibility != "admin" || row.PublicVisible {
+		t.Fatalf("default home visibility = %+v, want admin-only", row)
 	}
 }
 
@@ -188,6 +192,92 @@ func TestPublicPageVisibilityDefaults(t *testing.T) {
 	got = names()
 	if len(got) != 1 || got[0] != store.LocalNodeName {
 		t.Fatalf("public page = %v; want only the local machine after hiding the landing node", got)
+	}
+}
+
+func TestLocalHomeVisibilityThreeState(t *testing.T) {
+	a, st := newNodeUpgradeAPI(t)
+	sampleLocal(t, st, 8)
+
+	readAdmin := func() (public bool, mode string) {
+		var body struct {
+			Data []struct {
+				Local          bool   `json:"local"`
+				PublicVisible  bool   `json:"public_visible"`
+				HomeVisibility string `json:"home_visibility"`
+			} `json:"data"`
+		}
+		getJSON(t, a.handleMonitorServers, "/api/admin/monitor/servers", &body)
+		for _, row := range body.Data {
+			if row.Local {
+				return row.PublicVisible, row.HomeVisibility
+			}
+		}
+		t.Fatal("local node missing from admin monitor list")
+		return false, ""
+	}
+	publicNames := func() []string {
+		var body struct {
+			Data struct {
+				Servers []struct {
+					Name string `json:"name"`
+				} `json:"servers"`
+			} `json:"data"`
+		}
+		getJSON(t, a.handleMonitorPublic, "/api/monitor/public", &body)
+		var out []string
+		for _, s := range body.Data.Servers {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+	setMode := func(mode string) {
+		t.Helper()
+		req := httptest.NewRequest("PUT", "/x", strings.NewReader(`{"home_visibility":"`+mode+`"}`))
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", strconv.FormatInt(store.LocalNodeID, 10))
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+		w := httptest.NewRecorder()
+		a.handleUpdateServerMonitor(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("set home_visibility=%s: status %d, body %s", mode, w.Code, w.Body.String())
+		}
+	}
+
+	public, mode := readAdmin()
+	if public || mode != "admin" {
+		t.Fatalf("default = public:%v mode:%s, want admin-only", public, mode)
+	}
+	if got := publicNames(); len(got) != 0 {
+		t.Fatalf("public page default = %v; want empty", got)
+	}
+
+	setMode("public")
+	public, mode = readAdmin()
+	if !public || mode != "public" {
+		t.Fatalf("after public = public:%v mode:%s", public, mode)
+	}
+	if got := publicNames(); len(got) != 1 || got[0] != store.LocalNodeName {
+		t.Fatalf("public page after public = %v", got)
+	}
+
+	setMode("hidden")
+	public, mode = readAdmin()
+	if public || mode != "hidden" {
+		t.Fatalf("after hidden = public:%v mode:%s", public, mode)
+	}
+	if got := publicNames(); len(got) != 0 {
+		t.Fatalf("public page after hidden = %v; want empty", got)
+	}
+
+	req := httptest.NewRequest("PUT", "/x", strings.NewReader(`{"home_visibility":"everyone"}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", strconv.FormatInt(store.LocalNodeID, 10))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	a.handleUpdateServerMonitor(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid mode: status %d, body %s", w.Code, w.Body.String())
 	}
 }
 

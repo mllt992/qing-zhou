@@ -371,6 +371,10 @@ interface UpstreamUsage {
 const config = useConfigStore()
 const auth = useAuthStore()
 const servers = ref<Server[]>([])
+function localHomeVisibility(local?: { home_visibility?: string; public_visible?: boolean } | null) {
+  if (local?.home_visibility === 'public' || local?.home_visibility === 'admin' || local?.home_visibility === 'hidden') return local.home_visibility
+  return local?.public_visible ? 'public' : 'admin'
+}
 const loading = ref(false)
 const refreshing = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -622,10 +626,10 @@ async function fetchData() {
     const sparks: Record<string, Spark> = {}
     if (spk?.servers) for (const s of spk.servers) sparks[s.name] = s
     const list = Array.isArray(pub?.servers) ? [...pub.servers] : []
-    // 本机开关只控制未登录公开页。管理员首页仍注入面板本机，便于看本机指标。
+    // 本机三态：public 走公开列表；admin 仅管理员首页注入；hidden 谁都不显示。
     if (auth.isAdmin) {
       const local = adminServers.find(s => s.local || s.id === 0 || s.name === '面板本机')
-      if (local) {
+      if (local && localHomeVisibility(local) !== 'hidden') {
         const localServer: Server = {
           name: local.name || '面板本机', status: local.status === 'online' ? 'online' : 'offline',
           location: local.location || '', provider: local.provider || '', spec: local.spec || '',

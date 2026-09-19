@@ -289,6 +289,7 @@ func (a *API) handleMonitorServers(w http.ResponseWriter, r *http.Request) {
 		ProbeUpgradeOutput    string                   `json:"probe_upgrade_output"`
 		ProbeUpgradedAt       int64                    `json:"probe_upgraded_at"`
 		PublicVisible         bool                     `json:"public_visible"`
+		HomeVisibility        string                   `json:"home_visibility,omitempty"`
 		PublicShowTraffic     bool                     `json:"public_show_traffic"`
 		PublicShowPrice       bool                     `json:"public_show_price"`
 		Provider              string                   `json:"provider"`
@@ -360,6 +361,7 @@ func (a *API) handleMonitorServers(w http.ResponseWriter, r *http.Request) {
 			ProbeUpgradeOutput:    probeJob.Output,
 			ProbeUpgradedAt:       probeJob.FinishedAt,
 			PublicVisible:         sv.PublicVisible,
+			HomeVisibility:        a.homeVisibilityFor(sv),
 			PublicShowTraffic:     sv.PublicShowTraffic,
 			PublicShowPrice:       sv.PublicShowPrice,
 			Provider:              sv.Provider,
@@ -744,6 +746,7 @@ func (a *API) handleUpdateServerMonitor(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		ProbeEnabled          *bool    `json:"probe_enabled"`
 		PublicVisible         *bool    `json:"public_visible"`
+		HomeVisibility        *string  `json:"home_visibility"`
 		PublicShowTraffic     *bool    `json:"public_show_traffic"`
 		PublicShowPrice       *bool    `json:"public_show_price"`
 		ExpiryDate            *int64   `json:"expiry_date"`
@@ -806,8 +809,21 @@ func (a *API) handleUpdateServerMonitor(w http.ResponseWriter, r *http.Request) 
 	// that genuinely does not apply (the panel samples itself, there is no probe
 	// to switch off) and is accepted and ignored.
 	if id == store.LocalNodeID {
-		if body.PublicVisible != nil {
-			if err := a.st.SetSettingBool(settingLocalPublic, *body.PublicVisible); err != nil {
+		if body.HomeVisibility != nil {
+			if err := a.setLocalHomeVisibility(*body.HomeVisibility); err != nil {
+				if errors.Is(err, errLocalHomeVisibility) {
+					fail(w, 400, err.Error())
+					return
+				}
+				fail(w, 500, "更新失败")
+				return
+			}
+		} else if body.PublicVisible != nil {
+			mode := localHomeAdmin
+			if *body.PublicVisible {
+				mode = localHomePublic
+			}
+			if err := a.setLocalHomeVisibility(mode); err != nil {
 				fail(w, 500, "更新失败")
 				return
 			}
