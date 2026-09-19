@@ -12,7 +12,7 @@
       <div class="homepage-toggle-row">
         <div>
           <div class="homepage-toggle-label">首页显示上游余额</div>
-          <div class="homepage-toggle-hint">打开后仅管理员首页显示该卡片，不影响公开状态页。</div>
+          <div class="homepage-toggle-hint">未配置时默认关闭；配置任一上游后默认打开。打开后仅管理员首页显示，不影响公开状态页。</div>
         </div>
         <n-switch
           :value="showOnHomepage"
@@ -214,7 +214,10 @@ async function load() {
     assignView(cfView, views.find(v => v.provider === 'cloudflare'))
     setForms()
     upstreamOrder.value = normalizeProviderOrder(settings?.admin_upstream_balance_order)
-    showOnHomepage.value = settings?.admin_upstream_balance_visible === 'true'
+    const configured = ociView.configured || cfView.configured
+    const saved = settings?.admin_upstream_balance_visible
+    // 没配过默认关；配了至少一个默认开；管理员手动关过则记住关闭。
+    showOnHomepage.value = saved === 'true' || (saved !== 'false' && configured)
     await Promise.all([ociView.configured ? refreshUsage('oci', true) : Promise.resolve(), cfView.configured ? refreshUsage('cloudflare', true) : Promise.resolve()])
   } catch (error: any) {
     message.error(error.message || '读取上游配置失败')

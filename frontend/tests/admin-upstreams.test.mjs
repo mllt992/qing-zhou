@@ -35,9 +35,10 @@ test('homepage balance card is independently gated from the upstream management 
   assert.match(source, /首页显示上游余额/)
   assert.match(source, /admin_upstream_balance_visible/)
   assert.match(source, /toggleHomepageVisible/)
+  assert.match(source, /saved !== 'false' && configured/)
   assert.match(monitor, /homepageCards/)
   assert.match(monitor, /s\.name === UPSTREAM_BALANCE_CARD/)
-  assert.match(monitor, /settings\?\.admin_upstream_balance_visible === 'true'/)
+  assert.match(monitor, /saved !== 'false' && configured/)
   assert.doesNotMatch(monitor, /s\.name === '面板本机' && upstreamBalanceVisible/)
 })
 

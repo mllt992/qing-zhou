@@ -456,7 +456,10 @@ async function loadUpstreamBalances() {
       Object.assign(upstreamViews[provider], view || { provider, configured: false })
     }
     upstreamOrder.value = normalizeUpstreamOrder(settings?.admin_upstream_balance_order)
-    upstreamBalanceVisible.value = settings?.admin_upstream_balance_visible === 'true'
+    const configured = Object.values(upstreamViews).some(view => view.configured)
+    const saved = settings?.admin_upstream_balance_visible
+    // 没配过默认关；配了至少一个默认开；管理员手动关过则记住关闭。
+    upstreamBalanceVisible.value = saved === 'true' || (saved !== 'false' && configured)
     if (!upstreamBalanceVisible.value) return
     await Promise.all(upstreamDefaults.map(refreshUpstream))
   } catch {
