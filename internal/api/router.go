@@ -433,6 +433,7 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/monitor/dashboard", a.handleMonitorDashboard)
 		ar.Get("/api/admin/monitor/servers", a.handleMonitorServers)
 		ar.Get("/api/admin/monitor/servers/{id}/metrics", a.handleServerMetrics)
+		ar.Get("/api/admin/monitor/servers/{id}/traffic-status", a.handleServerTrafficStatus)
 		ar.Get("/api/admin/monitor/servers/{id}/traffic-analysis", a.handleServerTrafficAnalysis)
 		ar.Post("/api/admin/monitor/servers/{id}/probe/upgrade", a.handleAdminProbeUpgrade)
 		ar.Get("/api/admin/monitor/heatmap", a.handleMonitorHeatmap)

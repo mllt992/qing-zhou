@@ -8,7 +8,7 @@
       </h2>
       <n-tag v-if="server?.location" size="small" :bordered="false">{{ server.location }}</n-tag>
     </div>
-    <p class="page-sub">实时资源、资产信息与多时间范围趋势；数据随探针上报持续更新</p>
+    <p class="page-sub">实时资源与趋势。往下的「流量状态」可以按某一时段回看整机进出流量、在线连接数，以及探针有没有断过。</p>
 
     <n-spin :show="loading">
       <template v-if="server">
@@ -82,6 +82,63 @@
           </div>
           <div ref="chartEl" class="big-chart" />
         </n-card>
+
+        <!-- 流量状态：整机网卡计数，按时间段回看。不是代理用户流量。 -->
+        <n-card id="traffic-status" size="small" style="margin-top:16px;">
+          <div class="chart-toolbar">
+            <span class="status-title">流量状态</span>
+            <n-radio-group v-model:value="statusPreset" size="small" @update:value="onStatusPreset">
+              <n-radio-button v-for="r in statusPresets" :key="r.value" :value="r.value">{{ r.label }}</n-radio-button>
+            </n-radio-group>
+            <n-date-picker
+              v-if="statusPreset === 'custom'"
+              v-model:value="statusCustom"
+              type="datetimerange"
+              size="small"
+              clearable
+              :is-date-disabled="disableStatusDate"
+              style="width:340px;"
+              @update:value="onStatusCustom"
+            />
+          </div>
+          <p class="status-note">读的是探针已经存下的整机网卡计数和连接数，大约每分钟一条。不统计代理用户流量，查的时候也不会再去机器上抓。</p>
+          <n-spin :show="statusLoading">
+            <n-empty v-if="statusReady && !hasStatusSamples && !statusSilent" description="该时间段还没有数据" style="padding:28px 0;" />
+            <n-empty v-else-if="statusReady && statusSilent" description="该时间段探针没有上报，看不到当时的流量和连接数" style="padding:28px 0;" />
+            <template v-else-if="statusReady && hasStatusSamples">
+              <div class="metric-grid">
+                <div class="metric-card">
+                  <span class="m-label">下行（入站）</span>
+                  <span class="m-val">{{ statusBytes(status.rx_bytes) }}</span>
+                  <span class="m-sub">{{ statusBucketText }}合计</span>
+                </div>
+                <div class="metric-card">
+                  <span class="m-label">上行（出站）</span>
+                  <span class="m-val">{{ statusBytes(status.tx_bytes) }}</span>
+                  <span class="m-sub">网卡发出</span>
+                </div>
+                <div class="metric-card">
+                  <span class="m-label">在线连接数峰值</span>
+                  <span class="m-val">{{ status.peak_connections }}</span>
+                  <span class="m-sub">已建立的 TCP 连接</span>
+                </div>
+                <div class="metric-card">
+                  <span class="m-label">探针中断</span>
+                  <span class="m-val" :class="status.gaps?.length ? 'warn' : 'ok'">{{ status.gaps?.length || 0 }} 次</span>
+                  <span class="m-sub">{{ status.gaps?.length ? '中断期间不补 0' : '这段时间一直有上报' }}</span>
+                </div>
+              </div>
+              <p v-if="!statusHasBytes" class="status-note">这段记录还算不出进出流量（没有相邻的网卡累计计数，常见于探针过旧或窗口里只有一条）。连接数和中断仍然是实数。</p>
+              <p v-else class="status-note">柱子是这一档里的实际字节，不是瞬时速率。探针中断结束后的第一档，包含中断期间累计的流量。</p>
+              <div ref="statusChartEl" class="big-chart" />
+              <ul v-if="status.gaps?.length" class="gap-list">
+                <li v-for="(g, i) in status.gaps" :key="i">
+                  {{ fmtDateTime(g.from) }} – {{ fmtDateTime(g.to) }} 探针没有上报（{{ fmtGap(g.seconds) }}）
+                </li>
+              </ul>
+            </template>
+          </n-spin>
+        </n-card>
       </template>
       <n-empty v-else-if="!loading" description="服务器不存在" style="padding:60px 0;" />
     </n-spin>
@@ -89,13 +146,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  NSpin, NCard, NButton, NTag, NProgress, NRadioGroup, NRadioButton, NCheckboxGroup, NCheckbox, NSpace, NEmpty
+  NSpin, NCard, NButton, NTag, NProgress, NRadioGroup, NRadioButton, NCheckboxGroup, NCheckbox, NSpace, NEmpty,
+  NDatePicker, useMessage
 } from 'naive-ui'
 import { apiGet } from '@/api'
-import { fmtBytes, fmtUptime, pct } from '@/utils/format'
+import { fmtBytes, fmtUptime, fmtDateTime, pct } from '@/utils/format'
 import * as echarts from 'echarts'
 
 const route = useRoute()
@@ -178,21 +236,196 @@ function drawChart() {
   }, true)
 }
 
+
+const message = useMessage()
+const statusPreset = ref('24h')
+const statusCustom = ref<[number, number] | null>(null)
+const statusLoading = ref(false)
+const statusReady = ref(false)
+const status = ref<any>(null)
+const statusChartEl = ref<HTMLElement | null>(null)
+let statusChart: echarts.ECharts | null = null
+const statusPresets = [
+  { label: '近 1 小时', value: '1h' },
+  { label: '近 6 小时', value: '6h' },
+  { label: '近 24 小时', value: '24h' },
+  { label: '近 7 天', value: '7d' },
+  { label: '近 30 天', value: '30d' },
+  { label: '自定义', value: 'custom' },
+]
+const hasStatusSamples = computed(() => (status.value?.sample_count || 0) > 0)
+const statusSilent = computed(() => !hasStatusSamples.value && (status.value?.gaps?.length || 0) > 0)
+const statusHasBytes = computed(() => (status.value?.delta_samples || 0) > 0)
+const statusBucketText = computed(() => {
+  const sec = status.value?.bucket_sec || 60
+  if (sec <= 60) return '每分钟'
+  if (sec < 3600) return `每 ${Math.round(sec / 60)} 分钟`
+  return `每 ${Math.round(sec / 3600)} 小时`
+})
+
+function statusBytes(n: number) {
+  return statusHasBytes.value ? fmtBytes(n) : '—'
+}
+function fmtGap(sec: number) {
+  if (!sec || sec < 60) return `${sec || 0} 秒`
+  const m = Math.round(sec / 60)
+  if (m < 60) return `${m} 分钟`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return rm ? `${h} 小时 ${rm} 分钟` : `${h} 小时`
+}
+function disableStatusDate(ts: number) {
+  const now = Date.now()
+  return ts > now || ts < now - 35 * 86400000
+}
+function statusBounds(): { from: number, to: number } | null {
+  const now = Math.floor(Date.now() / 1000)
+  const span: Record<string, number> = {
+    '1h': 3600, '6h': 6 * 3600, '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400,
+  }
+  if (statusPreset.value !== 'custom') {
+    return { from: now - span[statusPreset.value], to: now }
+  }
+  const r = statusCustom.value
+  if (!r || !r[0] || !r[1] || r[1] <= r[0]) return null
+  return { from: Math.floor(r[0] / 1000), to: Math.floor(r[1] / 1000) }
+}
+function onStatusPreset(v: string) {
+  if (v !== 'custom') loadStatus()
+}
+function onStatusCustom(v: [number, number] | null) {
+  if (v && v[0] && v[1]) loadStatus()
+}
+
+async function loadStatus() {
+  const bounds = statusBounds()
+  if (!bounds) return
+  statusLoading.value = true
+  try {
+    status.value = await apiGet<any>(`/api/admin/monitor/servers/${sid}/traffic-status?from=${bounds.from}&to=${bounds.to}`)
+    statusReady.value = true
+    await nextTick()
+    drawStatus()
+  } catch (e: any) {
+    statusReady.value = true
+    message.error(e?.message || '查询流量状态失败')
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+function drawStatus() {
+  if (!hasStatusSamples.value) {
+    statusChart?.dispose()
+    statusChart = null
+    return
+  }
+  if (!statusChartEl.value) return
+  if (!statusChart) statusChart = echarts.init(statusChartEl.value)
+  const gaps = status.value?.gaps || []
+  const points = status.value?.points || []
+  const broken = (ts: number, prev: number) => gaps.some((g: any) => g.from < ts && g.to > prev)
+  const traffic = (key: 'rx_bytes' | 'tx_bytes') => {
+    const out: any[] = []
+    let prev = 0
+    for (const p of points) {
+      if (prev && broken(p.ts, prev)) out.push([p.ts * 1000 - 1000, null])
+      out.push([p.ts * 1000, p.totals_valid ? p[key] : null])
+      prev = p.ts
+    }
+    return out
+  }
+  const conns: any[] = []
+  {
+    let prev = 0
+    for (const p of points) {
+      if (prev && broken(p.ts, prev)) conns.push([p.ts * 1000 - 1000, null])
+      conns.push([p.ts * 1000, p.connections])
+      prev = p.ts
+    }
+  }
+  const showBytes = statusHasBytes.value
+  const series: any[] = []
+  if (showBytes) {
+    series.push({
+      name: '下行', type: 'bar', yAxisIndex: 0, barMaxWidth: 14,
+      itemStyle: { color: '#3d7ea6' }, data: traffic('rx_bytes'),
+    })
+    series.push({
+      name: '上行', type: 'bar', yAxisIndex: 0, barMaxWidth: 14,
+      itemStyle: { color: '#6f8f76' }, data: traffic('tx_bytes'),
+    })
+  }
+  series.push({
+    name: '连接数', type: 'line', yAxisIndex: showBytes ? 1 : 0, smooth: false, showSymbol: false,
+    connectNulls: false, lineStyle: { width: 1.5, color: '#bf9540' }, itemStyle: { color: '#bf9540' },
+    data: conns,
+    markArea: {
+      silent: true,
+      itemStyle: { color: 'rgba(194, 104, 92, 0.14)' },
+      label: { color: '#c2685c', fontSize: 11 },
+      data: gaps.map((g: any) => [
+        { name: '探针中断', xAxis: g.from * 1000 },
+        { xAxis: g.to * 1000 },
+      ]),
+    },
+  })
+  statusChart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      formatter(items: any) {
+        const list = Array.isArray(items) ? items : [items]
+        const head = fmtDateTime(Math.floor((list[0]?.axisValue || 0) / 1000))
+        const lines = list.map((it: any) => {
+          const v = it.value?.[1]
+          if (v == null) return `${it.marker}${it.seriesName}：无数据`
+          const shown = it.seriesName === '连接数' ? String(v) : fmtBytes(v)
+          return `${it.marker}${it.seriesName}：${shown}`
+        })
+        return [head, ...lines].join('<br/>')
+      },
+    },
+    legend: { top: 0, textStyle: { fontSize: 11 } },
+    grid: { left: 56, right: showBytes ? 48 : 24, top: 32, bottom: 28 },
+    xAxis: {
+      type: 'time',
+      min: (status.value?.from || 0) * 1000,
+      max: (status.value?.to || 0) * 1000,
+      axisLabel: { fontSize: 10 },
+    },
+    yAxis: showBytes
+      ? [
+          { type: 'value', name: '字节', axisLabel: { fontSize: 10, formatter: (v: number) => fmtBytes(v) } },
+          { type: 'value', name: '连接', minInterval: 1, axisLabel: { fontSize: 10 } },
+        ]
+      : [{ type: 'value', name: '连接', minInterval: 1, axisLabel: { fontSize: 10 } }],
+    series,
+  }, true)
+  statusChart.resize()
+}
+
+watch(statusChartEl, () => { if (statusChartEl.value) drawStatus() })
+
 onMounted(async () => {
   loading.value = true
   await loadServer()
   loading.value = false
   await nextTick()
   await loadChart()
+  await loadStatus()
   // 监听容器尺寸变化，自动 resize 图表
   if (chartEl.value && typeof ResizeObserver !== 'undefined') {
-    resizeObs = new ResizeObserver(() => chart?.resize())
+    resizeObs = new ResizeObserver(() => {
+      chart?.resize()
+      statusChart?.resize()
+    })
     resizeObs.observe(chartEl.value)
   }
 })
 onUnmounted(() => {
   resizeObs?.disconnect()
   chart?.dispose()
+  statusChart?.dispose()
 })
 </script>
 
@@ -217,6 +450,10 @@ onUnmounted(() => {
 .m-sub { font-size: 11px; color: var(--text-3); }
 
 .chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.status-title { font-size: 14px; font-weight: 700; }
+.status-note { margin: 0 0 12px; font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.gap-list { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-2); }
+.gap-list li { margin: 4px 0; }
 .big-chart { height: 380px; }
 @media (max-width: 768px) { .big-chart { height: 280px; } }
 </style>
