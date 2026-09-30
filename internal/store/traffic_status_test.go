@@ -171,7 +171,7 @@ func TestAggregateTrafficStatusNoFakePoints(t *testing.T) {
 	if silent.SampleCount != 0 || len(silent.Points) != 0 {
 		t.Fatalf("silence drew points: %+v", silent)
 	}
-	if len(silent.Gaps) != 1 || silent.Gaps[0].From != 100 || silent.Gaps[0].To != 500 {
+	if len(silent.Gaps) != 1 || silent.Gaps[0].From != 50 || silent.Gaps[0].To != 500 || silent.Gaps[0].Seconds != 450 {
 		t.Fatalf("silence gap = %+v", silent.Gaps)
 	}
 

@@ -176,20 +176,13 @@ func AggregateTrafficStatus(samples []TrafficStatusSample, from, to, bucketSec, 
 		if end <= start || end-start <= gapAfter {
 			return
 		}
-		// Keep the part that overlaps the asked window. Seconds stays the
-		// full silence so a gap that began just before `from` is not reported
-		// as shorter than it was.
-		full := end - start
-		if start < from {
-			start = from
-		}
-		if end > to {
-			end = to
-		}
-		if end <= start {
+		// Keep the real silent interval, including a start just before the
+		// window, so the duration matches the timestamps. Drop gaps that do
+		// not overlap the asked window at all.
+		if end <= from || start >= to {
 			return
 		}
-		out.Gaps = append(out.Gaps, TrafficStatusGap{From: start, To: end, Seconds: full})
+		out.Gaps = append(out.Gaps, TrafficStatusGap{From: start, To: end, Seconds: end - start})
 	}
 
 	if len(inRange) == 0 {
