@@ -406,13 +406,27 @@ function drawStatus() {
 
 watch(statusChartEl, () => { if (statusChartEl.value) drawStatus() })
 
+function applyStatusQuery() {
+  const from = Number(route.query.from)
+  const to = Number(route.query.to)
+  if (from > 1e9 && to > from) {
+    statusPreset.value = 'custom'
+    statusCustom.value = [from * 1000, to * 1000]
+  }
+}
+
 onMounted(async () => {
+  applyStatusQuery()
   loading.value = true
   await loadServer()
   loading.value = false
   await nextTick()
   await loadChart()
   await loadStatus()
+  if (route.hash === '#traffic-status') {
+    await nextTick()
+    document.getElementById('traffic-status')?.scrollIntoView({ block: 'start' })
+  }
   // 监听容器尺寸变化，自动 resize 图表
   if (chartEl.value && typeof ResizeObserver !== 'undefined') {
     resizeObs = new ResizeObserver(() => {
