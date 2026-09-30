@@ -664,7 +664,10 @@ function removePlan(p: any) {
   const isPool = p.kind === 'pool'
   const queued = p.status === 'queued'
   const quota = fmtBytes(p.traffic_limit)
-  dialog.warning({
+  // 这个确认框叠在套餐面板上。naive-ui 要等 onPositiveClick 的 Promise 结束才关，
+  // 拒绝或 return false 则保持打开。删除和整表刷新以前塞在同一个 try 里：成功提示
+  // 已经出来了，弹窗还要等刷新结束；删除失败又被 catch 吞掉，弹窗反而会关掉。
+  const d = dialog.warning({
     title: isPool ? '确认清空流量包' : queued ? '确认移除未生效套餐' : '确认移除套餐',
     content: isPool
       ? `清空「${u.username}」的流量包（通用流量）余额？该余额立即失效，已用记录一并移除。`
@@ -678,14 +681,27 @@ function removePlan(p: any) {
     positiveText: isPool ? '清空' : '移除',
     negativeText: '取消',
     onPositiveClick: async () => {
+      if (removingId.value != null) return false
+      d.loading = true
       removingId.value = p.id
       try {
         await apiDelete(`/api/admin/users/${u.id}/plans/${p.id}`)
-        message.success(isPool ? '流量包已清空' : '套餐已移除')
+      } catch (e: any) {
+        message.error(e?.message || (isPool ? '清空失败' : '移除失败'))
+        d.loading = false
+        return false
+      } finally {
+        removingId.value = null
+      }
+      message.success(isPool ? '流量包已清空' : '套餐已移除')
+      // 先关掉确认框，再刷新。刷新失败不能把已经成功的移除重新关进弹窗里。
+      d.destroy()
+      try {
         await Promise.all([loadPlans(u.id), load()])
         syncPlansUser()
-      } catch (e: any) { message.error(e.message) }
-      finally { removingId.value = null }
+      } catch (e: any) {
+        message.error(e?.message || '列表刷新失败')
+      }
     },
   })
 }
