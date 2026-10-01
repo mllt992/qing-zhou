@@ -36,6 +36,7 @@ const router = createRouter({
         { path: 'admin/monitor', name: 'admin-monitor', component: () => import('@/views/AdminMonitor.vue'), meta: { requiresAdmin: true } },
         { path: 'admin/monitor/:id', name: 'admin-monitor-detail', component: () => import('@/views/AdminMonitorDetail.vue'), meta: { requiresAdmin: true } },
         { path: 'admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettings.vue'), meta: { requiresAdmin: true } },
+        { path: 'admin/point-codes', name: 'admin-point-codes', component: () => import('@/views/AdminPointCodes.vue'), meta: { requiresAdmin: true } },
         { path: 'admin/reg-codes', name: 'admin-regcodes', component: () => import('@/views/AdminRegCodes.vue'), meta: { requiresAdmin: true } },
         { path: 'admin/api-tokens', name: 'admin-api-tokens', component: () => import('@/views/AdminAPITokens.vue'), meta: { requiresAdmin: true } },
         { path: 'admin/announcements', name: 'admin-announcements', component: () => import('@/views/AdminAnnouncements.vue'), meta: { requiresAdmin: true } },

@@ -3,6 +3,8 @@
     <h2 class="page-title">积分明细</h2>
     <p class="page-sub">收支一目了然，实时掌握积分动向</p>
 
+    <PointRedeem @redeemed="reloadPoints" />
+
     <!-- ============ KPI 总览 ============ -->
     <div class="kpi-row">
       <div class="kpi-card">
@@ -93,6 +95,7 @@
 </template>
 
 <script setup lang="ts">
+import PointRedeem from '@/components/PointRedeem.vue'
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { NCard, NSpin, NEmpty, NButton, NRadioGroup, NRadioButton, NSelect, NInput } from 'naive-ui'
@@ -113,7 +116,7 @@ function resetFilters() { typeFilter.value = 'all'; typeSel.value = null; kw.val
 
 const typeLabel: Record<string, string> = {
   admin_recharge: '管理员充值', purchase: '购买消费', signup_bonus: '注册赠送',
-  refund: '退款', adjust: '调整', admin_grant: '管理员赠送',
+  redeem: '兑换码到账', refund: '退款', adjust: '调整', admin_grant: '管理员赠送',
 }
 
 // 每笔记录附带本地化类型标签，方便按类型筛选
@@ -279,7 +282,8 @@ function draw() {
 
 function onResize() { pie?.resize(); bar?.resize() }
 
-onMounted(async () => {
+async function reloadPoints() {
+  balance.value = auth.user?.points || 0
   loading.value = true
   try {
     const data = await apiGet<any>('/api/user/points')
@@ -291,6 +295,9 @@ onMounted(async () => {
   computeRecent()
   await nextTick()
   draw()
+}
+onMounted(async () => {
+  await reloadPoints()
   window.addEventListener('resize', onResize)
 })
 

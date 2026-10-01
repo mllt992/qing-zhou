@@ -47,7 +47,9 @@ type API struct {
 	// to seize the account permanently — the change kicks every other session,
 	// including the real owner's. Unthrottled it was an online brute force with
 	// no cost and no trace. See handleChangePassword.
-	pwRL *rateLimiter
+	pwRL       *rateLimiter
+	redeemRL   *rateLimiter
+	redeemIPRL *rateLimiter
 
 	sbctl        *sbctl.Controller // native sing-box orchestrator; nil if not enabled
 	updater      *updater.Manager  // GitHub-release self-updater
@@ -154,6 +156,8 @@ func New(st *store.Store, secret []byte, mail *mailer.Mailer) *API {
 		authRL:         newRateLimiter(20, time.Minute),   // 20 auth attempts / IP / min
 		resendRL:       newRateLimiter(3, 10*time.Minute), // 3 verify resends / user / 10min
 		probeRL:        newRateLimiter(60, time.Minute),   // 60 probe reports / IP / min
+		redeemRL:       newRateLimiter(10, time.Minute),
+		redeemIPRL:     newRateLimiter(100, 10*time.Minute),
 		pwRL:           newRateLimiter(5, 10*time.Minute), // 5 修改密码 attempts / user / 10min
 		// Each address swap revokes the previous one, so a loop of them — a stuck
 		// retry, a double-click, a misbehaving script — leaves the user with a
@@ -283,6 +287,7 @@ func (a *API) Router() http.Handler {
 		pr.Post("/api/user/password", a.handleChangePassword)
 		pr.Post("/api/user/resend-verify", a.handleResendVerify)
 		pr.Post("/api/user/email", a.handleBindEmail)
+		pr.Post("/api/user/points/redeem", a.handleRedeemPoints)
 		pr.Get("/api/user/notifications/email", a.handleEmailNotifyPrefs)
 		pr.Put("/api/user/notifications/email", a.handleEmailNotifyPrefs)
 		pr.Get("/api/user/telegram", a.handleUserTelegram)
@@ -495,6 +500,9 @@ func (a *API) Router() http.Handler {
 		ar.Delete("/api/admin/upstreams/{provider}", a.handleAdminDeleteUpstream)
 		ar.Post("/api/admin/upstreams/{provider}/refresh", a.handleAdminRefreshUpstream)
 
+		ar.Get("/api/admin/point-codes", a.handleListPointCodes)
+		ar.Post("/api/admin/point-codes/generate", a.handleGeneratePointCodes)
+		ar.Post("/api/admin/point-codes/disable", a.handleDisablePointCodes)
 		ar.Get("/api/admin/reg-codes", a.handleAdminListRegCodes)
 		ar.Post("/api/admin/reg-codes/generate", a.handleAdminGenerateRegCodes)
 		ar.Put("/api/admin/reg-codes/{id}", a.handleAdminUpdateRegCode)

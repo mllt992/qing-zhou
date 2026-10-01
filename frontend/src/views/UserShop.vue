@@ -7,6 +7,8 @@
       </div>
       <div class="balance-pill"><small>可用积分</small><b>{{ auth.user?.points || 0 }}</b><span>{{ yuan(auth.user?.points || 0) }}</span></div>
     </div>
+    <n-button size="small" @click="showRedeem = !showRedeem">使用兑换码获取积分</n-button>
+    <PointRedeem v-if="showRedeem" />
     <div class="shop-summary">
       <span><b>{{ packages.length }}</b> 件在售商品</span>
       <span><b>{{ planCount }}</b> 个订阅计划</span>
@@ -63,6 +65,7 @@
             @click="handleBuy(pkg)">
             {{ pkg.stock === 0 ? '已售罄' : canAfford(pkg) ? '购买' : '积分不足' }}
           </n-button>
+          <n-button v-if="!canAfford(pkg)" block quaternary @click="showRedeem = true">积分不足？使用兑换码</n-button>
         </div>
       </div>
     </div>
@@ -80,12 +83,14 @@
   </div>
 </template>
 <script setup lang="ts">
+import PointRedeem from '@/components/PointRedeem.vue'
 import { ref, computed, onMounted } from 'vue'
 import { NButton, NEmpty, NSpin, useMessage, useDialog } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { apiList, apiPost } from '@/api'
 import { fmtTotal, yuan } from '@/utils/format'
 const auth = useAuthStore()
+const showRedeem = ref(false)
 const message = useMessage()
 const dialog = useDialog()
 const packages = ref<any[]>([])
