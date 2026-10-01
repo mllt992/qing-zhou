@@ -46,6 +46,7 @@ func TestMigrate_UpgradesDBMissingAlterAddedColumns(t *testing.T) {
 		}
 	}
 
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("upgrading a DB that predates the column failed: %v", err)
 	}
@@ -88,6 +89,7 @@ func TestMigrate_AddsAndBackfillsQueueKeys(t *testing.T) {
 			t.Fatalf("rewind queue schema with %q: %v", stmt, err)
 		}
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("upgrade queue schema: %v", err)
 	}
@@ -113,6 +115,7 @@ func TestMigrate_AddsNodeGroupAIFlagWithoutChangingExistingGroups(t *testing.T) 
 	if _, err := st.db.Exec(`ALTER TABLE node_groups DROP COLUMN is_ai`); err != nil {
 		t.Fatalf("rewind node_groups schema: %v", err)
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("migrate old node_groups: %v", err)
 	}
@@ -162,6 +165,7 @@ func TestMigrate_EmailGateExemptionOnlyWhenColumnAdded(t *testing.T) {
 	if _, err := st.db.Exec(`ALTER TABLE users DROP COLUMN email_gate_exempt`); err != nil {
 		t.Fatal(err)
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +224,7 @@ func TestMigrate_ZeroConfigPreservesOnlyHistoricalPaidPackages(t *testing.T) {
 	if _, err := st.db.Exec(`DELETE FROM settings WHERE key='migrated_zero_config_v1'`); err != nil {
 		t.Fatal(err)
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -278,5 +283,15 @@ func TestMigrate_SchemaDeclaresNoIndexes(t *testing.T) {
 	}
 	if !schemaIndexStmt.MatchString(indexes) {
 		t.Error("`indexes` holds no index DDL — did it get emptied?")
+	}
+}
+
+// A fixture rewound to a historical shape must also predate version adoption.
+// Keeping the marker would model corruption after a successful migration and
+// would incorrectly expect a once-only migration to rerun on every startup.
+func rewindVersionedBaseline(t *testing.T, st *Store) {
+	t.Helper()
+	if _, err := st.db.Exec(`DELETE FROM schema_migrations WHERE version=?`, legacyBaselineVersion); err != nil {
+		t.Fatal(err)
 	}
 }

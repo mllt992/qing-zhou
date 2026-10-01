@@ -50,6 +50,7 @@ func TestMigrateAddsSubscriptionFetchColumnsToOldUsersTable(t *testing.T) {
 			t.Fatalf("drop %s: %v", column, err)
 		}
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}

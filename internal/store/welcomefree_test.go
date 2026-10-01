@@ -155,6 +155,7 @@ func TestFiniteTrafficMigration_RemovesZeroWelcomeAndRepairsAggregate(t *testing
 	if _, err := st.db.Exec(`DELETE FROM schema_migrations WHERE version=?`, finiteTrafficAggregateMigration); err != nil {
 		t.Fatal(err)
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}

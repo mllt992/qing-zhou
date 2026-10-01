@@ -488,17 +488,16 @@ const finiteTrafficAggregateMigration = "finite-traffic-aggregate-v1"
 // synthetic zero-byte welcome row, retain commercial/admin rows for audit and
 // manual repair, then rebuild every legacy users.* summary with finite semantics.
 func (s *Store) migrateFiniteTrafficAggregates() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.migrationTransaction(s.migrateFiniteTrafficAggregatesTx)
+}
+
+func (s *Store) migrateFiniteTrafficAggregatesTx(tx *sql.Tx) error {
 	var applied int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version=?`, finiteTrafficAggregateMigration).Scan(&applied); err != nil {
 		return err
 	}
 	if applied > 0 {
-		return tx.Commit()
+		return nil
 	}
 	if _, err := tx.Exec(`DELETE FROM user_plans WHERE kind='plan' AND package_id=? AND traffic_limit<=0`, WelcomePackageID); err != nil {
 		return err
@@ -531,7 +530,7 @@ func (s *Store) migrateFiniteTrafficAggregates() error {
 	if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES(?,?)`, finiteTrafficAggregateMigration, now); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // KindFree is the bucket holding a user's free-group (unmetered) allowance.
@@ -572,8 +571,12 @@ func (s *Store) HasLivePaidPlan(userID int64) (bool, error) {
 // yet. Idempotent, so it doubles as the backfill for accounts provisioned before
 // the free bucket existed.
 func (s *Store) EnsureFreeBucket(userID int64, username string) error {
+	return s.ensureFreeBucketWith(s.db, userID, username)
+}
+
+func (s *Store) ensureFreeBucketWith(db txLike, userID int64, username string) error {
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM user_plans WHERE user_id=? AND kind=? ORDER BY id LIMIT 1`,
+	err := db.QueryRow(`SELECT id FROM user_plans WHERE user_id=? AND kind=? ORDER BY id LIMIT 1`,
 		userID, KindFree).Scan(&id)
 	if err == nil {
 		return nil
@@ -581,11 +584,11 @@ func (s *Store) EnsureFreeBucket(userID int64, username string) error {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, _, err = ensureUserProtocolCredential(s.db, userID, username, time.Now().Unix())
+	_, _, err = ensureUserProtocolCredential(db, userID, username, time.Now().Unix())
 	if err != nil {
 		return err
 	}
-	_, err = insertBucket(s.db, &Bucket{
+	_, err = insertBucket(db, &Bucket{
 		UserID: userID, Kind: KindFree, Name: "免费流量",
 		ClientName: fmt.Sprintf("qz_%s_free", username),
 	})
@@ -1478,11 +1481,15 @@ func applyBucketUsage(tx txLike, bucketID, userID, packageID int64, kind string,
 // Queued份 are never a source: their credentials were minted but never rendered
 // into a config or a link, so nobody is holding them.
 //
-// Idempotent: a line that already has a row is left untouched, so this can run on
-// every boot and re-running it can never rotate a live credential.
+// Idempotent: a line that already has a row is left untouched, so legacy
+// adoption cannot rotate a live credential.
 func (s *Store) backfillPlanIdentities() error {
+	return s.migrationTransaction(s.backfillPlanIdentitiesTx)
+}
+
+func (s *Store) backfillPlanIdentitiesTx(tx *sql.Tx) error {
 	now := time.Now().Unix()
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO plan_identities
+	_, err := tx.Exec(`INSERT OR IGNORE INTO plan_identities
 		(user_id, package_id, `+planIdentityCols+`, created_at, updated_at)
 		SELECT p.user_id, p.package_id, p.client_name, p.client_uuid, p.client_secret,
 		       p.proxy_username, p.proxy_password, p.proxy_expires_at, ?, ?
@@ -1518,7 +1525,11 @@ func (s *Store) backfillPlanIdentities() error {
 // never do. In a healthy chain the two conditions coincide; where they do not,
 // this errs toward leaving the份 alone.
 func (s *Store) backfillRetiredBuckets() error {
-	_, err := s.db.Exec(`UPDATE user_plans SET status=? WHERE id IN (
+	return s.migrationTransaction(s.backfillRetiredBucketsTx)
+}
+
+func (s *Store) backfillRetiredBucketsTx(tx *sql.Tx) error {
+	_, err := tx.Exec(`UPDATE user_plans SET status=? WHERE id IN (
 		SELECT b.id FROM user_plans b
 		WHERE b.kind='plan' AND b.package_id>0 AND b.status='active' AND b.duration_days>0
 		  AND NOT `+usableExpr("b")+`
@@ -1537,6 +1548,10 @@ func (s *Store) backfillRetiredBuckets() error {
 // each (user, package) has a single row and the query matches nothing. The
 // users.* aggregate is unchanged because the survivor holds the summed totals.
 func (s *Store) mergeDuplicatePlanBuckets() error {
+	return s.migrationTransaction(s.mergeDuplicatePlanBucketsTx)
+}
+
+func (s *Store) mergeDuplicatePlanBucketsTx(tx *sql.Tx) error {
 	// Only collapse legacy 'active' duplicates. Never touch 'queued' buckets —
 	// merging them would re-create the very stacking the queue model removes.
 	// duration_days is the discriminator: a queue-era bucket always carries the
@@ -1546,7 +1561,7 @@ func (s *Store) mergeDuplicatePlanBuckets() error {
 	// starts eating live queues — a user holding six monthly份 has several
 	// same-package buckets by design, and merging them destroys the per-month
 	// accounting and deletes whichever份 is currently in service.
-	rows, err := s.db.Query(`SELECT user_id, package_id, MIN(id),
+	rows, err := tx.Query(`SELECT user_id, package_id, MIN(id),
 		SUM(traffic_limit), SUM(used_up), SUM(used_down), MAX(expiry_at)
 		FROM user_plans WHERE kind='plan' AND package_id>0 AND status='active' AND duration_days=0
 		GROUP BY user_id, package_id HAVING COUNT(*)>1`)
@@ -1571,13 +1586,13 @@ func (s *Store) mergeDuplicatePlanBuckets() error {
 	}
 	now := time.Now().Unix()
 	for _, d := range dups {
-		if _, err := s.db.Exec(`UPDATE user_plans SET traffic_limit=?, used_up=?, used_down=?, expiry_at=?, updated_at=? WHERE id=?`,
+		if _, err := tx.Exec(`UPDATE user_plans SET traffic_limit=?, used_up=?, used_down=?, expiry_at=?, updated_at=? WHERE id=?`,
 			d.limit, d.up, d.down, d.expiry, now, d.keepID); err != nil {
 			return err
 		}
 		// Same scoping as the SELECT above — the delete must not reach past the
 		// legacy rows the merge was computed from.
-		if _, err := s.db.Exec(`DELETE FROM user_plans WHERE kind='plan' AND user_id=? AND package_id=? AND id<>?
+		if _, err := tx.Exec(`DELETE FROM user_plans WHERE kind='plan' AND user_id=? AND package_id=? AND id<>?
 			AND status='active' AND duration_days=0`,
 			d.userID, d.packageID, d.keepID); err != nil {
 			return err
@@ -1587,17 +1602,34 @@ func (s *Store) mergeDuplicatePlanBuckets() error {
 }
 
 // backfillUserPlans seeds the bucket model from the legacy single-plan columns
-// on first run (idempotent: skipped once any bucket exists). Existing clients
+// on first run (idempotent: skips each account that already has buckets). Existing clients
 // keep working because a plan bucket reuses the user's current identity; the
 // pool starts empty. Protocol credentials now live on users; the legacy bucket
 // credential columns are deliberately left empty on new writes.
 func (s *Store) backfillUserPlans() error {
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_plans`).Scan(&n); err != nil || n > 0 {
+	return s.migrationTransaction(s.backfillUserPlansTx)
+}
+
+func (s *Store) backfillUserPlansTx(tx *sql.Tx) error {
+	// This marker was recorded only after the old bucket-model transition.
+	// Once present, an account with no buckets may have been deliberately
+	// deprovisioned. Adoption must not resurrect it from stale legacy columns.
+	var transitioned int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version=?`, stableProtocolCredentialMigration).Scan(&transitioned); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT id, username, client_name, client_uuid, client_secret,
-		current_plan_id, traffic_limit, used_up, used_down, expiry_at FROM users`)
+	if transitioned > 0 {
+		return nil
+	}
+	// Older non-atomic migrations may have seeded only the first few accounts.
+	// A global COUNT would permanently strand the rest. Resume per account, but
+	// only for rows with evidence of historical provisioning/entitlement. A new
+	// unprovisioned signup must never receive a protocol identity on adoption.
+	rows, err := tx.Query(`SELECT id, username, client_name, client_uuid, client_secret,
+		current_plan_id, traffic_limit, used_up, used_down, expiry_at FROM users u
+		WHERE NOT EXISTS (SELECT 1 FROM user_plans p WHERE p.user_id=u.id)
+		  AND (client_id IS NOT NULL OR COALESCE(client_uuid,'')<>''
+		       OR current_plan_id>0 OR traffic_limit>0 OR used_up>0 OR used_down>0)`)
 	if err != nil {
 		return err
 	}
@@ -1631,17 +1663,17 @@ func (s *Store) backfillUserPlans() error {
 		if u.planID.Valid && u.planID.Int64 > 0 {
 			// The migrated plan keeps its stats name; the pool is new and empty.
 			name := "套餐"
-			if p, _ := s.GetPackage(u.planID.Int64); p != nil {
-				name = p.Name
+			if err := tx.QueryRow(`SELECT name FROM packages WHERE id=?`, u.planID.Int64).Scan(&name); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
 			}
-			if _, err := insertBucket(s.db, &Bucket{
+			if _, err := insertBucket(tx, &Bucket{
 				UserID: u.id, Kind: "plan", PackageID: u.planID.Int64, Name: name,
 				ClientName:   primaryName,
 				TrafficLimit: u.limit, UsedUp: u.up, UsedDown: u.down, ExpiryAt: u.expiry,
 			}); err != nil {
 				return err
 			}
-			if _, err := insertBucket(s.db, &Bucket{
+			if _, err := insertBucket(tx, &Bucket{
 				UserID: u.id, Kind: "pool", Name: "通用流量",
 				ClientName: primaryName + "_pool",
 			}); err != nil {
@@ -1649,7 +1681,7 @@ func (s *Store) backfillUserPlans() error {
 			}
 		} else {
 			// No plan: the pool carries the legacy balance and stats name.
-			if _, err := insertBucket(s.db, &Bucket{
+			if _, err := insertBucket(tx, &Bucket{
 				UserID: u.id, Kind: "pool", Name: "通用流量",
 				ClientName:   primaryName,
 				TrafficLimit: u.limit, UsedUp: u.up, UsedDown: u.down,

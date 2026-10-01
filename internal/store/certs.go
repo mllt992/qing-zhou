@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -104,12 +105,16 @@ func (s *Store) GetCert(id int64) (*Cert, error) {
 // SaveCert inserts (id==0) or updates a certificate. cert_pem/key_pem are
 // encrypted; not_after is derived from cert_pem so the caller never sets it.
 func (s *Store) SaveCert(c *Cert) (int64, error) {
+	return s.saveCertWith(s.db, c)
+}
+
+func (s *Store) saveCertWith(db txLike, c *Cert) (int64, error) {
 	now := time.Now().Unix()
 	c.NotAfter = certNotAfter(c.CertPEM)
 	encCert := s.encrypt(c.CertPEM)
 	encKey := s.encrypt(c.KeyPEM)
 	if c.ID == 0 {
-		res, err := s.db.Exec(`INSERT INTO certificates
+		res, err := db.Exec(`INSERT INTO certificates
 			(name, domain, source, acme_method, acme_profile, cert_pem, key_pem, not_after,
 			 actual_key_type, actual_chain, last_verify_at, verify_error,
 			 auto_renew, last_renew_at, last_error, created_at, updated_at)
@@ -122,7 +127,7 @@ func (s *Store) SaveCert(c *Cert) (int64, error) {
 		}
 		return res.LastInsertId()
 	}
-	_, err := s.db.Exec(`UPDATE certificates SET
+	_, err := db.Exec(`UPDATE certificates SET
 		name=?, domain=?, source=?, acme_method=?, acme_profile=?, cert_pem=?, key_pem=?, not_after=?,
 		actual_key_type=?, actual_chain=?, last_verify_at=?, verify_error=?,
 		auto_renew=?, last_renew_at=?, last_error=?, updated_at=?
@@ -188,13 +193,23 @@ func (s *Store) CertServerIDs(certID int64) ([]int64, error) {
 // certificates rows and repoints them via cert_id. Idempotent: a profile is
 // only migrated while cert_id is still 0, so a second run is a no-op.
 func (s *Store) backfillCerts() error {
-	list, err := s.ListSbTls()
+	return s.migrationTransaction(s.backfillCertsTx)
+}
+
+func (s *Store) backfillCertsTx(tx *sql.Tx) error {
+	list, err := s.listSbTlsWith(tx)
 	if err != nil {
 		return err
 	}
 	migrated := 0
 	for _, t := range list {
-		if t.Mode != "tls" || t.CertID != 0 || t.DecryptFailed || t.ServerJSON == "" {
+		if t.Mode != "tls" || t.CertID != 0 {
+			continue
+		}
+		if t.DecryptFailed || strings.HasPrefix(t.ServerJSON, encPrefix) {
+			return fmt.Errorf("TLS profile %d: cannot decrypt legacy certificate; check QZ_SECRET_KEY", t.ID)
+		}
+		if t.ServerJSON == "" {
 			continue
 		}
 		var sj map[string]interface{}
@@ -211,7 +226,7 @@ func (s *Store) backfillCerts() error {
 		if name == "" {
 			name = "迁移证书-" + domain
 		}
-		cid, err := s.SaveCert(&Cert{
+		cid, err := s.saveCertWith(tx, &Cert{
 			Name:      name,
 			Domain:    domain,
 			Source:    "paste", // provenance unknown at migration time
@@ -225,7 +240,7 @@ func (s *Store) backfillCerts() error {
 		// Repoint the profile. Keep the inline PEM in server_json untouched so a
 		// rollback still has a working cert; the builder prefers cert_id.
 		t.CertID = cid
-		if _, err := s.SaveSbTls(t); err != nil {
+		if _, err := tx.Exec(`UPDATE sb_tls SET cert_id=?, updated_at=? WHERE id=?`, cid, time.Now().Unix(), t.ID); err != nil {
 			return err
 		}
 		migrated++

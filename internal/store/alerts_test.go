@@ -204,6 +204,7 @@ func TestMigrateCollapsesLegacyAlertBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}

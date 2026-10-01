@@ -24,9 +24,10 @@ var elfMagic = []byte{0x7f, 'E', 'L', 'F'}
 
 // backupMeta describes the kept binary. Written next to it at backup time.
 type backupMeta struct {
-	Version string `json:"version"`
-	SHA256  string `json:"sha256"`
-	Size    int64  `json:"size"`
+	Version    string `json:"version"`
+	SnapshotID string `json:"snapshot_id,omitempty"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
 }
 
 func backupMetaPath(exePath string) string { return backupPath(exePath) + ".meta" }
@@ -46,24 +47,71 @@ func fileSHA256(path string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
-// writeBackupMeta records the version and digest of the binary now at the
-// backup path. Best-effort: a missing sidecar degrades the rollback to the
-// weaker size/ELF checks, which must never be a reason to fail an update.
+// writeBackupMeta remains a best-effort compatibility helper for legacy callers.
 func writeBackupMeta(exePath, ver string) {
+	if err := writeBackupMetaWithSnapshot(exePath, ver, ""); err != nil {
+		clearBackupMeta(exePath)
+	}
+}
+
+// stageBackupMeta writes and syncs metadata for a staged binary before either
+// existing rollback file is replaced. The caller must remove the returned file.
+func stageBackupMeta(exePath, binaryPath, ver, snapshotID string) (string, error) {
+	if st, err := os.Lstat(backupMetaPath(exePath)); err == nil {
+		if !st.Mode().IsRegular() {
+			return "", errors.New("回滚元数据路径不是普通文件")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
 	ver = strings.TrimSpace(ver)
 	if ver == "" {
 		ver = "unknown"
 	}
-	sum, size, err := fileSHA256(backupPath(exePath))
+	sum, size, err := fileSHA256(binaryPath)
 	if err != nil {
-		_ = os.Remove(backupMetaPath(exePath))
-		return
+		return "", err
 	}
-	b, err := json.Marshal(backupMeta{Version: ver, SHA256: sum, Size: size})
+	body, err := json.Marshal(backupMeta{Version: ver, SHA256: sum, Size: size, SnapshotID: snapshotID})
 	if err != nil {
-		return
+		return "", err
 	}
-	_ = os.WriteFile(backupMetaPath(exePath), b, 0o600)
+	f, err := os.CreateTemp(filepath.Dir(exePath), ".qz-meta-*")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	complete := false
+	defer func() {
+		if !complete {
+			f.Close()
+			os.Remove(path)
+		}
+	}()
+	if _, err := f.Write(body); err != nil {
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	complete = true
+	return path, nil
+}
+
+// New updates require this durable link before replacing the live executable.
+func writeBackupMetaWithSnapshot(exePath, ver, snapshotID string) error {
+	path, err := stageBackupMeta(exePath, backupPath(exePath), ver, snapshotID)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	if err := os.Rename(path, backupMetaPath(exePath)); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(exePath))
 }
 
 // readBackupMeta returns the sidecar, or nil when there is none (an install

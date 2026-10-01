@@ -188,6 +188,7 @@ func New(st *store.Store, secret []byte, mail *mailer.Mailer) *API {
 			v, _ := st.GetSetting("update_github_token")
 			return v
 		},
+		st,
 	)
 	return a
 }
@@ -337,6 +338,8 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/update/check", a.handleUpdateCheck)
 		ar.Get("/api/admin/update/status", a.handleUpdateStatus)
 		ar.Get("/api/admin/update/releases", a.handleUpdateReleases)
+		ar.Get("/api/admin/update/snapshots", a.handleUpdateSnapshots)
+		ar.Get("/api/admin/update/snapshots/{id}/download", a.handleUpdateSnapshotDownload)
 		ar.Get("/api/admin/update/rollback", a.handleUpdateRollbackState)
 		ar.Post("/api/admin/update/rollback", a.handleUpdateRollback)
 		ar.Post("/api/admin/update/apply", a.handleUpdateApply)

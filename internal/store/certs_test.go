@@ -144,6 +144,7 @@ func TestMigrateCertificatePolicyPreservesLegacyRows(t *testing.T) {
 			t.Fatalf("drop %s: %v", col, err)
 		}
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}

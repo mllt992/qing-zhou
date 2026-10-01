@@ -141,11 +141,10 @@ const stableProtocolCredentialMigration = "20260826_stable_protocol_credentials_
 // has no provisioned users, so it records the migration without creating any
 // compatibility rows.
 func (s *Store) migrateStableProtocolCredentials() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.migrationTransaction(s.migrateStableProtocolCredentialsTx)
+}
+
+func (s *Store) migrateStableProtocolCredentialsTx(tx *sql.Tx) error {
 
 	var applied int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version=?`, stableProtocolCredentialMigration).Scan(&applied); err != nil {
@@ -157,7 +156,7 @@ func (s *Store) migrateStableProtocolCredentials() error {
 		if _, err := tx.Exec(`DELETE FROM user_credential_aliases WHERE valid_until<=?`, time.Now().Unix()); err != nil {
 			return err
 		}
-		return tx.Commit()
+		return nil
 	}
 
 	now := time.Now().Unix()
@@ -247,5 +246,5 @@ func (s *Store) migrateStableProtocolCredentials() error {
 		stableProtocolCredentialMigration, now); err != nil {
 		return fmt.Errorf("record stable credential migration: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }

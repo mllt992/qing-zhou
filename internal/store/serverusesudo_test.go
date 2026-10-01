@@ -25,6 +25,7 @@ func TestMigrateServerUseSudo_BackfillsOnceOnly(t *testing.T) {
 		}
 	}
 
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("upgrading a DB that predates use_sudo: %v", err)
 	}
@@ -70,6 +71,7 @@ func TestMigrateServer_SudoAndKeyPathColumnsSurviveUpgrade(t *testing.T) {
 			t.Fatalf("rewinding %s: %v", col, err)
 		}
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("upgrading: %v", err)
 	}

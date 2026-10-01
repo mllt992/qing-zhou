@@ -75,7 +75,11 @@ type SbInbound struct {
 // ---- sb_tls ----
 
 func (s *Store) ListSbTls() ([]*SbTls, error) {
-	rows, err := s.db.Query(`SELECT id, server_id, name, mode, server_json, client_json, cert_id, sort_order, created_at, updated_at
+	return s.listSbTlsWith(s.db)
+}
+
+func (s *Store) listSbTlsWith(db txLike) ([]*SbTls, error) {
+	rows, err := db.Query(`SELECT id, server_id, name, mode, server_json, client_json, cert_id, sort_order, created_at, updated_at
 		FROM sb_tls ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, err

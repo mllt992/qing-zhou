@@ -26,6 +26,7 @@ func TestMigrateAddsNotifyOpsToAnOlderDB(t *testing.T) {
 		t.Fatalf("could not reproduce the pre-upgrade schema: %v", err)
 	}
 
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("migrating a pre-upgrade database failed: %v", err)
 	}

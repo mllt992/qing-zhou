@@ -23,8 +23,9 @@ import (
 // everything in the WAL, and produces a single self-contained file with no
 // sidecars. Readers and writers keep working while it runs.
 //
-// dst must not already exist — SQLite refuses to overwrite, and we surface that
-// rather than deleting whatever is in the way.
+// dst must not already exist. The completed, fsynced 0600 snapshot is published
+// atomically without replacing any existing path, even under concurrent calls.
+// A failed snapshot leaves no partial destination or staging directory.
 func (s *Store) BackupTo(dst string) error {
 	if strings.TrimSpace(dst) == "" {
 		return fmt.Errorf("backup destination is empty")
@@ -33,18 +34,61 @@ func (s *Store) BackupTo(dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(abs); err == nil {
+	if _, err := os.Lstat(abs); err == nil {
 		return fmt.Errorf("backup destination already exists: %s", abs)
-	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	// The path is a bound parameter, not string-concatenated, so a directory
-	// name containing a quote cannot terminate the statement.
-	if _, err := s.db.Exec(`VACUUM INTO ?`, abs); err != nil {
-		// A half-written file left behind by a failed vacuum would be mistaken
-		// for a usable backup.
-		_ = os.Remove(abs)
+	parent := filepath.Dir(abs)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	// SQLite creates the file itself. Keep it inside a private same-filesystem
+	// directory until it has its final mode and has been synced, so even a
+	// permissive process umask never exposes an unfinished database.
+	dir, err := os.MkdirTemp(parent, ".qingzhou-vacuum-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	tmp := filepath.Join(dir, "snapshot.db")
+	// Binding the path also handles directory names containing SQL quotes.
+	if _, err := s.db.Exec(`VACUUM INTO ?`, tmp); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(tmp, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// Link publishes complete bytes atomically AND refuses an existing name.
+	// Rename would clobber another concurrent backup (or a symlink) after the
+	// initial existence check. The staging file is on this same filesystem.
+	if err := os.Link(tmp, abs); err != nil {
+		return err
+	}
+	d, err := os.Open(parent)
+	if err != nil {
+		os.Remove(abs)
+		return err
+	}
+	err = d.Sync()
+	closeErr := d.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(abs)
 		return err
 	}
 	return nil

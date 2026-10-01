@@ -32,6 +32,10 @@ func main() {
 	}
 	defer st.Close()
 
+	// Historical encrypted backfills run before Seed and need the configured key.
+	if key := os.Getenv("QZ_SECRET_KEY"); key != "" {
+		st.SetSecretKey([]byte(key))
+	}
 	if err := st.Migrate(); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}

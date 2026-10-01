@@ -48,12 +48,13 @@ func probeAssetName(arch string) string {
 type Status string
 
 const (
-	StatusIdle        Status = "idle"
-	StatusDownloading Status = "downloading"
-	StatusVerifying   Status = "verifying"
-	StatusInstalling  Status = "installing"
-	StatusRestarting  Status = "restarting"
-	StatusFailed      Status = "failed"
+	StatusIdle         Status = "idle"
+	StatusDownloading  Status = "downloading"
+	StatusVerifying    Status = "verifying"
+	StatusSnapshotting Status = "snapshotting"
+	StatusInstalling   Status = "installing"
+	StatusRestarting   Status = "restarting"
+	StatusFailed       Status = "failed"
 )
 
 // State is the observable progress of the updater, returned by the status API.
@@ -101,23 +102,32 @@ type Manager struct {
 	tokenFn func() string // optional GitHub token to lift the 60/hr anon rate limit
 	client  *http.Client
 
-	mu      sync.Mutex
-	state   State
-	running bool
-	probeMu sync.Mutex
+	mu             sync.Mutex
+	state          State
+	running        bool
+	probeMu        sync.Mutex
+	snapshotMu     sync.Mutex
+	snapshotSource SnapshotSource
 }
 
 // New builds a Manager. repoFn/tokenFn may be nil; sensible defaults are used.
-func New(repoFn, tokenFn func() string) *Manager {
+// Supply a SnapshotSource to permit binary replacement; without one, checks
+// still work but installation and rollback fail closed.
+func New(repoFn, tokenFn func() string, source ...SnapshotSource) *Manager {
 	if repoFn == nil {
 		repoFn = func() string { return DefaultRepo }
 	}
 	if tokenFn == nil {
 		tokenFn = func() string { return "" }
 	}
+	var snapshots SnapshotSource
+	if len(source) > 0 {
+		snapshots = source[0]
+	}
 	return &Manager{
-		repoFn:  repoFn,
-		tokenFn: tokenFn,
+		snapshotSource: snapshots,
+		repoFn:         repoFn,
+		tokenFn:        tokenFn,
 		// No overall client timeout: a release binary is tens of MB and the
 		// download is bounded by the caller's context instead.
 		client: &http.Client{},
@@ -523,43 +533,9 @@ func (m *Manager) run(pinned string) {
 		}
 	}
 
-	m.setState(StatusInstalling, "安装新版本…", 100, target)
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
+	if err := m.installVerifiedBinary(exePath, tmpPath, target); err != nil {
 		_ = os.Remove(tmpPath)
-		m.fail("设置可执行权限失败: " + err.Error())
-		return
-	}
-	// Keep the outgoing binary so a release that cannot start can be rolled
-	// back. This deployment updates only through this feature and has no SSH,
-	// so without a local copy a bad release means the panel is unreachable and
-	// there is nothing left on disk to fall back to.
-	prev := backupPath(exePath)
-	_ = os.Remove(prev)
-	if err := os.Link(exePath, prev); err != nil {
-		// Hard links can fail (e.g. cross-device or overlayfs layouts); copy.
-		//
-		// Via a temp file and a rename, never straight into prev: copyFile writes
-		// incrementally, so a process killed mid-copy — or a full disk — would
-		// leave a truncated binary sitting at the backup path with nothing to say
-		// it is broken. The rollback button would then cheerfully install it, and
-		// on a deployment whose whole premise is "panel only, no SSH" that is
-		// unrecoverable.
-		if cerr := copyFileAtomic(exePath, prev); cerr != nil {
-			_ = os.Remove(tmpPath)
-			m.fail("备份当前版本失败，已取消更新: " + cerr.Error())
-			return
-		}
-	}
-	// Record what the backup is and what it should hash to. A binary on disk can
-	// be asked neither its version (there is no such subcommand) nor whether it
-	// is intact, so without this note the rollback button could only offer
-	// "回滚到上一个版本" and would have no way to detect a damaged backup.
-	writeBackupMeta(exePath, version.Current())
-	// rename() over the running binary is safe on Linux (no ETXTBSY; only
-	// *writing* a busy text file fails — the probe installer relies on the same).
-	if err := os.Rename(tmpPath, exePath); err != nil {
-		_ = os.Remove(tmpPath)
-		m.fail("替换二进制失败: " + err.Error())
+		m.fail(err.Error())
 		return
 	}
 

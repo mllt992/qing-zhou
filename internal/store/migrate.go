@@ -1,13 +1,15 @@
 package store
 
 import (
+	"database/sql"
+	"fmt"
 	"log"
 	"strings"
 	"time"
 )
 
-// schema is applied idempotently on every boot. Tables for later phases
-// (packages, orders, nodes, groups, ...) are added in their own phases.
+// schema is the frozen legacy baseline. Add future schema changes as a new
+// numbered migration in migrations(), never by changing an applied migration.
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
@@ -777,18 +779,17 @@ CREATE INDEX IF NOT EXISTS idx_api_tokens_active ON api_tokens(revoked_at, expir
 // race between them; rollback removes both the column and classifications if the
 // backfill fails.
 func (s *Store) migrateEmailGateExempt() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.migrationTransaction(s.migrateEmailGateExemptTx)
+}
+
+func (s *Store) migrateEmailGateExemptTx(tx *sql.Tx) error {
 
 	var exists int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='email_gate_exempt'`).Scan(&exists); err != nil {
 		return err
 	}
 	if exists > 0 {
-		return tx.Commit()
+		return nil
 	}
 	if _, err := tx.Exec(`ALTER TABLE users ADD COLUMN email_gate_exempt INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
@@ -801,33 +802,31 @@ func (s *Store) migrateEmailGateExempt() error {
 		OR (current_plan_id IS NOT NULL AND current_plan_id>0)`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // migrateServerUseSudo adds servers.use_sudo and, in the same transaction that
 // creates it, turns it on for every row whose SSH user is not root.
 //
-// It cannot live in the best-effort additive list below, for the same reason
-// migrateEmailGateExempt cannot: those statements run on every boot, so the
-// backfill would re-enable sudo on a row an admin had deliberately turned it off
-// for, once per restart, forever.
+// Its historical column-existence guard must survive version adoption, like
+// migrateEmailGateExempt: backfilling an already-present column would re-enable
+// sudo on a row an admin deliberately turned it off for.
 //
 // Backfilling to 1 rather than 0 is safe because a non-root row is already
 // broken today: every deploy on it dies on mkdir /etc/sing-box or on systemctl.
 // Turning sudo on can only move such a row from "fails" to "works".
 func (s *Store) migrateServerUseSudo() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.migrationTransaction(s.migrateServerUseSudoTx)
+}
+
+func (s *Store) migrateServerUseSudoTx(tx *sql.Tx) error {
 
 	var exists int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('servers') WHERE name='use_sudo'`).Scan(&exists); err != nil {
 		return err
 	}
 	if exists > 0 {
-		return tx.Commit()
+		return nil
 	}
 	if _, err := tx.Exec(`ALTER TABLE servers ADD COLUMN use_sudo INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
@@ -835,7 +834,7 @@ func (s *Store) migrateServerUseSudo() error {
 	if _, err := tx.Exec(`UPDATE servers SET use_sudo=1 WHERE ssh_user <> 'root' AND ssh_user <> ''`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // migrateManualNotificationChannels adds email as a second delivery path.
@@ -843,11 +842,20 @@ func (s *Store) migrateServerUseSudo() error {
 // second row per user, so the primary key must include channel. Fresh
 // installs already have the new schema from CREATE TABLE IF NOT EXISTS.
 func (s *Store) migrateManualNotificationChannels() error {
-	tx, err := s.db.Begin()
-	if err != nil {
+	return s.migrationTransaction(s.migrateManualNotificationChannelsTx)
+}
+
+func (s *Store) migrateManualNotificationChannelsTx(tx *sql.Tx) error {
+
+	var hasParentChannel int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('manual_notifications') WHERE name='channel'`).Scan(&hasParentChannel); err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	if hasParentChannel == 0 {
+		if _, err := tx.Exec(`ALTER TABLE manual_notifications ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'`); err != nil {
+			return err
+		}
+	}
 
 	var hasChannel int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('manual_notification_recipients') WHERE name='channel'`).Scan(&hasChannel); err != nil {
@@ -859,7 +867,7 @@ func (s *Store) migrateManualNotificationChannels() error {
 			return err
 		}
 		if pkHasChannel > 0 {
-			return tx.Commit()
+			return nil
 		}
 	}
 
@@ -902,37 +910,32 @@ func (s *Store) migrateManualNotificationChannels() error {
 		return err
 	}
 
-	var hasParentChannel int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('manual_notifications') WHERE name='channel'`).Scan(&hasParentChannel); err != nil {
-		return err
-	}
-	if hasParentChannel == 0 {
-		if _, err := tx.Exec(`ALTER TABLE manual_notifications ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'`); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return nil
 }
 
-func (s *Store) Migrate() error {
-	if _, err := s.db.Exec(schema); err != nil {
+func (s *Store) migrateLegacyBaseline(tx *sql.Tx) error {
+	// Migrations must read encrypted legacy TLS/token values before Seed runs.
+	// The caller sets QZ_SECRET_KEY first; old installs otherwise used jwt_secret.
+	// Use a private helper instance so a failed adoption does not mutate the live
+	// store's key/cache state.
+	legacy := &Store{secretKey: s.secretKey}
+	s = legacy
+	if _, err := tx.Exec(schema); err != nil {
 		return err
 	}
-	// This migration carries a security-sensitive data backfill, so it cannot live
-	// in the best-effort additive list below: those statements run on every boot.
-	// Only the transaction that actually adds the column may classify existing
-	// accounts; later purchases/provisioning must never be reclassified on restart.
-	if err := s.migrateEmailGateExempt(); err != nil {
-		return err
-	}
-	if err := s.migrateServerUseSudo(); err != nil {
-		return err
-	}
-	if err := s.migrateManualNotificationChannels(); err != nil {
-		return err
+	if len(s.secretKey) == 0 {
+		var key string
+		err := tx.QueryRow(`SELECT value FROM settings WHERE key='jwt_secret'`).Scan(&key)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if key != "" {
+			s.SetSecretKey([]byte(key))
+		}
 	}
 	// Additive column migrations for DBs created before these columns existed.
-	// Errors (e.g. "duplicate column name") are expected on up-to-date DBs.
+	// Column existence is inspected explicitly; no SQL error is ignored.
+	var deferredIndexes []string
 	for _, stmt := range []string{
 		// Ops-alert recipient flag. Default 0, so upgrading never starts sending
 		// node failure details to anyone who was merely bound for expiry notices.
@@ -1011,8 +1014,8 @@ func (s *Store) Migrate() error {
 		// (sing-box config, subscriptions, the user's own pages) reads it.
 		`ALTER TABLE users ADD COLUMN remark TEXT NOT NULL DEFAULT ''`,
 		// Rename legacy columns to neutral names on DBs created before the
-		// rename. Errors ("no such column") are expected on fresh/up-to-date DBs
-		// where CREATE TABLE already used the new names.
+		// rename. Catalog checks skip a rename only when the new name exists
+		// and the old name does not; ambiguous schemas fail closed.
 		`ALTER TABLE users RENAME COLUMN sui_client_id TO client_id`,
 		`ALTER TABLE users RENAME COLUMN sui_client_name TO client_name`,
 		`ALTER TABLE users RENAME COLUMN sui_client_uuid TO client_uuid`,
@@ -1177,101 +1180,106 @@ func (s *Store) Migrate() error {
 		 WHERE route_upstream_inbound_id<>0
 		   AND route_upstream_inbound_id NOT IN (SELECT id FROM sb_inbounds)`,
 	} {
-		if _, err := s.db.Exec(stmt); err != nil {
-			// Benign on an up-to-date DB: the column already exists (ADD COLUMN) or
-			// was already renamed / never existed (RENAME COLUMN). Anything else — a
-			// disk error, or a typo'd statement that never lands — must be surfaced,
-			// not swallowed, or a required column shows up much later as a confusing
-			// scan failure far from the cause.
-			msg := err.Error()
-			if strings.Contains(msg, "duplicate column name") ||
-				strings.Contains(msg, "no such column") ||
-				strings.Contains(msg, "no such table") {
-				continue
-			}
-			log.Printf("migrate: statement failed (continuing): %q: %v", stmt, err)
+		if strings.HasPrefix(stmt, "CREATE ") {
+			deferredIndexes = append(deferredIndexes, stmt)
+			continue
+		}
+		if err := execLegacyStatement(tx, stmt); err != nil {
+			return fmt.Errorf("legacy columns/backfill %q: %w", stmt, err)
+		}
+	}
+	// Column-sensitive one-shot backfills share this transaction. In particular,
+	// email classification runs after old sui_* columns have been renamed.
+	for _, step := range []struct {
+		name  string
+		apply func(*sql.Tx) error
+	}{
+		{"email_gate_exempt", s.migrateEmailGateExemptTx},
+		{"server_sudo", s.migrateServerUseSudoTx},
+		{"notification_channels", s.migrateManualNotificationChannelsTx},
+	} {
+		if err := step.apply(tx); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
 		}
 	}
 	// Old rows predate queue_key. Their historical behaviour was one independent
 	// line per package, represented by the same derived default new writes use.
-	if _, err := s.db.Exec(`UPDATE user_plans SET queue_key='pkg:'||package_id
+	if _, err := tx.Exec(`UPDATE user_plans SET queue_key='pkg:'||package_id
 		WHERE kind='plan' AND package_id>0 AND queue_key=''`); err != nil {
 		return err
 	}
-	// Indexes last, now that every column they can name exists. Statement by
-	// statement, and a failure is logged rather than returned: an index is a
-	// lookup aid (uniqueness here is enforced in Go first — see proxyNameTaken),
-	// and refusing to boot over one strands a panel whose only way to receive the
-	// fix is the panel itself. A missing index is slow; a boot loop is offline.
-	for _, stmt := range strings.Split(indexes, ";") {
-		if strings.TrimSpace(stmt) == "" {
-			continue
-		}
-		if _, err := s.db.Exec(stmt); err != nil {
-			log.Printf("migrate: index failed (continuing): %q: %v", strings.TrimSpace(stmt), err)
-		}
-	}
 	// Backfill probe_token_hash for existing (plaintext) tokens so hash-based
 	// lookup keeps working after the upgrade. Idempotent (skips rows already set).
-	if err := s.backfillProbeTokenHash(); err != nil {
-		return err
+	if err := s.backfillProbeTokenHashTx(tx); err != nil {
+		return fmt.Errorf("backfillProbeTokenHash: %w", err)
 	}
 	// Seed the bucket model from legacy single-plan columns (idempotent).
-	if err := s.backfillUserPlans(); err != nil {
-		return err
+	if err := s.backfillUserPlansTx(tx); err != nil {
+		return fmt.Errorf("backfillUserPlans: %w", err)
 	}
 	// Preserve legacy zero-config paid service without preserving its unsafe rule
 	// ("no groups" meant every bucket — including a plan-less one — got every
 	// inbound). On the first upgrade only, materialise that implicit relationship
 	// as an ordinary node group bound to the packages historical users hold.
-	if err := s.migrateZeroConfigEntitlements(); err != nil {
-		return err
+	if err := s.migrateZeroConfigEntitlementsTx(tx); err != nil {
+		return fmt.Errorf("migrateZeroConfigEntitlements: %w", err)
 	}
 	// Mark the已用完份 of existing queue chains as retired BEFORE the merge below,
 	// so a progressed queue is never mistaken for legacy duplicates (idempotent).
-	if err := s.backfillRetiredBuckets(); err != nil {
-		return err
+	if err := s.backfillRetiredBucketsTx(tx); err != nil {
+		return fmt.Errorf("backfillRetiredBuckets: %w", err)
 	}
 	// Lift each subscription line's credentials out of its buckets and into
 	// plan_identities, taking them from the份 in service so nobody's client is
 	// disconnected by the upgrade (idempotent).
-	if err := s.backfillPlanIdentities(); err != nil {
-		return err
+	if err := s.backfillPlanIdentitiesTx(tx); err != nil {
+		return fmt.Errorf("backfillPlanIdentities: %w", err)
 	}
 	// Move protocol authentication to the user's stable credential. On an
 	// upgraded DB this captures every credential clients may already hold as a
 	// time-limited alias; on a fresh DB there are no rows to capture and only the
 	// migration marker is written.
-	if err := s.migrateStableProtocolCredentials(); err != nil {
-		return err
+	if err := s.migrateStableProtocolCredentialsTx(tx); err != nil {
+		return fmt.Errorf("migrateStableProtocolCredentials: %w", err)
 	}
 	// Collapse duplicate plan buckets left by pre-renewal repurchases (idempotent).
-	if err := s.mergeDuplicatePlanBuckets(); err != nil {
-		return err
+	if err := s.mergeDuplicatePlanBucketsTx(tx); err != nil {
+		return fmt.Errorf("mergeDuplicatePlanBuckets: %w", err)
 	}
 	// Remove the synthetic zero-byte welcome rows created by the old 0=unlimited
 	// interpretation and rebuild users.* from real finite buckets. One-shot: a
 	// restart must not rewrite live aggregates unnecessarily.
-	if err := s.migrateFiniteTrafficAggregates(); err != nil {
-		return err
+	if err := s.migrateFiniteTrafficAggregatesTx(tx); err != nil {
+		return fmt.Errorf("migrateFiniteTrafficAggregates: %w", err)
 	}
 	// Give every existing provisioned user a free bucket (idempotent). This is
 	// required, not cosmetic: the pool no longer covers the free group, so an
 	// account without a free bucket would lose free-node access entirely.
-	if err := s.backfillFreeBuckets(); err != nil {
-		return err
+	if err := s.backfillFreeBucketsTx(tx); err != nil {
+		return fmt.Errorf("backfillFreeBuckets: %w", err)
 	}
 	// Mint the account-level HTTP/SOCKS5 credential for existing users (idempotent).
-	if err := s.backfillProxyAccounts(); err != nil {
-		return err
+	if err := s.backfillProxyAccountsTx(tx); err != nil {
+		return fmt.Errorf("backfillProxyAccounts: %w", err)
 	}
 	// Seed traffic_daily from the samples still on disk (idempotent).
-	if err := s.backfillTrafficDaily(); err != nil {
-		return err
+	if err := s.backfillTrafficDailyTx(tx); err != nil {
+		return fmt.Errorf("backfillTrafficDaily: %w", err)
 	}
 	// Extract inline-PEM sb_tls (mode=tls) profiles into managed certificates
 	// rows and repoint them via cert_id (idempotent).
-	return s.backfillCerts()
+	if err := s.backfillCertsTx(tx); err != nil {
+		return fmt.Errorf("certificates: %w", err)
+	}
+	// Indexes/constraints are part of the version, never best-effort. Invalid
+	// historical duplicates need explicit operator repair, not a silent success.
+	deferredIndexes = append(deferredIndexes, indexes)
+	for _, stmt := range deferredIndexes {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("indexes: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateZeroConfigEntitlements converts the old implicit zero-config grant into
@@ -1279,11 +1287,10 @@ func (s *Store) Migrate() error {
 // package with no groups must remain entitled to nothing until the admin binds
 // it, rather than silently inheriting every node.
 func (s *Store) migrateZeroConfigEntitlements() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.migrationTransaction(s.migrateZeroConfigEntitlementsTx)
+}
+
+func (s *Store) migrateZeroConfigEntitlementsTx(tx *sql.Tx) error {
 
 	var done int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='migrated_zero_config_v1'`).Scan(&done); err != nil {
@@ -1338,10 +1345,6 @@ func (s *Store) migrateZeroConfigEntitlements() error {
 	if _, err := tx.Exec(`INSERT INTO settings(key,value) VALUES('migrated_zero_config_v1','1')`); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.invalidateSettingsCache()
 	return nil
 }
 
@@ -1358,7 +1361,11 @@ func (s *Store) migrateZeroConfigEntitlements() error {
 // user, so a day already attributed per bucket is never touched, and re-running
 // cannot double-count.
 func (s *Store) backfillTrafficDaily() error {
-	_, err := s.db.Exec(`
+	return s.migrationTransaction(s.backfillTrafficDailyTx)
+}
+
+func (s *Store) backfillTrafficDailyTx(tx *sql.Tx) error {
+	_, err := tx.Exec(`
 		INSERT INTO traffic_daily (day, user_id, bucket_id, package_id, up, down)
 		SELECT strftime('%Y-%m-%d', ts, 'unixepoch', 'localtime') AS d,
 		       user_id, 0, -1, COALESCE(SUM(up),0), COALESCE(SUM(down),0)
@@ -1381,14 +1388,18 @@ func (s *Store) backfillTrafficDaily() error {
 // BuildUsersByTag). The new credential is simply the one the panel shows from
 // now on.
 func (s *Store) backfillProxyAccounts() error {
-	ids, err := queryInts(s.db, `SELECT u.id FROM users u
+	return s.migrationTransaction(s.backfillProxyAccountsTx)
+}
+
+func (s *Store) backfillProxyAccountsTx(tx *sql.Tx) error {
+	ids, err := queryInts(tx, `SELECT u.id FROM users u
 		WHERE u.proxy_username = ''
 		  AND EXISTS (SELECT 1 FROM user_plans p WHERE p.user_id = u.id)`)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if err := s.EnsureProxyAccount(id); err != nil {
+		if err := s.ensureProxyAccountWith(tx, id); err != nil {
 			return err
 		}
 	}
@@ -1404,7 +1415,11 @@ func (s *Store) backfillProxyAccounts() error {
 // synthesising an identity for one here would put a user in the sing-box config
 // who was never meant to be there.
 func (s *Store) backfillFreeBuckets() error {
-	rows, err := s.db.Query(`SELECT u.id, u.username FROM users u
+	return s.migrationTransaction(s.backfillFreeBucketsTx)
+}
+
+func (s *Store) backfillFreeBucketsTx(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT u.id, u.username FROM users u
 		WHERE EXISTS (SELECT 1 FROM user_plans p WHERE p.user_id = u.id)
 		  AND NOT EXISTS (SELECT 1 FROM user_plans p WHERE p.user_id = u.id AND p.kind = ?)`, KindFree)
 	if err != nil {
@@ -1428,7 +1443,7 @@ func (s *Store) backfillFreeBuckets() error {
 		return err
 	}
 	for _, r := range todo {
-		if err := s.EnsureFreeBucket(r.id, r.name); err != nil {
+		if err := s.ensureFreeBucketWith(tx, r.id, r.name); err != nil {
 			return err
 		}
 	}
@@ -1441,7 +1456,11 @@ func (s *Store) backfillFreeBuckets() error {
 // backfillProbeTokenHash computes probe_token_hash from the stored token for any
 // probe-enabled server missing it (legacy rows whose token predates encryption).
 func (s *Store) backfillProbeTokenHash() error {
-	rows, err := s.db.Query(`SELECT id, probe_token FROM servers WHERE probe_token != '' AND probe_token_hash = ''`)
+	return s.migrationTransaction(s.backfillProbeTokenHashTx)
+}
+
+func (s *Store) backfillProbeTokenHashTx(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, probe_token FROM servers WHERE probe_token != '' AND probe_token_hash = ''`)
 	if err != nil {
 		return err
 	}
@@ -1463,7 +1482,11 @@ func (s *Store) backfillProbeTokenHash() error {
 		return err
 	}
 	for _, r := range todo {
-		if _, err := s.db.Exec(`UPDATE servers SET probe_token_hash=? WHERE id=?`, hashProbeToken(r.tok), r.id); err != nil {
+		token, ok := s.decryptOK(r.tok)
+		if !ok || strings.HasPrefix(token, encPrefix) {
+			return fmt.Errorf("server %d: cannot decrypt legacy probe token", r.id)
+		}
+		if _, err := tx.Exec(`UPDATE servers SET probe_token_hash=? WHERE id=?`, hashProbeToken(token), r.id); err != nil {
 			return err
 		}
 	}

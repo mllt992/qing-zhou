@@ -54,11 +54,20 @@
         <p class="rb-desc">
           <template v-if="rollback?.available">
             升级前的二进制还留在本机（<b>{{ rollback.version || '版本未知' }}</b>{{ rollback.saved_at ? '，保存于 ' + fmtDate(rollback.saved_at) : '' }}）。
-            回滚<b>不需要联网</b>，也不重新下载 —— 新版本起不来、GitHub 连不上时，这是唯一还能走的路径。
+            回滚<b>不需要联网</b>，也不重新下载。仅当面板仍能响应时可以在此操作；无法启动时请按下方指引离线恢复。
             回滚后当前版本会成为新的回滚目标，所以点错了还能再点回来。
           </template>
           <template v-else>{{ rollback?.reason || '本机没有保留上一个版本。' }}</template>
         </p>
+        <n-alert type="warning" style="margin-bottom:12px;">
+          <b>二进制回滚不等于数据库降级</b>。旧版本不一定兼容当前数据库；回滚前请下载对应升级前快照。
+          恢复快照会丢失快照之后的新增数据，需要停服并人工确认，页面不会自动恢复数据库。
+        </n-alert>
+        <div v-if="rollback?.snapshot" class="snapshot-match">
+          对应快照：{{ rollback.snapshot.source_version }} → {{ rollback.snapshot.target_version }}，{{ fmtDate(rollback.snapshot.created_at) }}
+          <n-button size="small" :loading="downloadingSnapshot === rollback.snapshot.id" :disabled="!!downloadingSnapshot" @click="downloadSnapshot(rollback.snapshot)">下载对应快照</n-button>
+        </div>
+        <p v-else class="rb-desc">没有可核验的对应快照（旧版升级可能未生成）。请先确认独立备份可用，勿假定旧二进制兼容当前数据库。</p>
         <n-button size="small" :disabled="!rollback?.available || updating" @click="confirmRollback">
           {{ rollback?.version ? '回滚到 ' + rollback.version : '回滚到上一个版本' }}
         </n-button>
@@ -74,8 +83,8 @@
         </div>
         <p class="rb-desc">
           用于回到更早的版本 —— 出问题的版本已经不是最新、或本机没留上一个二进制时走这里。
-          <b>降级不会回滚数据库</b>：库结构变更都是只增不减的，旧版本会忽略多出来的列，但跨大版本降级前
-          请先到「系统设置 → 数据备份」下载一份快照。
+          <b>降级不会回滚数据库</b>，也不保证旧版本兼容当前结构或数据。每次安装前会自动生成一致性快照，失败则取消安装。
+          降级前请下载与目标版本匹配的历史快照，并阅读下方恢复指引。
         </p>
         <div v-if="releases.length" class="rel-pick">
           <n-select
@@ -100,6 +109,34 @@
         <n-alert v-else-if="selectedRelease?.prerelease" type="warning" style="margin-top:8px;">
           {{ selectedRelease.tag }} 是预发布版本，不建议用于生产。
         </n-alert>
+      </div>
+
+      <div class="rel-box">
+        <div class="rb-head">
+          <span class="rb-title">升级前数据库快照</span>
+          <n-button text size="tiny" :loading="snapshotLoading" @click="loadSnapshots">刷新快照</n-button>
+        </div>
+        <p class="rb-desc">最多保留 {{ snapshotRetention }} 份（回滚二进制对应快照及其余最新快照）。新快照创建失败会中止升级或回滚。仅管理员可下载，快照包含敏感数据，请妥善保管。</p>
+        <n-alert v-if="snapshotError" type="error">{{ snapshotError }}</n-alert>
+        <p v-else-if="!snapshots.length" class="rb-desc">暂无升级快照</p>
+        <div v-for="snapshot in snapshots" :key="snapshot.id" class="snapshot-row">
+          <div>
+            <b>{{ snapshot.source_version }} → {{ snapshot.target_version }}</b> · {{ fmtDate(snapshot.created_at) }}
+            <div class="rb-desc">源 revision：{{ snapshot.source_revision }} · {{ Math.ceil(snapshot.size / 1024) }} KiB</div>
+            <div class="snapshot-hash">SHA-256：{{ snapshot.sha256 }}</div>
+          </div>
+          <n-button size="small" :loading="downloadingSnapshot === snapshot.id" :disabled="!!downloadingSnapshot" @click="downloadSnapshot(snapshot)">下载快照</n-button>
+        </div>
+        <details class="restore-guide">
+          <summary>数据库恢复指引（人工停服操作）</summary>
+          <ol>
+            <li>下载所需快照，核对源版本、时间及 SHA-256；恢复会丢失该时间之后的数据，先另外备份当前状态。</li>
+            <li>停止面板及其他数据库写入者。保存当前数据库及同名 -wal、-shm 文件，不能在服务运行时覆盖数据库。</li>
+            <li>离线将快照放回实际 QZ_DB；旧 -wal、-shm 应移到备份目录，不能与恢复的数据库混用。设置数据库权限为 0600，并恢复服务用户所有权。</li>
+            <li>保留原 QZ_SECRET_KEY，使用快照的源版本二进制。先在隔离环境执行 PRAGMA integrity_check 并验证登录、订阅、节点和流量，再启动正式服务。</li>
+          </ol>
+          <p>快照位于数据库同目录的 upgrade-snapshots/&lt;快照 ID&gt;/database.db，metadata.json 记录版本、源 revision、时间和校验值。若面板无法启动，请由服务器管理员从该目录恢复。</p>
+        </details>
       </div>
 
       <!-- 更新进度 -->
@@ -128,7 +165,7 @@
     </n-spin>
 
     <n-alert type="info" style="margin-top:16px;">
-      更新流程：从 GitHub Releases 下载对应架构二进制 → 校验 SHA-256 → 原子替换 → 进程自动重启。
+      更新流程：从 GitHub Releases 下载对应架构二进制 → 校验 SHA-256 / 发布签名 → 创建数据库一致性快照 → 原子替换 → 进程自动重启。
       重启期间面板会短暂（约 1~2 秒）不可访问，完成后本页会自动刷新到新版本。
     </n-alert>
   </div>
@@ -138,7 +175,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { NSpin, NButton, NIcon, NTag, NAlert, NProgress, NSelect, useMessage, useDialog } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
-import { apiGet, apiPost } from '@/api'
+import { apiGet, apiPost, apiDownload } from '@/api'
 import { mdToHtml } from '@/utils/markdown'
 import { fmtDate } from '@/utils/format'
 
@@ -152,7 +189,18 @@ interface ReleaseInfo {
   relation: 'current' | 'newer' | 'older' | 'unknown'
 }
 
+interface SnapshotInfo {
+  id: string
+  source_version: string
+  target_version: string
+  source_revision: string
+  created_at: number
+  size: number
+  sha256: string
+}
+
 interface RollbackState {
+  snapshot?: SnapshotInfo
   available: boolean
   version: string
   reason?: string
@@ -216,6 +264,7 @@ const phaseLabels: Record<string, string> = {
   idle: '空闲',
   downloading: '下载中',
   verifying: '校验中',
+  snapshotting: '创建数据库快照',
   installing: '安装中',
   restarting: '重启中',
   failed: '更新失败',
@@ -224,6 +273,11 @@ const phaseLabel = computed(() =>
   progress.offline ? '等待服务恢复' : (phaseLabels[progress.status] || progress.status))
 
 const rollback = ref<RollbackState | null>(null)
+const snapshots = ref<SnapshotInfo[]>([])
+const snapshotRetention = ref(5)
+const snapshotLoading = ref(false)
+const snapshotError = ref('')
+const downloadingSnapshot = ref('')
 const releases = ref<ReleaseInfo[]>([])
 const relLoading = ref(false)
 const selectedTag = ref<string | null>(null)
@@ -266,6 +320,33 @@ async function loadRollback() {
   } catch { /* 非致命：按钮保持不可用 */ }
 }
 
+async function loadSnapshots() {
+  if (snapshotLoading.value) return
+  snapshotLoading.value = true
+  snapshotError.value = ''
+  try {
+    const data = await apiGet<{ snapshots: SnapshotInfo[]; retention_count: number }>('/api/admin/update/snapshots')
+    snapshots.value = data?.snapshots || []
+    snapshotRetention.value = data?.retention_count || 5
+  } catch (e: any) {
+    snapshotError.value = e?.message || '读取升级快照失败'
+  } finally {
+    snapshotLoading.value = false
+  }
+}
+
+async function downloadSnapshot(snapshot: SnapshotInfo) {
+  if (downloadingSnapshot.value) return
+  downloadingSnapshot.value = snapshot.id
+  try {
+    await apiDownload(`/api/admin/update/snapshots/${encodeURIComponent(snapshot.id)}/download`, `${snapshot.id}.db`, { timeoutMs: 300_000 })
+  } catch (e: any) {
+    message.error(e?.message || '下载升级快照失败')
+  } finally {
+    downloadingSnapshot.value = ''
+  }
+}
+
 async function loadReleases() {
   relLoading.value = true
   try {
@@ -283,7 +364,7 @@ function confirmRollback() {
   const v = rollback.value?.version || '上一个版本'
   dialog.warning({
     title: '确认回滚',
-    content: `将把面板换回 ${v} 并重启服务。不会下载任何东西，也不会改动数据库。继续？`,
+    content: `将把面板换回 ${v} 并重启服务。二进制回滚不等于数据库降级，旧版本可能不兼容当前数据库。会先创建当前数据库快照，失败则中止；不会自动恢复数据库。请确认已下载对应升级前快照并了解恢复会丢失后续数据。继续？`,
     positiveText: '回滚',
     negativeText: '取消',
     onPositiveClick: () => { startRollback() },
@@ -307,7 +388,7 @@ function confirmInstall() {
   dialog.warning({
     title: downgrade ? '确认降级' : '确认安装',
     content: downgrade
-      ? `将从 ${info.value?.current} 降级到 ${r.tag}。数据库不会回滚，建议先下载一份备份。继续？`
+      ? `将从 ${info.value?.current} 降级到 ${r.tag}。数据库不会降级，旧版本可能不兼容。请下载目标版本对应的历史快照并了解恢复指引；安装前将创建当前数据库快照，失败则中止。继续？`
       : `将安装 ${r.tag} 并重启服务，确定继续？`,
     positiveText: downgrade ? '仍然降级' : '开始安装',
     negativeText: '取消',
@@ -368,6 +449,8 @@ async function poll() {
     if (st.status === 'failed') {
       updating.value = false
       message.error(st.message || '更新失败')
+      loadSnapshots()
+      loadRollback()
       return
     }
   } catch {
@@ -382,8 +465,7 @@ async function poll() {
     progress.status = 'failed'
     progress.message = `面板已有 ${Math.round(OFFLINE_GIVE_UP_MS / 60000)} 分钟连不上，新版本可能没能启动。`
       + '请到服务器执行 journalctl -u qingzhou -n 200 查看原因；'
-      + '需要立刻恢复，就用更新前留下的 .prev 顶回去（默认装在 /opt/qingzhou）：'
-      + 'cp -f qingzhou.prev qingzhou && systemctl restart qingzhou'
+      + '二进制回滚不等于数据库降级。请按下方恢复指引停服备份当前状态，确认 .prev 与 upgrade-snapshots 中的源版本匹配后，由管理员离线恢复。'
     message.error('新版本可能启动失败，详见下方提示')
     return
   }
@@ -404,7 +486,7 @@ function onSuccess(newVer: string) {
   window.setTimeout(() => window.location.reload(), 1500)
 }
 
-onMounted(() => { check(); loadRollback() })
+onMounted(() => { check(); loadRollback(); loadSnapshots() })
 onUnmounted(() => { if (pollTimer) window.clearTimeout(pollTimer) })
 </script>
 
@@ -446,6 +528,11 @@ onUnmounted(() => { if (pollTimer) window.clearTimeout(pollTimer) })
 .rb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .rb-title { font-weight: 650; }
 .rb-desc { margin: 0 0 10px; font-size: 12px; line-height: 1.75; color: var(--text-3); }
+.snapshot-match { margin-bottom: 12px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.snapshot-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.snapshot-hash { overflow-wrap: anywhere; color: var(--text-3); }
+.restore-guide { margin-top: 14px; font-size: 12px; line-height: 1.8; }
+.restore-guide summary { cursor: pointer; font-weight: 650; }
 .rel-pick { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
 .changelog {

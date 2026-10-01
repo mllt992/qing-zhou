@@ -90,8 +90,12 @@ type proxyNameOwner struct {
 // would meter each other's traffic. client_name is included as belt and
 // braces; the qz_ ban in ValidateProxyUsername already excludes it.
 func (s *Store) proxyNameTaken(username string, self proxyNameOwner) (bool, error) {
+	return s.proxyNameTakenWith(s.db, username, self)
+}
+
+func (s *Store) proxyNameTakenWith(db txLike, username string, self proxyNameOwner) (bool, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT
+	err := db.QueryRow(`SELECT
 		  (SELECT COUNT(*) FROM users      WHERE proxy_username=? AND id<>?)
 		+ (SELECT COUNT(*) FROM user_plans WHERE (proxy_username=? AND id<>?) OR client_name=?)
 		+ (SELECT COUNT(*) FROM plan_identities
@@ -126,8 +130,12 @@ func genProxyAccountCreds() (name, password string) {
 // panel read would mean the login the page just showed does not work until the
 // next config rebuild.
 func (s *Store) EnsureProxyAccount(userID int64) error {
+	return s.ensureProxyAccountWith(s.db, userID)
+}
+
+func (s *Store) ensureProxyAccountWith(db txLike, userID int64) error {
 	var cur string
-	if err := s.db.QueryRow(`SELECT proxy_username FROM users WHERE id=?`, userID).Scan(&cur); err != nil {
+	if err := db.QueryRow(`SELECT proxy_username FROM users WHERE id=?`, userID).Scan(&cur); err != nil {
 		return err
 	}
 	if cur != "" {
@@ -137,7 +145,7 @@ func (s *Store) EnsureProxyAccount(userID int64) error {
 	var lastErr error
 	for i := 0; i < 5; i++ {
 		name, pw := genProxyAccountCreds()
-		taken, err := s.proxyNameTaken(name, proxyNameOwner{userID: userID, lineUser: -1, linePkg: -1})
+		taken, err := s.proxyNameTakenWith(db, name, proxyNameOwner{userID: userID, lineUser: -1, linePkg: -1})
 		if err != nil {
 			return err
 		}
@@ -147,7 +155,7 @@ func (s *Store) EnsureProxyAccount(userID int64) error {
 		// The proxy_username='' guard makes concurrent mints settle on one winner
 		// instead of the second overwriting the first — the loser's user is already
 		// holding the name the winner wrote.
-		res, err := s.db.Exec(`UPDATE users SET proxy_username=?, proxy_password=?, updated_at=?
+		res, err := db.Exec(`UPDATE users SET proxy_username=?, proxy_password=?, updated_at=?
 			WHERE id=? AND proxy_username=''`, name, pw, now, userID)
 		if err != nil {
 			lastErr = err

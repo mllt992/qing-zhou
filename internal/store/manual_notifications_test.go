@@ -203,6 +203,7 @@ func TestMigrateManualNotificationChannelsRebuildsLegacyPrimaryKey(t *testing.T)
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("migrate legacy manual notifications: %v", err)
 	}

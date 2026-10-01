@@ -24,11 +24,12 @@ func backupVersion(exePath string) string {
 // what. Reason is populated only when Available is false, and is written to be
 // shown to the admin as-is.
 type RollbackState struct {
-	Available bool   `json:"available"`
-	Version   string `json:"version"`
-	Reason    string `json:"reason,omitempty"`
-	Size      int64  `json:"size,omitempty"`
-	SavedAt   int64  `json:"saved_at,omitempty"`
+	Available bool          `json:"available"`
+	Snapshot  *SnapshotInfo `json:"snapshot,omitempty"`
+	Version   string        `json:"version"`
+	Reason    string        `json:"reason,omitempty"`
+	Size      int64         `json:"size,omitempty"`
+	SavedAt   int64         `json:"saved_at,omitempty"`
 }
 
 // currentExe resolves the running binary, following symlinks so the backup ends
@@ -63,7 +64,14 @@ func (m *Manager) RollbackState() RollbackState {
 	if err != nil {
 		return RollbackState{Reason: "读取保留版本失败: " + err.Error()}
 	}
+	var snapshot *SnapshotInfo
+	if meta := readBackupMeta(exePath); meta != nil && meta.SnapshotID != "" {
+		if info, err := m.snapshotInfo(meta.SnapshotID); err == nil && info.SourceVersion == meta.Version {
+			snapshot = info
+		}
+	}
 	return RollbackState{
+		Snapshot:  snapshot,
 		Available: true,
 		Version:   backupVersion(exePath),
 		Size:      st.Size(),
@@ -128,6 +136,11 @@ func (m *Manager) runRollback() {
 		m.fail(err.Error())
 		return
 	}
+	snapshot, err := m.createUpgradeSnapshot(exePath, prevVer)
+	if err != nil {
+		m.fail("回滚前快照失败，程序未替换: " + err.Error())
+		return
+	}
 	m.setState(StatusInstalling, "正在回滚到 "+label+"…", 100, prevVer)
 
 	// 1. Stage a copy of the target. Copy rather than rename: until the swap
@@ -171,7 +184,9 @@ func (m *Manager) runRollback() {
 	//    the rolled-back binary, so a failure here costs the *next* rollback,
 	//    not this one. Do not abort.
 	if err := os.Rename(keep, prev); err == nil {
-		writeBackupMeta(exePath, curVer)
+		if err := writeBackupMetaWithSnapshot(exePath, curVer, snapshot.ID); err != nil {
+			clearBackupMeta(exePath)
+		}
 	} else {
 		// prev still holds the bytes now running as exePath. Leaving it would
 		// advertise a rollback that swaps the live binary for an identical copy

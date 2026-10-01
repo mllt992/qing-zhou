@@ -17,6 +17,7 @@ func TestMigrate_UpgradesDBMissingRemark(t *testing.T) {
 		t.Fatalf("rewinding the schema: %v", err)
 	}
 
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("upgrading a DB that predates users.remark failed: %v", err)
 	}

@@ -636,7 +636,7 @@ func nodeColsPrefixed(p string) string {
 	return strings.Join(cols, ", ")
 }
 
-func queryInts(db *sql.DB, q string, args ...any) ([]int64, error) {
+func queryInts(db txLike, q string, args ...any) ([]int64, error) {
 	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, err

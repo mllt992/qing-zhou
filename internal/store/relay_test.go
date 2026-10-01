@@ -347,6 +347,7 @@ func TestMigrateClearsDanglingUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rewindVersionedBaseline(t, st)
 	if err := st.Migrate(); err != nil {
 		t.Fatal(err)
 	}
