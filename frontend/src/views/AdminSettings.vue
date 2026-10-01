@@ -229,6 +229,12 @@
           </ul>
         </div>
         <n-form label-placement="top">
+          <n-form-item label="业务提醒邮件（默认关闭）">
+            <div>
+              <n-switch :value="form.business_email_enabled === '1'" @update:value="v => form.business_email_enabled = v ? '1' : '0'" aria-label="业务提醒邮件总开关" />
+              <p class="hint">启用后向已验证邮箱自动发送套餐到期、流量不足提醒，阈值沿用提醒设置；手动通知邮件也受此总开关及用户偏好控制。用户可关闭业务提醒；邮箱验证、找回密码和安全邮件不受影响。</p>
+            </div>
+          </n-form-item>
           <n-form-item label="SMTP 主机"><n-input v-model:value="form.smtp_host" /></n-form-item>
           <n-form-item label="SMTP 端口"><n-input v-model:value="form.smtp_port" /></n-form-item>
           <n-form-item label="加密方式">

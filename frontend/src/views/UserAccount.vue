@@ -41,6 +41,15 @@
       </p>
     </n-card>
 
+    <n-card title="业务提醒邮件" size="small" style="margin-bottom:16px;">
+      <n-space align="center">
+        <n-switch :value="emailNotify.enabled" :disabled="emailNotifyLoading || emailNotifySaving" :loading="emailNotifySaving" @update:value="saveEmailNotify" aria-label="接收业务提醒邮件" />
+        <span>接收套餐到期、流量不足及管理员业务通知</span>
+      </n-space>
+      <p class="hint">自动提醒仅发送到已验证邮箱。关闭后仍会收到邮箱验证、找回密码和账号安全邮件。</p>
+      <p v-if="!emailNotify.available" class="hint">管理员尚未启用业务提醒邮件，偏好仍可保存。</p>
+    </n-card>
+
     <!-- Telegram -->
     <n-card title="Telegram 绑定" size="small" style="margin-bottom:16px;">
       <template v-if="!tg.enabled">
@@ -107,6 +116,20 @@ import { copyText } from '@/utils/clipboard'
 
 const auth = useAuthStore()
 const message = useMessage()
+const emailNotify = reactive({ enabled: true, available: false })
+const emailNotifyLoading = ref(true), emailNotifySaving = ref(false)
+async function loadEmailNotify() {
+  try { Object.assign(emailNotify, await apiGet('/api/user/notifications/email')) }
+  catch { message.error('读取邮件提醒偏好失败，请刷新重试') }
+  finally { emailNotifyLoading.value = false }
+}
+async function saveEmailNotify(enabled: boolean) {
+  if (emailNotifySaving.value) return
+  emailNotifySaving.value = true
+  try { Object.assign(emailNotify, await apiPut('/api/user/notifications/email', { enabled })); message.success('邮件提醒偏好已保存') }
+  catch (e: any) { message.error(e.message || '保存失败') }
+  finally { emailNotifySaving.value = false }
+}
 
 const pwForm = reactive({ old: '', new: '', confirm: '' })
 const emailForm = reactive({ email: '' })
@@ -247,7 +270,7 @@ onMounted(async () => {
   emailForm.email = auth.user?.email || ''
   loadingSessions.value = true
   try { sessions.value = await apiList('/api/user/sessions') } catch {} finally { loadingSessions.value = false }
-  await loadTelegram()
+  await Promise.all([loadTelegram(), loadEmailNotify()])
 })
 onUnmounted(stopTgPoll)
 </script>

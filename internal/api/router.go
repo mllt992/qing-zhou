@@ -283,6 +283,8 @@ func (a *API) Router() http.Handler {
 		pr.Post("/api/user/password", a.handleChangePassword)
 		pr.Post("/api/user/resend-verify", a.handleResendVerify)
 		pr.Post("/api/user/email", a.handleBindEmail)
+		pr.Get("/api/user/notifications/email", a.handleEmailNotifyPrefs)
+		pr.Put("/api/user/notifications/email", a.handleEmailNotifyPrefs)
 		pr.Get("/api/user/telegram", a.handleUserTelegram)
 		pr.Post("/api/user/telegram/bind-token", a.handleTelegramBindToken)
 		pr.Post("/api/user/telegram/unbind", a.handleTelegramUnbind)

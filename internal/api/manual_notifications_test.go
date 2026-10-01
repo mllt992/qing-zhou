@@ -51,6 +51,9 @@ func TestDeliverManualNotificationRecordsSentFailedAndSkipped(t *testing.T) {
 
 func TestDeliverManualEmailNotificationRecordsSentFailedAndSkipped(t *testing.T) {
 	a, st := newUserEditAPI(t)
+	if err := st.SetSetting(businessEmailSetting, "1"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.SetSetting("smtp_host", "smtp.example.com"); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +102,9 @@ func TestCreateManualNotificationRequiresConfiguredChannel(t *testing.T) {
 		t.Fatalf("email without SMTP: status=%d body=%s", w.Code, w.Body.String())
 	}
 
+	if err := st.SetSetting(businessEmailSetting, "1"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.SetSetting("smtp_host", "smtp.example.com"); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +137,9 @@ func TestCreateManualNotificationRejectsInvalidChannel(t *testing.T) {
 
 func TestDeliverManualEmailNotificationSubstitutesRecipientVars(t *testing.T) {
 	a, st := newUserEditAPI(t)
+	if err := st.SetSetting(businessEmailSetting, "1"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.SetSetting("smtp_host", "smtp.example.com"); err != nil {
 		t.Fatal(err)
 	}

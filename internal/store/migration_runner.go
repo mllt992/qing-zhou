@@ -25,7 +25,10 @@ func (m migration) version() string { return fmt.Sprintf("%06d_%s", m.id, m.name
 // The baseline adopts all previously released schemas without reinterpreting
 // their historical one-shot flags. Future changes each get a new ID/function.
 func (s *Store) migrations() []migration {
-	return []migration{{1, "legacy_baseline", s.migrateLegacyBaseline}}
+	return []migration{
+		{1, "legacy_baseline", s.migrateLegacyBaseline},
+		{2, "business_email_preferences", func(tx *sql.Tx) error { _, err := tx.Exec(emailNotificationSchema); return err }},
+	}
 }
 
 // Migrate must complete before any request/background worker is started.

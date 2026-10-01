@@ -98,6 +98,10 @@ func (a *API) handleAdminCreateManualNotification(w http.ResponseWriter, r *http
 		fail(w, http.StatusServiceUnavailable, "尚未配置邮件服务")
 		return
 	}
+	if needEmail && !a.businessEmailConfigured() {
+		fail(w, http.StatusServiceUnavailable, "业务提醒邮件尚未开启，请到系统设置 → 邮件服务开启")
+		return
+	}
 	// Telegram messages are limited to 4096 characters. Leave space for the
 	// emoji, HTML title wrapper, separators, and escaped entities.
 	if len([]rune(req.Title)) > 100 || len([]rune(req.Content)) > 3000 {
@@ -170,6 +174,16 @@ func (a *API) deliverManualTelegram(recipient *store.ManualNotificationRecipient
 }
 
 func (a *API) deliverManualEmail(recipient *store.ManualNotificationRecipient, user *store.User, subject, htmlBody string) (string, string) {
+	if !a.businessEmailConfigured() {
+		return "skipped", "业务提醒邮件已关闭"
+	}
+	enabled, err := a.st.BusinessEmailEnabled(recipient.UserID)
+	if err != nil {
+		return "failed", "读取业务提醒偏好失败"
+	}
+	if !enabled {
+		return "skipped", "用户已关闭业务提醒邮件"
+	}
 	if user == nil || !user.Email.Valid || strings.TrimSpace(user.Email.String) == "" {
 		return "skipped", "发送前已解绑邮箱"
 	}

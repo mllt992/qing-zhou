@@ -30,6 +30,7 @@ func (a *API) telegramNotifyLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			a.sweepTelegramNotifies()
+			a.sweepEmailNotifies()
 			t.Reset(5 * time.Minute)
 		}
 	}
