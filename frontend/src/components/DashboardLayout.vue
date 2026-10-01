@@ -2,14 +2,14 @@
   <div class="app-shell" :class="{ mobile: isMobile }">
     <!-- 桌面侧边栏 -->
     <aside v-if="!isMobile" class="app-sider">
-      <div class="sidebar-brand" @click="router.push('/')">
+      <a class="sidebar-brand" href="/" @click.prevent="router.push('/')">
         <div class="sidebar-logo"><BrandMark :size="40" /></div>
         <div class="brand-copy">
           <span class="brand-text">{{ config.config.site_name || '轻舟' }}</span>
           <span class="brand-caption">服务控制台</span>
         </div>
-      </div>
-      <nav class="sidebar-menu">
+      </a>
+      <nav class="sidebar-menu" aria-label="主导航">
         <n-menu :value="activeKey" :options="menuOptions" :default-expanded-keys="['admin-root']" :indent="18" @update:value="handleMenuSelect" />
       </nav>
     </aside>
@@ -17,14 +17,14 @@
     <!-- 移动端抽屉 -->
     <n-drawer v-model:show="drawerShow" placement="left" :width="260" :block-scroll="true">
       <n-drawer-content :native-scrollbar="true" body-content-style="padding:0;">
-        <div class="sidebar-brand" @click="goAndClose('/')">
+        <a class="sidebar-brand" href="/" @click.prevent="goAndClose('/')">
           <div class="sidebar-logo"><BrandMark :size="40" /></div>
           <div class="brand-copy">
             <span class="brand-text">{{ config.config.site_name || '轻舟' }}</span>
             <span class="brand-caption">服务控制台</span>
           </div>
-        </div>
-        <nav class="sidebar-menu">
+        </a>
+        <nav class="sidebar-menu" aria-label="主导航">
           <n-menu :value="activeKey" :options="menuOptions" :default-expanded-keys="['admin-root']" :indent="18" @update:value="goAndClose" />
         </nav>
       </n-drawer-content>
@@ -40,11 +40,12 @@
           <span class="header-title">{{ currentTitle }}</span>
         </div>
         <div v-if="!isMobile" class="header-search">
-          <n-icon class="header-search-icon" :size="17"><SearchOutline /></n-icon>
+          <n-icon class="header-search-icon" :size="17" aria-hidden="true"><SearchOutline /></n-icon>
           <n-auto-complete
             v-model:value="searchQuery"
             :options="searchOptions"
             placeholder="搜索功能"
+            :input-props="{ 'aria-label': '搜索功能' }"
             clear-after-select
             @select="handleSearchSelect"
             @keydown.enter="openFirstSearchResult"
@@ -58,7 +59,7 @@
             </n-dropdown>
           </template>
           <n-dropdown :options="userMenu" @select="handleUserSelect">
-            <n-button quaternary size="small" class="account-button">
+            <n-button quaternary size="small" class="account-button" :aria-label="`${auth.user?.username || '用户'}账户菜单`">
               <span class="user-avatar" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.25"/><path d="M5.9 19c.75-3.35 2.8-5.1 6.1-5.1s5.35 1.75 6.1 5.1"/></svg>
               </span>
@@ -116,7 +117,7 @@ onMounted(() => { checkMobile(); window.addEventListener('resize', checkMobile) 
 onUnmounted(() => window.removeEventListener('resize', checkMobile))
 
 function renderIcon(icon: any) {
-  return () => h(NIcon, null, { default: () => h(icon) })
+  return () => h(NIcon, { 'aria-hidden': true }, { default: () => h(icon) })
 }
 
 function groupLabel(text: string) {
@@ -222,7 +223,7 @@ const searchOptions = computed(() => {
 })
 
 const userMenu = [
-  { label: '退出登录', key: 'logout', icon: () => h(NIcon, null, { default: () => h(LogOutOutline) }) },
+  { label: '退出登录', key: 'logout', icon: () => h(NIcon, { 'aria-hidden': true }, { default: () => h(LogOutOutline) }) },
 ]
 const adminQuickMenu = [
   { label: '上游管理', key: '/admin/upstreams' },
@@ -276,6 +277,7 @@ onUnmounted(() => window.removeEventListener('keydown', focusSearch))
   display: flex; flex-direction: column;
 }
 .sidebar-brand {
+  color: inherit; text-decoration: none;
   display: flex; align-items: center; gap: 10px;
   min-height: 64px; padding: 10px 16px;
   font-weight: 750; font-size: 17px; cursor: pointer;

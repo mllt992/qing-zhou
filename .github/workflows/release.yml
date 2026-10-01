@@ -55,12 +55,15 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Build frontend (embedded into the panel binary)
+      - name: Install frontend dependencies
         working-directory: frontend
-        run: |
-          npm ci
-          npm test
-          npm run build
+        run: npm ci
+      - name: Test frontend (unit + accessibility)
+        working-directory: frontend
+        run: npm test
+      - name: Production frontend build (typecheck + bundle)
+        working-directory: frontend
+        run: npm run build
 
       - uses: actions/setup-go@v5
         with:

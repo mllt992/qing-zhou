@@ -185,7 +185,7 @@ docker buildx imagetools inspect ghcr.io/mllt992/qing-zhou:vX.Y.Z --format '{{js
 前端产物不入库（仓库里 `frontend/dist` 只有一个占位文件），所以**先构建一次前端**，否则面板是白页：
 
 ```bash
-cd frontend && npm install && npx vite build && cd ..
+cd frontend && npm ci && npm run build && cd ..
 QZ_LISTEN=127.0.0.1:8081 go run .
 ```
 
@@ -196,9 +196,9 @@ Windows PowerShell 可直接用 `./start.ps1`（已设好上述环境变量）�
 | 方式 | 做法 | 适用 |
 | --- | --- | --- |
 | **热更新**（推荐） | 另开终端 `cd frontend && npm run dev`，访问 <http://127.0.0.1:5173> | 改前端，vite 把 `/api`、`/sub` 代理到 8081 的后端 |
-| **直读磁盘** | `npx vite build` 后设 `QZ_WEB_DIR=frontend/dist` 启动 | 想在 8081 一个端口上看完整效果，改完重新 build 刷新即可，无需重编 Go |
+| **直读磁盘** | `npm run build` 后设 `QZ_WEB_DIR=frontend/dist` 启动 | 想在 8081 一个端口上看完整效果，改完重新 build 刷新即可，无需重编 Go |
 
-> 用 `npx vite build` 而不是 `npm run build`：后者会先跑 `vue-tsc`，而仓库目前有一批与业务无关的既有类型错误，CI（`release.yml`）用的也是 `npx vite build`。
+> `npm run build` 与 CI/Release 使用同一入口：先执行严格类型检查，再打包。也可分别运行 `npm run typecheck` 和 `npm test`；后者包含逻辑回归与真实 Vue 组件的 axe 无障碍冒烟检查。
 
 浏览器访问 <http://127.0.0.1:8081>。**首次启动**会自动初始化数据库并创建管理员账号：
 
@@ -208,7 +208,7 @@ Windows PowerShell 可直接用 `./start.ps1`（已设好上述环境变量）�
 ### 三、编译生产二进制（单文件，内嵌前端）
 
 ```bash
-cd frontend && npx vite build && cd ..     # 前端产物会被编译进二进制，必须先构建
+cd frontend && npm run build && cd ..     # 前端产物会被编译进二进制，必须先构建
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
   go build -trimpath -ldflags "-s -w" -o qingzhou .
 ```
