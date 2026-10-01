@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -49,21 +50,73 @@ func upgradeReq(id int64) *http.Request {
 // promptly and leaves the work running behind it.
 func TestNodeSingboxUpgradeReturnsBeforeInstallFinishes(t *testing.T) {
 	a, st := newNodeUpgradeAPI(t)
-	// A host that cannot be dialled: the point is when the handler returns, not
-	// whether the install succeeds. SSH will sit in its own timeout well past
-	// the assertion below.
+	// Hold a real local TCP connection before the SSH banner. Reserved Internet
+	// addresses may reject immediately (sandbox / CI routing), so they cannot
+	// deterministically establish that a job is still in flight.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	accepted := make(chan struct{})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		close(accepted)
+		<-release
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	var serverID int64
+	t.Cleanup(func() {
+		close(release)
+		listener.Close()
+		select {
+		case <-serverDone:
+		case <-time.After(5 * time.Second):
+			t.Error("SSH fixture goroutine did not exit")
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for serverID > 0 {
+			job, exists := a.upgradeSnapshot()[serverID]
+			if !exists || !job.Running {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Error("upgrade goroutine did not exit after fixture closed")
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 	id, err := st.CreateServer(store.Server{
-		Name: "landing", Host: "192.0.2.1", Port: 22, SSHUser: "root",
+		Name: "landing", Host: "127.0.0.1", Port: port, SSHUser: "root",
 		SSHPassword: "hunter2", Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	serverID = id
 	w := httptest.NewRecorder()
 	start := time.Now()
-	a.handleAdminNodeSingboxUpgrade(w, upgradeReq(id))
+	handlerDone := make(chan struct{})
+	go func() { defer close(handlerDone); a.handleAdminNodeSingboxUpgrade(w, upgradeReq(id)) }()
+	select {
+	case <-handlerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler waited for install instead of responding asynchronously")
+	}
 	elapsed := time.Since(start)
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upgrade never connected to the SSH fixture")
+	}
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())

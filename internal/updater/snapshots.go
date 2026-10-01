@@ -295,6 +295,14 @@ func (m *Manager) createUpgradeSnapshot(exePath, target string) (SnapshotInfo, e
 	m.snapshotMu.Lock()
 	defer m.snapshotMu.Unlock()
 	var info SnapshotInfo
+	meta, err := readBackupMetaForRetention(exePath)
+	if err != nil {
+		return info, fmt.Errorf("读取回滚关联失败: %w", err)
+	}
+	protected := ""
+	if meta != nil {
+		protected = meta.SnapshotID
+	}
 	dir, err := m.snapshotDir()
 	if err != nil {
 		return info, err
@@ -322,9 +330,10 @@ func (m *Manager) createUpgradeSnapshot(exePath, target string) (SnapshotInfo, e
 			}
 		}
 	}
-	protected := ""
-	if meta := readBackupMeta(exePath); meta != nil {
-		protected = meta.SnapshotID
+	if protected != "" {
+		if _, err := readSnapshot(dir, protected); err != nil {
+			return info, fmt.Errorf("回滚关联快照不可用，停止清理: %w", err)
+		}
 	}
 	if err := pruneSnapshots(dir, protected, SnapshotRetention-1); err != nil {
 		return info, err

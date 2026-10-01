@@ -3,12 +3,11 @@ package updater
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
-
-	"qingzhou/internal/version"
 )
 
 // backupVersion is the recorded version of the kept binary, or "" when the
@@ -120,81 +119,16 @@ func (m *Manager) runRollback() {
 		m.fail("无法定位当前程序路径: " + err.Error())
 		return
 	}
-	prev := backupPath(exePath)
 	prevVer := backupVersion(exePath)
-	curVer := version.Current()
 	label := prevVer
 	if label == "" {
 		label = "上一个版本"
 	}
 	m.setState(StatusVerifying, "校验保留的版本…", 100, prevVer)
 
-	// The full digest check, once, right before anything irreversible. The
-	// button was offered on the cheap checks alone; installing a binary is not
-	// something to do on "probably fine".
-	if err := verifyBackupContent(exePath); err != nil {
-		m.fail(err.Error())
+	if err := m.restorePreviousBinary(exePath, prevVer); err != nil {
+		m.fail("回滚已取消（程序未替换）: " + err.Error())
 		return
-	}
-	snapshot, err := m.createUpgradeSnapshot(exePath, prevVer)
-	if err != nil {
-		m.fail("回滚前快照失败，程序未替换: " + err.Error())
-		return
-	}
-	m.setState(StatusInstalling, "正在回滚到 "+label+"…", 100, prevVer)
-
-	// 1. Stage a copy of the target. Copy rather than rename: until the swap
-	//    actually happens, both the running binary and the backup must survive
-	//    untouched, so an error here changes nothing at all.
-	staging := exePath + ".rb"
-	_ = os.Remove(staging)
-	if err := copyFile(prev, staging); err != nil {
-		_ = os.Remove(staging)
-		m.fail("准备回滚文件失败: " + err.Error())
-		return
-	}
-	if err := os.Chmod(staging, 0o755); err != nil {
-		_ = os.Remove(staging)
-		m.fail("设置可执行权限失败: " + err.Error())
-		return
-	}
-
-	// 2. Preserve the version we are leaving, so the rollback is reversible
-	//    offline. Still a copy, for the same reason as step 1.
-	keep := exePath + ".fwd"
-	_ = os.Remove(keep)
-	if err := copyFile(exePath, keep); err != nil {
-		_ = os.Remove(staging)
-		_ = os.Remove(keep)
-		m.fail("备份当前版本失败，已取消回滚: " + err.Error())
-		return
-	}
-
-	// 3. The swap. rename() over the running binary is safe on Linux (only
-	//    *writing* a busy text file fails), and both paths are siblings so the
-	//    rename cannot cross a filesystem.
-	if err := os.Rename(staging, exePath); err != nil {
-		_ = os.Remove(staging)
-		_ = os.Remove(keep)
-		m.fail("替换二进制失败: " + err.Error())
-		return
-	}
-
-	// 4. Rotate the backup. Past the point of no return: exePath already holds
-	//    the rolled-back binary, so a failure here costs the *next* rollback,
-	//    not this one. Do not abort.
-	if err := os.Rename(keep, prev); err == nil {
-		if err := writeBackupMetaWithSnapshot(exePath, curVer, snapshot.ID); err != nil {
-			clearBackupMeta(exePath)
-		}
-	} else {
-		// prev still holds the bytes now running as exePath. Leaving it would
-		// advertise a rollback that swaps the live binary for an identical copy
-		// — a pointless service restart dressed up as a recovery action. Remove
-		// it so the button honestly reports that there is nothing to go back to.
-		_ = os.Remove(keep)
-		_ = os.Remove(prev)
-		clearBackupMeta(exePath)
 	}
 
 	m.setState(StatusRestarting, "回滚完成，正在重启服务…", 100, prevVer)
@@ -204,4 +138,36 @@ func (m *Manager) runRollback() {
 		m.fail(fmt.Sprintf("已回滚到 %s，但重启失败: %v；请手动重启服务", label, err))
 		return
 	}
+}
+
+// restorePreviousBinary stages the existing target and then uses the SAME
+// fail-closed snapshot/metadata/swap ordering as an online update. In particular,
+// failed metadata persistence must never rotate binaries or restart the process.
+func (m *Manager) restorePreviousBinary(exePath, target string) error {
+	if err := verifyBackupContent(exePath); err != nil {
+		return err
+	}
+	in, err := os.Open(backupPath(exePath))
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.CreateTemp(filepath.Dir(exePath), ".qz-rb-*")
+	if err != nil {
+		return err
+	}
+	staging := out.Name()
+	defer os.Remove(staging)
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return m.installVerifiedBinary(exePath, staging, target)
 }

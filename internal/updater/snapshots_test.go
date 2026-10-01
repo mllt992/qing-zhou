@@ -368,3 +368,149 @@ func TestFailedLiveRenameRestoresPreviousBinaryAndMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestInvalidRollbackMetadataAtRetentionCapacityPreservesAllSnapshots(t *testing.T) {
+	for _, kind := range []string{"directory", "malformed", "empty-object", "invalid-hash", "invalid-id", "oversized", "symlink", "unreadable"} {
+		t.Run(kind, func(t *testing.T) {
+			m, exe := snapshotManager(t)
+			first, err := m.createUpgradeSnapshot(exe, "old")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeBackupMetaWithSnapshot(exe, "v1", first.ID); err != nil {
+				t.Fatal(err)
+			}
+			for i := 1; i < SnapshotRetention; i++ {
+				if _, err := m.createUpgradeSnapshot(exe, "later"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			original := read(t, backupMetaPath(exe))
+			path := backupMetaPath(exe)
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "directory":
+				err = os.Mkdir(path, 0o700)
+			case "malformed":
+				err = os.WriteFile(path, []byte("{broken"), 0o600)
+			case "empty-object":
+				err = os.WriteFile(path, []byte("{}"), 0o600)
+			case "invalid-hash":
+				err = os.WriteFile(path, []byte(`{"version":"v1","size":1,"sha256":"invalid"}`), 0o600)
+			case "invalid-id":
+				err = os.WriteFile(path, []byte(strings.Replace(original, first.ID, "../invalid", 1)), 0o600)
+			case "oversized":
+				err = os.WriteFile(path, []byte(strings.Repeat("x", 4097)), 0o600)
+			case "symlink":
+				target := path + ".real"
+				if err = os.WriteFile(target, []byte(original), 0o600); err == nil {
+					err = os.Symlink(target, path)
+				}
+			case "unreadable":
+				err = os.WriteFile(path, []byte(original), 0o000)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "unreadable" && os.Geteuid() == 0 {
+				t.Skip("root can read mode000; other invalid-sidecar cases still run")
+			}
+			tmp := exe + ".new"
+			if err := os.WriteFile(tmp, []byte("new"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.installVerifiedBinary(exe, tmp, "v2"); err == nil {
+				t.Fatal("invalid metadata allowed update")
+			}
+			list, err := m.ListSnapshots()
+			if err != nil || len(list) != SnapshotRetention {
+				t.Fatalf("retention mutated: %d %v", len(list), err)
+			}
+			f, _, err := m.OpenSnapshot(first.ID)
+			if err != nil {
+				t.Fatalf("associated oldest snapshot lost: %v", err)
+			}
+			f.Close()
+			if read(t, exe) != "current-binary" || read(t, backupPath(exe)) != "previous-binary" {
+				t.Fatal("failed update changed binaries")
+			}
+		})
+	}
+}
+
+func TestRetentionAcceptsGenuinelyMissingOrLegacyMetadata(t *testing.T) {
+	m, exe := snapshotManager(t)
+	if _, err := m.createUpgradeSnapshot(exe, "v2"); err != nil {
+		t.Fatalf("missing sidecar: %v", err)
+	}
+	if err := writeBackupMetaWithSnapshot(exe, "legacy", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.createUpgradeSnapshot(exe, "v2"); err != nil {
+		t.Fatalf("legacy metadata without snapshot id: %v", err)
+	}
+}
+
+func TestRollbackUsesFailClosedMetadataGateBeforeRotatingBinaries(t *testing.T) {
+	exe := exeWithBackup(t)
+	oldLive, oldPrev := read(t, exe), read(t, backupPath(exe))
+	writeBackupMeta(exe, "v1")
+	oldMeta := read(t, backupMetaPath(exe))
+	m := New(nil, nil, snapshotSourceStub{path: filepath.Join(filepath.Dir(exe), "db.sqlite"), backup: func(path string) error {
+		if err := os.WriteFile(path, []byte("snapshot"), 0o600); err != nil {
+			return err
+		}
+		// Inject a metadata-write failure after the snapshot has been prepared.
+		// The former rollback path had already swapped both binaries at this point.
+		if err := os.Remove(backupMetaPath(exe)); err != nil {
+			return err
+		}
+		if err := os.Mkdir(backupMetaPath(exe), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(backupMetaPath(exe), "original"), []byte(oldMeta), 0o600)
+	}})
+	if err := m.restorePreviousBinary(exe, "v1"); err == nil {
+		t.Fatal("metadata failure allowed rollback")
+	}
+	if read(t, exe) != oldLive || read(t, backupPath(exe)) != oldPrev {
+		t.Fatal("metadata failure changed rollback pair")
+	}
+	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(exe), ".qz-rb-*"))
+	if len(matches) != 0 {
+		t.Fatal("rollback staging survived failure")
+	}
+}
+
+func TestRollbackRotatesAndRetainsVerifiedSnapshotAssociation(t *testing.T) {
+	exe := exeWithBackup(t)
+	live, prev := read(t, exe), read(t, backupPath(exe))
+	writeBackupMeta(exe, "v1")
+	m := New(nil, nil, snapshotSourceStub{path: filepath.Join(filepath.Dir(exe), "db.sqlite"), backup: func(path string) error { return os.WriteFile(path, []byte("snapshot"), 0o600) }})
+	if err := m.restorePreviousBinary(exe, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, exe) != prev || read(t, backupPath(exe)) != live {
+		t.Fatal("rollback did not rotate both binaries")
+	}
+	meta, err := readBackupMetaForRetention(exe)
+	if err != nil || meta == nil || meta.SnapshotID == "" {
+		t.Fatalf("missing recovery association: %+v %v", meta, err)
+	}
+	f, _, err := m.OpenSnapshot(meta.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := verifyBackupContent(exe); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.restorePreviousBinary(exe, meta.Version); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, exe) != live || read(t, backupPath(exe)) != prev {
+		t.Fatal("rollback not reversible")
+	}
+}

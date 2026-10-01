@@ -131,6 +131,46 @@ func readBackupMeta(exePath string) *backupMeta {
 	return &m
 }
 
+// readBackupMetaForRetention is intentionally strict: a damaged sidecar is
+// not a legacy install. Treating it as absent would lose the rollback snapshot
+// association and let retention delete the only matching database copy.
+func readBackupMetaForRetention(exePath string) (*backupMeta, error) {
+	path := backupMetaPath(exePath)
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() || st.Size() <= 0 || st.Size() > 4<<10 {
+		return nil, errors.New("回滚元数据不是有效的普通文件，保留全部快照并停止更新")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	actual, err := f.Stat()
+	if err != nil || !os.SameFile(st, actual) {
+		return nil, errors.New("读取期间回滚元数据发生变化")
+	}
+	body, err := io.ReadAll(io.LimitReader(f, (4<<10)+1))
+	if err != nil {
+		return nil, err
+	}
+	var meta backupMeta
+	if len(body) > 4<<10 || json.Unmarshal(body, &meta) != nil || meta.Size <= 0 ||
+		strings.TrimSpace(meta.Version) == "" || len(meta.Version) > 64 {
+		return nil, errors.New("回滚元数据损坏，保留全部快照并停止更新")
+	}
+	digest, err := hex.DecodeString(meta.SHA256)
+	if err != nil || len(digest) != sha256.Size || (meta.SnapshotID != "" && !snapshotName.MatchString(meta.SnapshotID)) {
+		return nil, errors.New("回滚元数据校验信息无效，保留全部快照并停止更新")
+	}
+	return &meta, nil
+}
+
 // clearBackupMeta drops the sidecar, e.g. when the backup it describes is gone.
 func clearBackupMeta(exePath string) { _ = os.Remove(backupMetaPath(exePath)) }
 
