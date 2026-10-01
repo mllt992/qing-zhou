@@ -6,9 +6,15 @@ import ts from 'typescript'
 
 const storage = new Map()
 globalThis.localStorage = { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) }
+const reauthSource = (await readFile(new URL('../src/api/reauth.ts', import.meta.url), 'utf8'))
+  .replace("from 'vue'", `from '${import.meta.resolve('vue')}'`)
+const reauthURL = 'data:text/javascript;base64,' + Buffer.from(ts.transpileModule(reauthSource, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+}).outputText).toString('base64')
 const source = (await readFile(new URL('../src/stores/auth.ts', import.meta.url), 'utf8'))
   .replace("from 'pinia'", `from '${import.meta.resolve('pinia')}'`)
   .replace("from 'vue'", `from '${import.meta.resolve('vue')}'`)
+  .replace("from '@/api/reauth'", `from '${reauthURL}'`)
   .replace("import { apiPost, apiGet } from '@/api'", 'const apiPost = (...args) => globalThis.authAPI.post(...args); const apiGet = (...args) => globalThis.authAPI.get(...args)')
 const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
 const { useAuthStore } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'))

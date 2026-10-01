@@ -3,6 +3,7 @@
     <n-message-provider>
       <n-dialog-provider>
         <router-view />
+        <StepUpDialog />
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
@@ -12,6 +13,13 @@
 import { NConfigProvider, NMessageProvider, NDialogProvider, zhCN, dateZhCN } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { useConfigStore } from '@/stores/config'
+import StepUpDialog from '@/components/StepUpDialog.vue'
+import { watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { cancelStepUpRequests } from '@/api/reauth'
+
+const route = useRoute()
+watch(() => route.fullPath, () => cancelStepUpRequests(), { flush: 'sync' })
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {

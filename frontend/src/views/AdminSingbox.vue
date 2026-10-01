@@ -1105,7 +1105,19 @@ const te = reactive({
   cert_id: 0,
 })
 
-function openTls(t?: any, clone = false) {
+let tlsEditController: AbortController | null = null
+onUnmounted(() => tlsEditController?.abort())
+async function openTls(t?: any, clone = false) {
+  tlsEditController?.abort()
+  const controller = new AbortController()
+  tlsEditController = controller
+  // List rows intentionally omit private keys. Fetch complete details only for
+  // an explicit edit/clone, before populating the form or saving any fields.
+  if (t) {
+    try { t = await apiPost<any>(`/api/admin/sb/tls/${t.id}/export`, undefined, { signal: controller.signal }) }
+    catch (e: any) { if (e.name !== 'AbortError') message.error(e.message); return }
+  }
+  if (controller.signal.aborted) return
   sniResult.value = null
   hsResult.value = null
   acme.method = 'dns-cf'; acme.cf_token = ''; acme.webroot = ''; acme.email = ''

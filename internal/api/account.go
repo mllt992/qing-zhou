@@ -90,7 +90,7 @@ func (a *API) maintain() {
 	a.st.CleanupTelegramBindTokens()
 	// Sweep every limiter — otherwise resendRL/probeRL entries accumulate for the
 	// process lifetime (unbounded memory; the probe endpoint is IP-keyed).
-	for _, rl := range []*rateLimiter{a.authRL, a.resendRL, a.probeRL, a.subRL, a.pwRL, a.tgRL} {
+	for _, rl := range []*rateLimiter{a.authRL, a.resendRL, a.probeRL, a.subRL, a.pwRL, a.tgRL, a.reauthUserRL, a.reauthIPRL} {
 		if rl != nil {
 			rl.sweep()
 		}

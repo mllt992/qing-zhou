@@ -383,14 +383,82 @@ func certInfoFromPEM(pemStr string) map[string]interface{} {
 	now := time.Now()
 	daysLeft := int(cert.NotAfter.Sub(now).Hours() / 24)
 	return map[string]interface{}{
-		"subject":     cert.Subject.CommonName,
-		"issuer":      cert.Issuer.CommonName,
-		"not_before":  cert.NotBefore.Unix(),
-		"not_after":   cert.NotAfter.Unix(),
-		"days_left":   daysLeft,
-		"expired":     now.After(cert.NotAfter),
-		"expiring":    daysLeft >= 0 && daysLeft <= 14,
+		"subject":    cert.Subject.CommonName,
+		"issuer":     cert.Issuer.CommonName,
+		"not_before": cert.NotBefore.Unix(),
+		"not_after":  cert.NotAfter.Unix(),
+		"days_left":  daysLeft,
+		"expired":    now.After(cert.NotAfter),
+		"expiring":   daysLeft >= 0 && daysLeft <= 14,
 	}
+}
+
+// publicTLSJSON preserves the list/editor metadata while withholding existing
+// private keys. Editing and cloning fetch the unredacted row through the scoped
+// export endpoint, so a redacted value is never written back as a replacement.
+func publicTLSJSON(raw string) string {
+	var value map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &value) != nil || value == nil {
+		return "{}"
+	}
+	// Only remove fields known to contain private keys. RawMessage preserves
+	// unknown extension fields (including large integers) without reshaping them.
+	delete(value, "key")
+	if rawReality, ok := value["reality"]; ok {
+		var reality map[string]json.RawMessage
+		if json.Unmarshal(rawReality, &reality) != nil {
+			delete(value, "reality")
+		} else {
+			delete(reality, "private_key")
+			value["reality"], _ = json.Marshal(reality)
+		}
+	}
+	result, _ := json.Marshal(value)
+	return string(result)
+}
+
+// decodeTLSJSON keeps extension numbers lossless during structured edits.
+func decodeTLSJSON(raw string) (map[string]interface{}, error) {
+	result := map[string]interface{}{}
+	if strings.TrimSpace(raw) == "" {
+		return result, nil
+	}
+	if !json.Valid([]byte(raw)) {
+		return nil, errors.New("invalid TLS JSON")
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]interface{}{}
+	}
+	return result, nil
+}
+
+func updateTLSFingerprint(client map[string]interface{}, fingerprint string) {
+	utls, _ := client["utls"].(map[string]interface{})
+	if utls == nil {
+		utls = map[string]interface{}{}
+	}
+	utls["enabled"], utls["fingerprint"] = true, fpOrDefault(fingerprint)
+	client["utls"] = utls
+}
+
+// POST /api/admin/sb/tls/{id}/export is the explicit secret-bearing details
+// fetch for edit/clone. Ordinary list reads never return existing private keys.
+func (a *API) handleAdminExportSbTls(w http.ResponseWriter, r *http.Request) {
+	profile, err := a.st.GetSbTls(atoi(chi.URLParam(r, "id")))
+	if err != nil || profile == nil {
+		fail(w, http.StatusNotFound, "配置不存在")
+		return
+	}
+	if profile.DecryptFailed {
+		fail(w, http.StatusBadRequest, "配置无法解密，请确认 QZ_SECRET_KEY")
+		return
+	}
+	ok(w, profile)
 }
 
 func (a *API) handleAdminListSbTls(w http.ResponseWriter, r *http.Request) {
@@ -407,7 +475,7 @@ func (a *API) handleAdminListSbTls(w http.ResponseWriter, r *http.Request) {
 			"server_id":   t.ServerID,
 			"name":        t.Name,
 			"mode":        t.Mode,
-			"server_json": t.ServerJSON,
+			"server_json": publicTLSJSON(t.ServerJSON),
 			"client_json": t.ClientJSON,
 			"cert_id":     t.CertID,
 			"sort_order":  t.SortOrder,
@@ -498,17 +566,17 @@ func (a *API) handleAdminDeleteSbTls(w http.ResponseWriter, r *http.Request) {
 // profile (server + client JSON) with a freshly generated keypair.
 func (a *API) handleAdminCreateRealityTls(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name            string   `json:"name"`
-		ServerID        int64    `json:"server_id"`
-		ServerName      string   `json:"server_name"`      // SNI shown to clients, e.g. www.tesla.com
-		HandshakeServer string   `json:"handshake_server"` // real TLS dest, defaults to ServerName
-		HandshakePort   int      `json:"handshake_port"`   // defaults 443
-		Fingerprint     string   `json:"fingerprint"`      // utls fp, defaults chrome
+		Name            string `json:"name"`
+		ServerID        int64  `json:"server_id"`
+		ServerName      string `json:"server_name"`      // SNI shown to clients, e.g. www.tesla.com
+		HandshakeServer string `json:"handshake_server"` // real TLS dest, defaults to ServerName
+		HandshakePort   int    `json:"handshake_port"`   // defaults 443
+		Fingerprint     string `json:"fingerprint"`      // utls fp, defaults chrome
 		// Pre-generated keys from frontend (optional; backend generates if empty)
 		PrivateKey string   `json:"private_key"`
 		PublicKey  string   `json:"public_key"`
-		ShortID    string   `json:"short_id"`     // 单个（向后兼容）
-		ShortIDs   []string `json:"short_ids"`    // 多个（优先）
+		ShortID    string   `json:"short_id"`  // 单个（向后兼容）
+		ShortIDs   []string `json:"short_ids"` // 多个（优先）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
@@ -635,9 +703,12 @@ func (a *API) handleAdminUpdateRealityTls(w http.ResponseWriter, r *http.Request
 	if req.HandshakePort == 0 {
 		req.HandshakePort = 443
 	}
-	var server, client map[string]interface{}
-	_ = json.Unmarshal([]byte(cur.ServerJSON), &server)
-	_ = json.Unmarshal([]byte(cur.ClientJSON), &client)
+	server, serverErr := decodeTLSJSON(cur.ServerJSON)
+	client, clientErr := decodeTLSJSON(cur.ClientJSON)
+	if cur.DecryptFailed || serverErr != nil || clientErr != nil {
+		fail(w, http.StatusBadRequest, "已有 TLS 配置不可用，拒绝覆盖")
+		return
+	}
 	if server == nil {
 		server = map[string]interface{}{"enabled": true}
 	}
@@ -647,7 +718,12 @@ func (a *API) handleAdminUpdateRealityTls(w http.ResponseWriter, r *http.Request
 		reality = map[string]interface{}{"enabled": true}
 		server["reality"] = reality
 	}
-	reality["handshake"] = map[string]interface{}{"server": req.HandshakeServer, "server_port": req.HandshakePort}
+	handshake, _ := reality["handshake"].(map[string]interface{})
+	if handshake == nil {
+		handshake = map[string]interface{}{}
+	}
+	handshake["server"], handshake["server_port"] = req.HandshakeServer, req.HandshakePort
+	reality["handshake"] = handshake
 	// 更新 short_id 列表（如果前端提供了）
 	if len(req.ShortIDs) > 0 {
 		sids := make([]string, 0, len(req.ShortIDs))
@@ -668,7 +744,7 @@ func (a *API) handleAdminUpdateRealityTls(w http.ResponseWriter, r *http.Request
 		client = map[string]interface{}{}
 	}
 	client["server_name"] = req.ServerName
-	client["utls"] = map[string]interface{}{"enabled": true, "fingerprint": fpOrDefault(req.Fingerprint)}
+	updateTLSFingerprint(client, req.Fingerprint)
 	sj, _ := json.Marshal(server)
 	cj, _ := json.Marshal(client)
 	if _, err := a.st.SaveSbTls(&store.SbTls{ID: id, ServerID: req.ServerID, Name: req.Name, Mode: "reality", ServerJSON: string(sj), ClientJSON: string(cj)}); err != nil {
@@ -711,6 +787,36 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 	if p := chi.URLParam(r, "id"); p != "" {
 		id = atoi(p)
 	}
+	serverBase, clientBase := map[string]interface{}{}, map[string]interface{}{}
+	if id != 0 {
+		current, err := a.st.GetSbTls(id)
+		if err != nil || current == nil {
+			fail(w, http.StatusNotFound, "配置不存在")
+			return
+		}
+		if current.DecryptFailed {
+			fail(w, http.StatusBadRequest, "配置无法解密，请确认 QZ_SECRET_KEY")
+			return
+		}
+		var serverErr, clientErr error
+		serverBase, serverErr = decodeTLSJSON(current.ServerJSON)
+		clientBase, clientErr = decodeTLSJSON(current.ClientJSON)
+		if serverErr != nil || clientErr != nil {
+			fail(w, http.StatusBadRequest, "已有 TLS 配置格式无效，拒绝覆盖")
+			return
+		}
+	}
+	if serverBase == nil {
+		serverBase = map[string]interface{}{}
+	}
+	if clientBase == nil {
+		clientBase = map[string]interface{}{}
+	}
+	// These known form-controlled options may be deliberately cleared. Preserve
+	// all unknown extension fields and only replace options represented by the form.
+	for _, key := range []string{"alpn", "min_version", "max_version", "reality", "certificate_path", "key_path"} {
+		delete(serverBase, key)
+	}
 	// A profile referencing a managed certificate carries no inline PEM: the cert
 	// bytes are injected at build time from the certificates table (single source
 	// of truth), and its client params are pinned to a real, verified cert.
@@ -724,7 +830,11 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		if cert.Domain != "" {
 			sni = cert.Domain // SNI must match the cert; the cert's domain wins
 		}
-		server := map[string]interface{}{"enabled": true, "server_name": sni}
+		server := serverBase
+		server["enabled"], server["server_name"] = true, sni
+		for _, key := range []string{"certificate", "key", "certificate_path", "key_path"} {
+			delete(server, key)
+		}
 		if len(req.ALPN) > 0 {
 			server["alpn"] = req.ALPN
 		}
@@ -740,10 +850,9 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		if cert.Source == "acme" || cert.Source == "paste" {
 			insecure = false
 		}
-		client := map[string]interface{}{
-			"insecure": insecure,
-			"utls":     map[string]interface{}{"enabled": true, "fingerprint": fpOrDefault(req.Fingerprint)},
-		}
+		client := clientBase
+		client["insecure"] = insecure
+		updateTLSFingerprint(client, req.Fingerprint)
 		sj, _ := json.Marshal(server)
 		cj, _ := json.Marshal(client)
 		newID, err := a.st.SaveSbTls(&store.SbTls{ID: id, ServerID: req.ServerID, Name: req.Name, Mode: "tls", CertID: req.CertID, ServerJSON: string(sj), ClientJSON: string(cj)})
@@ -779,12 +888,9 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	server := map[string]interface{}{
-		"enabled":     true,
-		"server_name": req.ServerName,
-		"certificate": req.Certificate,
-		"key":         req.Key,
-	}
+	server := serverBase
+	server["enabled"], server["server_name"] = true, req.ServerName
+	server["certificate"], server["key"] = req.Certificate, req.Key
 	if len(req.ALPN) > 0 {
 		server["alpn"] = req.ALPN
 	}
@@ -794,10 +900,9 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 	if v := tlsVersion(req.MaxVersion); v != "" {
 		server["max_version"] = v
 	}
-	client := map[string]interface{}{
-		"insecure": req.Insecure,
-		"utls":     map[string]interface{}{"enabled": true, "fingerprint": fpOrDefault(req.Fingerprint)},
-	}
+	client := clientBase
+	client["insecure"] = req.Insecure
+	updateTLSFingerprint(client, req.Fingerprint)
 	sj, _ := json.Marshal(server)
 	cj, _ := json.Marshal(client)
 	newID, err := a.st.SaveSbTls(&store.SbTls{ID: id, ServerID: req.ServerID, Name: req.Name, Mode: "tls", ServerJSON: string(sj), ClientJSON: string(cj)})
@@ -1459,12 +1564,12 @@ func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) 
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, n := range list {
 		m := map[string]interface{}{
-			"id":          n.ID,
-			"server_id":   n.ServerID,
-			"type":        n.Type,
-			"tag":         n.Tag,
-			"listen":      n.Listen,
-			"listen_port": n.ListenPort,
+			"id":                  n.ID,
+			"server_id":           n.ServerID,
+			"type":                n.Type,
+			"tag":                 n.Tag,
+			"listen":              n.Listen,
+			"listen_port":         n.ListenPort,
 			"tls_id":              n.TlsID,
 			"options":             n.Options,
 			"enabled":             n.Enabled,
@@ -1756,7 +1861,7 @@ func (a *API) handleAdminSbCheck(w http.ResponseWriter, r *http.Request) {
 	// Structural sanity + a couple of panel-level lints that don't need the
 	// binary (empty inbounds is a common "why is my node dead" cause).
 	var doc struct {
-		Inbounds  []struct {
+		Inbounds []struct {
 			Tag        string `json:"tag"`
 			ListenPort int    `json:"listen_port"`
 		} `json:"inbounds"`
@@ -1812,7 +1917,7 @@ func (a *API) handleAdminSbCheck(w http.ResponseWriter, r *http.Request) {
 	base["stage"] = "check"
 	if cerr != nil {
 		base["ok"] = false
-		base["output"] = strings.TrimSpace(string(out)+"\n"+cerr.Error())
+		base["output"] = strings.TrimSpace(string(out) + "\n" + cerr.Error())
 		ok(w, base)
 		return
 	}
@@ -1940,10 +2045,10 @@ func (a *API) handleAdminImportRemotePreview(w http.ResponseWriter, r *http.Requ
 
 	// Extract type, tag, listen_port from each inbound for display
 	type inboundInfo struct {
-		Type        string          `json:"type"`
-		Tag         string          `json:"tag"`
-		ListenPort  int             `json:"listen_port"`
-		Raw         json.RawMessage `json:"raw"`
+		Type       string          `json:"type"`
+		Tag        string          `json:"tag"`
+		ListenPort int             `json:"listen_port"`
+		Raw        json.RawMessage `json:"raw"`
 	}
 	var inbounds []inboundInfo
 	for _, ib := range full.Inbounds {

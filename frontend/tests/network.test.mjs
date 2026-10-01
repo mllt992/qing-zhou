@@ -11,9 +11,12 @@ function moduleURL(source) {
 }
 const networkURL = moduleURL(await readFile(new URL('../src/api/network.ts', import.meta.url), 'utf8'))
 const { withRequestDeadline } = await import(networkURL)
+const reauthURL = moduleURL((await readFile(new URL('../src/api/reauth.ts', import.meta.url), 'utf8'))
+  .replace("from 'vue'", `from '${import.meta.resolve('vue')}'`))
 const apiSource = (await readFile(new URL('../src/api/index.ts', import.meta.url), 'utf8'))
   .replace("import { useAuthStore } from '@/stores/auth'", 'const useAuthStore = () => globalThis.testAuth')
   .replaceAll("from './network'", `from '${networkURL}'`)
+  .replaceAll("from './reauth'", `from '${reauthURL}'`)
 const api = await import(moduleURL(apiSource))
 globalThis.testAuth = { token: 'test-token', logout() {} }
 
@@ -68,7 +71,7 @@ test('failed writes are sent exactly once, keeping method/body/auth', async t =>
   await assert.rejects(api.apiDelete('/write'), { status: 503 })
   assert.deepEqual(requests.map(r => r.method), ['POST', 'PUT', 'DELETE'])
   assert.equal(requests[0].body, '{"value":1}')
-  assert.equal(requests[0].headers.Authorization, 'Bearer test-token')
+  assert.equal(requests[0].headers.get('Authorization'), 'Bearer test-token')
 })
 
 test('successful JSON parsing failures are errors, not empty successful lists', async t => {

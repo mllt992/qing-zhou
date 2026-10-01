@@ -327,7 +327,15 @@ func (a *API) handleAdminCertRenew(w http.ResponseWriter, r *http.Request) {
 	ok(w, certPublic(saved))
 }
 
-// GET /api/admin/certs/{id}/export — return the raw PEM for copy/download.
+// Reject the former GET explicitly; otherwise the SPA catch-all can return an
+// HTML 200 and make old clients believe they downloaded a certificate.
+func (a *API) handleLegacyCertExport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Allow", http.MethodPost)
+	w.Header().Set("Cache-Control", "no-store")
+	fail(w, http.StatusMethodNotAllowed, "私钥导出请使用 POST 并完成密码二次验证")
+}
+
+// POST /api/admin/certs/{id}/export — return the raw PEM for copy/download.
 func (a *API) handleAdminExportCert(w http.ResponseWriter, r *http.Request) {
 	c, err := a.st.GetCert(atoi(chi.URLParam(r, "id")))
 	if err != nil || c == nil {

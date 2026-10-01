@@ -29,6 +29,14 @@ func (s *Store) SessionValid(jti string) bool {
 	return n == 1
 }
 
+// SessionValidForUser verifies ownership as well as revocation. Security proofs
+// are bound to both fields, including when sessions are changed outside the API.
+func (s *Store) SessionValidForUser(jti string, userID int64) bool {
+	var n int
+	err := s.db.QueryRow(`SELECT 1 FROM sessions WHERE jti=? AND user_id=?`, jti, userID).Scan(&n)
+	return err == nil && n == 1
+}
+
 // TouchSession bumps last_seen at most once per minute.
 func (s *Store) TouchSession(jti string) {
 	now := time.Now().Unix()

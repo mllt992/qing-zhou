@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"qingzhou/internal/auth"
 	"qingzhou/internal/store"
 	"qingzhou/internal/updater"
 )
@@ -67,11 +68,22 @@ func TestUpgradeSnapshotRoutesRequireAdministrator(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), meta, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	claims, err := auth.Parse(a.secret, tokens["admin"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := a.issueStepUp(admin, claims.ID, stepUpBackup, stepUpTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := a.Router()
 	for name, token := range tokens {
 		for _, path := range []string{"/api/admin/update/snapshots", "/api/admin/update/snapshots/" + id + "/download"} {
 			t.Run(name+path, func(t *testing.T) {
 				req := httptest.NewRequest(http.MethodGet, path, nil)
+				if name == "admin" {
+					req.Header.Set(stepUpHeader, proof)
+				}
 				if token != "" {
 					req.Header.Set("Authorization", "Bearer "+token)
 				}
@@ -108,6 +120,7 @@ func TestUpgradeSnapshotRoutesRequireAdministrator(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/update/snapshots/not-a-snapshot/download", nil)
 	req.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	req.Header.Set(stepUpHeader, proof)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {

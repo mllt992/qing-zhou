@@ -245,7 +245,7 @@ func (a *API) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		// Session must still exist (supports remote logout / revocation).
-		if claims.ID == "" || !a.st.SessionValid(claims.ID) {
+		if claims.ID == "" || !a.st.SessionValidForUser(claims.ID, claims.UserID) {
 			fail(w, http.StatusUnauthorized, "登录已失效，请重新登录")
 			return
 		}

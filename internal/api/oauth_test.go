@@ -466,10 +466,19 @@ func TestOAuthAdminLivePermissionsAndAtomicConfig(t *testing.T) {
 	}
 	f.st.CreateSession(uid, "admin-session", "test", "test")
 	token, _ := auth.Issue(f.a.secret, uid, "admin", "admin-session", time.Hour)
+	user, err := f.st.UserByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := f.a.issueStepUp(user, "admin-session", stepUpSettings, stepUpTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := f.a.Router()
 	request := func(method, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "https://panel.example/api/admin/oauth2", strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set(stepUpHeader, proof)
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, r)

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { apiPost, apiGet } from '@/api'
+import { cancelStepUpRequests } from '@/api/reauth'
 
 export interface User {
   id: number
@@ -24,6 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     const data = await apiPost<{ token: string; user: User }>('/api/auth/login', { username, password })
+    cancelStepUpRequests(true)
     token.value = data.token
     user.value = data.user
     localStorage.setItem('qz_token', data.token)
@@ -40,6 +42,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (data?.need_verify || !data?.token) {
       return data
     }
+    cancelStepUpRequests(true)
     token.value = data.token
     user.value = data.user ?? null
     localStorage.setItem('qz_token', data.token)
@@ -55,6 +58,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout(localOnly = false) {
+    cancelStepUpRequests(true)
     if (!localOnly && (token.value || user.value)) {
       apiPost('/api/auth/logout').catch(() => {})
     }

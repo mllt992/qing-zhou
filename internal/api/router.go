@@ -47,7 +47,9 @@ type API struct {
 	// to seize the account permanently — the change kicks every other session,
 	// including the real owner's. Unthrottled it was an online brute force with
 	// no cost and no trace. See handleChangePassword.
-	pwRL *rateLimiter
+	pwRL         *rateLimiter
+	reauthUserRL *rateLimiter
+	reauthIPRL   *rateLimiter
 
 	sbctl        *sbctl.Controller // native sing-box orchestrator; nil if not enabled
 	updater      *updater.Manager  // GitHub-release self-updater
@@ -146,6 +148,8 @@ func (a *API) sbScheduleServer(serverIDs ...int64) {
 func New(st *store.Store, secret []byte, mail *mailer.Mailer) *API {
 	a := &API{
 		st: st, secret: secret, mailer: mail,
+		reauthUserRL:   newRateLimiter(10, 10*time.Minute),
+		reauthIPRL:     newRateLimiter(30, 10*time.Minute),
 		sourceClient:   safeFetchClient(),
 		upstreamClient: &http.Client{Timeout: 20 * time.Second},
 		pingSlots:      make(chan struct{}, 64),
@@ -263,6 +267,7 @@ func (a *API) Router() http.Handler {
 		pr.Use(a.rejectAPIToken) // API tokens are admin-API only; never /api/user/*
 		pr.Get("/api/auth/me", a.handleMe)
 		pr.Post("/api/auth/logout", a.handleLogout)
+		pr.Post("/api/user/reauth", a.handleReauth)
 		pr.Get("/api/user/dashboard", a.handleDashboard)
 		pr.Get("/api/user/oauth2", a.handleUserOAuth)
 		pr.Post("/api/user/oauth2/bind", a.handleOAuthBind)
@@ -273,8 +278,8 @@ func (a *API) Router() http.Handler {
 		pr.Get("/api/user/proxy-account", a.handleUserProxyAccount)
 		pr.Put("/api/user/proxy-account", a.handleUpdateUserProxyAccount)
 		pr.Put("/api/user/proxies/{bucket}", a.handleUpdateUserProxy)
-		pr.Post("/api/user/reset-sub", a.handleResetSub)
-		pr.Post("/api/user/reset-node-creds", a.handleResetNodeCreds)
+		pr.With(a.requireStepUp(stepUpSubscription)).Post("/api/user/reset-sub", a.handleResetSub)
+		pr.With(a.requireStepUp(stepUpNodeCredentials)).Post("/api/user/reset-node-creds", a.handleResetNodeCreds)
 		pr.Get("/api/user/packages", a.handleUserPackages)
 		pr.Post("/api/user/purchase", a.handlePurchase)
 		pr.Get("/api/user/orders", a.handleUserOrders)
@@ -306,13 +311,13 @@ func (a *API) Router() http.Handler {
 		ar.Use(a.requireAdmin)
 		ar.Use(a.enforceAPITokenScope)
 		ar.Get("/api/admin/tokens", a.handleAdminListAPITokens)
-		ar.Post("/api/admin/tokens", a.handleAdminCreateAPIToken)
-		ar.Delete("/api/admin/tokens/{id}", a.handleAdminRevokeAPIToken)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/tokens", a.handleAdminCreateAPIToken)
+		ar.With(a.requireStepUp(stepUpSettings)).Delete("/api/admin/tokens/{id}", a.handleAdminRevokeAPIToken)
 		ar.Get("/api/admin/settings", a.handleGetSettings)
 		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Get("/api/admin/oauth2", a.handleGetOAuth)
-		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Put("/api/admin/oauth2", a.handlePutOAuth)
+		ar.With(a.requireStepUp(stepUpSettings), a.rejectAPIToken, a.requireOAuthAdmin).Put("/api/admin/oauth2", a.handlePutOAuth)
 		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Post("/api/admin/oauth2/test", a.handleTestOAuth)
-		ar.Put("/api/admin/settings", a.handlePutSettings)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/settings", a.handlePutSettings)
 		ar.Get("/api/admin/settings/default-templates", a.handleGetDefaultTemplates)
 		ar.Post("/api/admin/settings/test-smtp", a.handleTestSMTP)
 		ar.Post("/api/admin/settings/test-telegram", a.handleTestTelegram)
@@ -321,28 +326,28 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/ops-recipients/test", a.handleTestOpsAlert)
 		ar.Get("/api/admin/settings/detect-node-host", a.handleDetectNodeHost)
 		ar.Post("/api/admin/rebuild", a.handleAdminRebuild)
-		ar.Get("/api/admin/backup", a.handleAdminBackup)
+		ar.With(a.requireStepUp(stepUpBackup)).Get("/api/admin/backup", a.handleAdminBackup)
 		ar.Get("/api/admin/backups/config", a.handleAdminGetBackupConfig)
-		ar.Put("/api/admin/backups/config", a.handleAdminPutBackupConfig)
-		ar.Post("/api/admin/backups/config/test", a.handleAdminTestBackupConfig)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/backups/config", a.handleAdminPutBackupConfig)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/backups/config/test", a.handleAdminTestBackupConfig)
 		ar.Get("/api/admin/backups/schedule", a.handleAdminGetBackupSchedule)
-		ar.Put("/api/admin/backups/schedule", a.handleAdminPutBackupSchedule)
-		ar.Post("/api/admin/backups", a.handleAdminCreateRemoteBackup)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/backups/schedule", a.handleAdminPutBackupSchedule)
+		ar.With(a.requireStepUp(stepUpBackup)).Post("/api/admin/backups", a.handleAdminCreateRemoteBackup)
 		ar.Get("/api/admin/backups", a.handleAdminListRemoteBackups)
-		ar.Get("/api/admin/backups/{id}/download-url", a.handleAdminRemoteBackupDownload)
-		ar.Delete("/api/admin/backups/{id}", a.handleAdminDeleteRemoteBackup)
+		ar.With(a.requireStepUp(stepUpBackup)).Get("/api/admin/backups/{id}/download-url", a.handleAdminRemoteBackupDownload)
+		ar.With(a.requireStepUp(stepUpBackup)).Delete("/api/admin/backups/{id}", a.handleAdminDeleteRemoteBackup)
 		// Which sing-box each node runs, plus a per-node reinstall.
 		ar.Get("/api/admin/nodes/singbox", a.handleAdminNodeVersions)
 		ar.Post("/api/admin/nodes/singbox/refresh", a.handleAdminNodeVersionRefresh)
-		ar.Post("/api/admin/nodes/{id}/singbox/upgrade", a.handleAdminNodeSingboxUpgrade)
+		ar.With(a.requireStepUp(stepUpUpdate)).Post("/api/admin/nodes/{id}/singbox/upgrade", a.handleAdminNodeSingboxUpgrade)
 		ar.Get("/api/admin/update/check", a.handleUpdateCheck)
 		ar.Get("/api/admin/update/status", a.handleUpdateStatus)
 		ar.Get("/api/admin/update/releases", a.handleUpdateReleases)
 		ar.Get("/api/admin/update/snapshots", a.handleUpdateSnapshots)
-		ar.Get("/api/admin/update/snapshots/{id}/download", a.handleUpdateSnapshotDownload)
+		ar.With(a.requireStepUp(stepUpBackup)).Get("/api/admin/update/snapshots/{id}/download", a.handleUpdateSnapshotDownload)
 		ar.Get("/api/admin/update/rollback", a.handleUpdateRollbackState)
-		ar.Post("/api/admin/update/rollback", a.handleUpdateRollback)
-		ar.Post("/api/admin/update/apply", a.handleUpdateApply)
+		ar.With(a.requireStepUp(stepUpUpdate)).Post("/api/admin/update/rollback", a.handleUpdateRollback)
+		ar.With(a.requireStepUp(stepUpUpdate)).Post("/api/admin/update/apply", a.handleUpdateApply)
 		ar.Get("/api/admin/help", a.handleAdminHelpDocs)
 		ar.Post("/api/admin/help", a.handleAdminCreateHelpDoc)
 		ar.Put("/api/admin/help/{id}", a.handleAdminUpdateHelpDoc)
@@ -350,7 +355,7 @@ func (a *API) Router() http.Handler {
 		ar.Delete("/api/admin/users/{id}", a.handleAdminDeleteUser)
 		ar.Post("/api/admin/users/{id}/points", a.handleAdminRecharge)
 		ar.Post("/api/admin/users/{id}/assign-plan", a.handleAdminAssignPlan)
-		ar.Post("/api/admin/users/{id}/reset-node-creds", a.handleAdminResetNodeCreds)
+		ar.With(a.requireStepUp(stepUpUsers)).Post("/api/admin/users/{id}/reset-node-creds", a.handleAdminResetNodeCreds)
 		ar.Get("/api/admin/packages", a.handleAdminListPackages)
 		ar.Post("/api/admin/packages", a.handleAdminCreatePackage)
 		ar.Post("/api/admin/packages/reorder", a.handleAdminReorderPackages)
@@ -371,17 +376,18 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/sb/reality-keypair", a.handleAdminRealityKeypair)
 		ar.Get("/api/admin/sb/sni-test", a.handleAdminSniTest)
 		ar.Get("/api/admin/sb/tls", a.handleAdminListSbTls)
-		ar.Post("/api/admin/sb/tls", a.handleAdminSaveSbTls)
-		ar.Post("/api/admin/sb/tls/reality", a.handleAdminCreateRealityTls)
-		ar.Put("/api/admin/sb/tls/reality/{id}", a.handleAdminUpdateRealityTls)
-		ar.Post("/api/admin/sb/tls/self-signed", a.handleAdminSelfSignedCert)
-		ar.Post("/api/admin/sb/tls/quick-selfsigned", a.handleAdminQuickSelfSignedTls)
-		ar.Post("/api/admin/sb/tls/acme", a.handleAdminAcmeCert)
-		ar.Post("/api/admin/sb/tls/cert", a.handleAdminSaveCertTls)
+		ar.With(a.requireStepUp(stepUpCertExport)).Post("/api/admin/sb/tls/{id}/export", a.handleAdminExportSbTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/sb/tls", a.handleAdminSaveSbTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/sb/tls/reality", a.handleAdminCreateRealityTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/sb/tls/reality/{id}", a.handleAdminUpdateRealityTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/sb/tls/self-signed", a.handleAdminSelfSignedCert)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/sb/tls/quick-selfsigned", a.handleAdminQuickSelfSignedTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/sb/tls/acme", a.handleAdminAcmeCert)
+		ar.With(a.requireStepUp(stepUpSettings)).Post("/api/admin/sb/tls/cert", a.handleAdminSaveCertTls)
 		ar.Post("/api/admin/sb/tls/reorder", a.handleAdminReorderSbTls)
-		ar.Put("/api/admin/sb/tls/cert/{id}", a.handleAdminSaveCertTls)
-		ar.Put("/api/admin/sb/tls/{id}", a.handleAdminSaveSbTls)
-		ar.Delete("/api/admin/sb/tls/{id}", a.handleAdminDeleteSbTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/sb/tls/cert/{id}", a.handleAdminSaveCertTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/sb/tls/{id}", a.handleAdminSaveSbTls)
+		ar.With(a.requireStepUp(stepUpSettings)).Delete("/api/admin/sb/tls/{id}", a.handleAdminDeleteSbTls)
 
 		// Certificate center: managed, reusable certificates issued on the panel
 		// host (DNS-01) and referenced by TLS profiles via cert_id.
@@ -390,7 +396,8 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/certs/paste", a.handleAdminCertPaste)
 		ar.Post("/api/admin/certs/self-signed", a.handleAdminCertSelfSigned)
 		ar.Post("/api/admin/certs/{id}/renew", a.handleAdminCertRenew)
-		ar.Get("/api/admin/certs/{id}/export", a.handleAdminExportCert)
+		ar.With(a.requireStepUp(stepUpCertExport)).Post("/api/admin/certs/{id}/export", a.handleAdminExportCert)
+		ar.Get("/api/admin/certs/{id}/export", a.handleLegacyCertExport)
 		ar.Put("/api/admin/certs/{id}", a.handleAdminUpdateCert)
 		ar.Delete("/api/admin/certs/{id}", a.handleAdminDeleteCert)
 		ar.Get("/api/admin/sb/egresses", a.handleAdminListSbEgresses)
@@ -411,23 +418,23 @@ func (a *API) Router() http.Handler {
 		ar.Put("/api/admin/sb/inbounds/{id}", a.handleAdminSaveSbInbound)
 		ar.Delete("/api/admin/sb/inbounds/{id}", a.handleAdminDeleteSbInbound)
 		ar.Post("/api/admin/sb/inbounds/{id}/ack-upstream", a.handleAdminAckUpstreamBroken)
-		ar.Get("/api/admin/sb/preview", a.handleAdminSbPreview)
+		ar.With(a.requireStepUp(stepUpCertExport)).Get("/api/admin/sb/preview", a.handleAdminSbPreview)
 		ar.Get("/api/admin/sb/check", a.handleAdminSbCheck)
 		ar.Get("/api/admin/sb/port-check", a.handleAdminPortCheck)
 		ar.Get("/api/admin/sb/import-remote/list-files", a.handleAdminImportRemoteListFiles)
-		ar.Get("/api/admin/sb/import-remote/preview", a.handleAdminImportRemotePreview)
+		ar.With(a.requireStepUp(stepUpCertExport)).Get("/api/admin/sb/import-remote/preview", a.handleAdminImportRemotePreview)
 
 		// server management (multi-server sing-box orchestration)
 		ar.Get("/api/admin/servers", a.handleAdminListServers)
-		ar.Post("/api/admin/servers", a.handleAdminCreateServer)
+		ar.With(a.requireStepUp(stepUpSSH)).Post("/api/admin/servers", a.handleAdminCreateServer)
 		// Before /{id}: chi would otherwise parse "reorder" as a server id.
 		ar.Post("/api/admin/servers/reorder", a.handleAdminReorderServers)
-		ar.Put("/api/admin/servers/{id}", a.handleAdminUpdateServer)
-		ar.Delete("/api/admin/servers/{id}", a.handleAdminDeleteServer)
+		ar.With(a.requireStepUp(stepUpSSH)).Put("/api/admin/servers/{id}", a.handleAdminUpdateServer)
+		ar.With(a.requireStepUp(stepUpSSH)).Delete("/api/admin/servers/{id}", a.handleAdminDeleteServer)
 		ar.Post("/api/admin/servers/{id}/test", a.handleAdminTestServer)
 		ar.Post("/api/admin/servers/{id}/rebuild", a.handleAdminRebuildServer)
 		// Recover from a legitimately changed host key (reinstalled/replaced node).
-		ar.Post("/api/admin/servers/{id}/clear-host-key", a.handleAdminClearServerHostKey)
+		ar.With(a.requireStepUp(stepUpSSH)).Post("/api/admin/servers/{id}/clear-host-key", a.handleAdminClearServerHostKey)
 		ar.Get("/api/admin/ssh-keys", a.handleAdminListSSHKeys)
 		ar.Put("/api/admin/servers/{id}/monitor", a.handleUpdateServerMonitor)
 		ar.Put("/api/admin/servers/{id}/traffic-calibration", a.handleCalibrateServerTraffic)
@@ -438,7 +445,7 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/monitor/servers/{id}/metrics", a.handleServerMetrics)
 		ar.Get("/api/admin/monitor/servers/{id}/traffic-status", a.handleServerTrafficStatus)
 		ar.Get("/api/admin/monitor/servers/{id}/traffic-analysis", a.handleServerTrafficAnalysis)
-		ar.Post("/api/admin/monitor/servers/{id}/probe/upgrade", a.handleAdminProbeUpgrade)
+		ar.With(a.requireStepUp(stepUpUpdate)).Post("/api/admin/monitor/servers/{id}/probe/upgrade", a.handleAdminProbeUpgrade)
 		ar.Get("/api/admin/monitor/health-timeline", a.handleHealthTimeline)
 		ar.Get("/api/admin/monitor/heatmap", a.handleMonitorHeatmap)
 		ar.Get("/api/admin/monitor/alerts", a.handleMonitorAlerts)
@@ -466,7 +473,7 @@ func (a *API) Router() http.Handler {
 		// users + stats (Phase 5)
 		ar.Get("/api/admin/users", a.handleAdminListUsers)
 		ar.Post("/api/admin/users", a.handleAdminCreateUser)
-		ar.Put("/api/admin/users/{id}", a.handleAdminUpdateUser)
+		ar.With(a.requireStepUp(stepUpUsers)).Put("/api/admin/users/{id}", a.handleAdminUpdateUser)
 
 		// user groups — who may buy a package (≠ node-groups above)
 		ar.Get("/api/admin/user-groups", a.handleAdminListUserGroups)
@@ -489,8 +496,8 @@ func (a *API) Router() http.Handler {
 		// Upstream provider accounts are configured and queried only by an admin
 		// session. These routes never expose stored credentials.
 		ar.Get("/api/admin/upstreams", a.handleAdminGetUpstreams)
-		ar.Put("/api/admin/upstreams/{provider}", a.handleAdminPutUpstream)
-		ar.Delete("/api/admin/upstreams/{provider}", a.handleAdminDeleteUpstream)
+		ar.With(a.requireStepUp(stepUpSettings)).Put("/api/admin/upstreams/{provider}", a.handleAdminPutUpstream)
+		ar.With(a.requireStepUp(stepUpSettings)).Delete("/api/admin/upstreams/{provider}", a.handleAdminDeleteUpstream)
 		ar.Post("/api/admin/upstreams/{provider}/refresh", a.handleAdminRefreshUpstream)
 
 		ar.Get("/api/admin/reg-codes", a.handleAdminListRegCodes)

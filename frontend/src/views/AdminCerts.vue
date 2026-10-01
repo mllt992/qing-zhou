@@ -250,7 +250,7 @@ const showExport = ref(false)
 const exp = reactive({ name: '', certificate: '', key: '' })
 async function exportCert(c: any) {
   try {
-    const data = await apiGet<any>(`/api/admin/certs/${c.id}/export`)
+    const data = await apiPost<any>(`/api/admin/certs/${c.id}/export`)
     exp.name = c.name; exp.certificate = data?.certificate || ''; exp.key = data?.key || ''
     showExport.value = true
   } catch (e: any) { message.error(e.message) }
