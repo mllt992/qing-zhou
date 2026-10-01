@@ -10,26 +10,36 @@
   </n-card>
 </template>
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onUnmounted, ref } from 'vue'
 import { NCard, NInput, NButton } from 'naive-ui'
-import { apiPost } from '@/api'
+import { apiGet, apiPost } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import type { User } from '@/stores/auth'
 const emit = defineEmits<{ redeemed: [] }>()
 const auth = useAuthStore()
 const code = ref(''), busy = ref(false), error = ref(''), success = ref('')
+let active = true
+onUnmounted(() => { active = false })
 async function redeem() {
-  if (busy.value || !code.value.trim()) return
+  if (busy.value || !code.value.trim() || !auth.user || !active) return
+  const userID = auth.user.id, token = auth.token
+  const stillCurrent = () => active && auth.user?.id === userID && auth.token === token
   busy.value = true; error.value = ''; success.value = ''
   try {
     const result = await apiPost<{ balance: number; points: number }>('/api/user/points/redeem', { code: code.value.trim() })
+    if (!stillCurrent()) return
     if (auth.user) auth.user.points = result.balance
     code.value = ''; success.value = `已到账 ${result.points} 积分，当前余额 ${result.balance}`
     emit('redeemed')
   } catch (e: unknown) {
+    if (!stillCurrent()) return
     error.value = e instanceof Error ? e.message : '兑换失败，请稍后重试或联系管理员'
     // A lost response can follow a committed redemption. Do not auto-repeat the
     // write; refresh the balance and let the ledger establish what happened.
-    await auth.fetchMe()
-  } finally { busy.value = false }
+    try {
+      const refreshed = await apiGet<User>('/api/auth/me')
+      if (stillCurrent() && refreshed?.id === userID) auth.user = refreshed
+    } catch { /* Preserve the redemption error; an unavailable refresh is not a new write. */ }
+  } finally { if (active) busy.value = false }
 }
 </script>
