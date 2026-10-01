@@ -145,7 +145,7 @@ jobs:
       # against the current 1.14.x stable at each release.
       - name: Build sing-box with v2ray_api
         env:
-          SB_VERSION: v1.14.0
+          SB_VERSION: v1.14.2
         run: |
           set -e
           git clone --depth 1 --branch "$SB_VERSION" https://github.com/SagerNet/sing-box.git /tmp/sing-box
@@ -166,6 +166,14 @@ jobs:
           # Fail the release rather than ship a binary that silently can't meter.
           ./out/sing-box-linux-amd64 version | tee /dev/stderr | grep -q with_v2ray_api \
             || { echo "::error::built sing-box lacks with_v2ray_api"; exit 1; }
+
+      # Check exactly the metering-enabled binary that will be published, against
+      # the panel's generated server configuration (including v2ray_api).
+      - name: Check generated sing-box configuration
+        env:
+          QZ_SINGBOX_TEST_BIN: ${{ github.workspace }}/out/sing-box-linux-amd64
+          QZ_SINGBOX_REQUIRE_STATS: "1"
+        run: go test ./internal/singbox -run TestGeneratedServerConfigPassesSingboxCheck -count=1
 
       - name: Checksums
         run: (cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)

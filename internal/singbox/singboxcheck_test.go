@@ -61,13 +61,23 @@ func TestGeneratedServerConfigPassesSingboxCheck(t *testing.T) {
 		t.Skip("set QZ_SINGBOX_TEST_BIN to a sing-box binary to run this")
 	}
 	raw := serverFixture(t)
-	// The official release build has no with_v2ray_api tag, and its absence is
-	// unrelated to what this test is about.
+	// Official binaries can still exercise the proxy configuration. Release
+	// validation requires metering and must check the FULL generated config.
+	version, err := exec.Command(bin, "version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("sing-box version: %v: %s", err, version)
+	}
+	hasStats := strings.Contains(string(version), "with_v2ray_api")
+	if os.Getenv("QZ_SINGBOX_REQUIRE_STATS") == "1" && !hasStats {
+		t.Fatal("release sing-box binary lacks with_v2ray_api")
+	}
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("generated config is not valid JSON: %v", err)
 	}
-	delete(cfg, "experimental")
+	if !hasStats {
+		delete(cfg, "experimental")
+	}
 	trimmed, _ := json.MarshalIndent(cfg, "", "  ")
 
 	path := filepath.Join(t.TempDir(), "config.json")
