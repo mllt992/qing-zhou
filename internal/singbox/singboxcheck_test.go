@@ -36,12 +36,46 @@ func serverFixture(t *testing.T) []byte {
 		InboundTags: []string{"relayed-in"},
 	}
 	raw, err := GenerateConfigWithOptions(json.RawMessage(DefaultBaseConfig), ibs,
-		Options{BlockPrivate: true, Relays: []Relay{relay}})
+		Options{BlockPrivate: true, Relays: []Relay{relay}, V2RayListen: "127.0.0.1:18080"})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
+	var metering struct {
+		Experimental struct {
+			V2RayAPI struct {
+				Listen string `json:"listen"`
+				Stats  struct {
+					Enabled bool     `json:"enabled"`
+					Users   []string `json:"users"`
+				} `json:"stats"`
+			} `json:"v2ray_api"`
+		} `json:"experimental"`
+	}
+	if err := json.Unmarshal(raw, &metering); err != nil {
+		t.Fatal(err)
+	}
+	api := metering.Experimental.V2RayAPI
+	if api.Listen != "127.0.0.1:18080" || !api.Stats.Enabled {
+		t.Fatalf("fixture must exercise enabled v2ray_api metering: %s", raw)
+	}
+	wantUsers := map[string]bool{"tester": false, "px_0123456789abcdef": false}
+	for _, name := range api.Stats.Users {
+		if _, ok := wantUsers[name]; !ok {
+			t.Fatalf("unexpected metered user %q", name)
+		}
+		wantUsers[name] = true
+	}
+	for name, seen := range wantUsers {
+		if !seen {
+			t.Fatalf("missing metered user %q", name)
+		}
+	}
 	return raw
 }
+
+// Always runs in ordinary CI as well: the external binary gate must never
+// silently pass a fixture that does not generate a metering API block.
+func TestGeneratedServerFixtureIncludesMetering(t *testing.T) { serverFixture(t) }
 
 // TestGeneratedServerConfigPassesSingboxCheck runs the real binary over the
 // config a node would actually receive.
@@ -61,13 +95,23 @@ func TestGeneratedServerConfigPassesSingboxCheck(t *testing.T) {
 		t.Skip("set QZ_SINGBOX_TEST_BIN to a sing-box binary to run this")
 	}
 	raw := serverFixture(t)
-	// The official release build has no with_v2ray_api tag, and its absence is
-	// unrelated to what this test is about.
+	// Official binaries can still exercise the proxy configuration. Release
+	// validation requires metering and must check the FULL generated config.
+	version, err := exec.Command(bin, "version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("sing-box version: %v: %s", err, version)
+	}
+	hasStats := strings.Contains(string(version), "with_v2ray_api")
+	if os.Getenv("QZ_SINGBOX_REQUIRE_STATS") == "1" && !hasStats {
+		t.Fatal("release sing-box binary lacks with_v2ray_api")
+	}
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("generated config is not valid JSON: %v", err)
 	}
-	delete(cfg, "experimental")
+	if !hasStats {
+		delete(cfg, "experimental")
+	}
 	trimmed, _ := json.MarshalIndent(cfg, "", "  ")
 
 	path := filepath.Join(t.TempDir(), "config.json")

@@ -85,6 +85,9 @@ SYSCTL
 # 而面板正是靠它读取每个用户的流量：装官方版的节点，流量永远统计不到、配额
 # 也永远不会生效，且界面上看不出异常（流量恒为 0）。
 QZ_REPO=${QZ_REPO:-mllt992/qing-zhou}
+# Keep the emergency official fallback aligned with release.yml; never jump to
+# an unreviewed stable/minor release merely because upstream latest moved.
+QZ_SB_FALLBACK_VERSION=v1.14.2
 
 install_singbox() {
   local arch url tmp
@@ -113,10 +116,7 @@ install_singbox() {
 # 回退路径：官方 release。能跑代理，但统计不了流量。
 install_singbox_upstream() {
   local arch=$1 tmp=$2 tag ver url
-  info "查询 sing-box 最新版本…"
-  tag=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest \
-        | grep -oE '"tag_name":\s*"v[^"]+"' | head -1 | grep -oE 'v[0-9.]+') \
-        || die "无法获取版本（网络/GitHub 受限？可手动装后重跑本脚本检测）"
+  tag=$QZ_SB_FALLBACK_VERSION
   ver=${tag#v}
   url="https://github.com/SagerNet/sing-box/releases/download/${tag}/sing-box-${ver}-linux-${arch}.tar.gz"
   info "下载 $tag ($arch)…"
