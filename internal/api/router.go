@@ -308,6 +308,7 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/tokens", a.handleAdminListAPITokens)
 		ar.Post("/api/admin/tokens", a.handleAdminCreateAPIToken)
 		ar.Delete("/api/admin/tokens/{id}", a.handleAdminRevokeAPIToken)
+		ar.Get("/api/admin/onboarding", a.handleAdminOnboarding)
 		ar.Get("/api/admin/settings", a.handleGetSettings)
 		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Get("/api/admin/oauth2", a.handleGetOAuth)
 		ar.With(a.rejectAPIToken, a.requireOAuthAdmin).Put("/api/admin/oauth2", a.handlePutOAuth)

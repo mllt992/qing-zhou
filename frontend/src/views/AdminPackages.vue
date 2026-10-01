@@ -54,7 +54,7 @@
           </div>
         </div>
       </div>
-      <n-empty v-else-if="!loading" description="暂无套餐" style="padding:40px 0;" />
+      <n-empty v-else-if="!loading" description="下一步：创建套餐并绑定包含节点的分组，再上架给用户" style="padding:40px 0;"><template #extra><n-button @click="openForm()">创建套餐</n-button></template></n-empty>
     </n-spin>
 
     <n-modal v-model:show="showForm" preset="card" :title="editing ? '编辑套餐' : '创建套餐'" style="max-width:520px;">

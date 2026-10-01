@@ -23,6 +23,7 @@
     </div>
 
     <!-- 管理员登录后第一屏。普通用户看不到各机器探针。 -->
+    <AdminOnboarding v-if="auth.isAdmin" />
     <MachineHealthStrip v-if="auth.isAdmin" />
 
     <!-- 状态提醒：按套餐维度判定，不再拿单一 expiry_at 代表整个账号 -->
@@ -158,6 +159,7 @@ import { useRouter } from 'vue-router'
 import { NCard, NAlert, NButton, NList, NListItem, NThing, NTag, NRadioGroup, NRadioButton, NModal, NSpace, NSpin, NIcon } from 'naive-ui'
 import { LinkOutline, CartOutline, ReceiptOutline, RefreshOutline } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
+import AdminOnboarding from '@/components/AdminOnboarding.vue'
 import MachineHealthStrip from '@/components/MachineHealthStrip.vue'
 import { useConfigStore } from '@/stores/config'
 import { apiGet, apiList } from '@/api'

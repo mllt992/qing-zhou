@@ -10,6 +10,7 @@
                :input-props="{ 'aria-label': '搜索设置' }" @keydown.enter="openFirstSearchResult" />
     </div>
 
+    <n-button size="small" quaternary style="margin-bottom:12px;" @click="router.push({ path: '/admin', query: { checklist: '1' } })">重新打开部署检查清单</n-button>
     <div class="settings-layout">
       <aside class="settings-nav" aria-label="设置分区导航">
         <template v-if="settingsSearch.trim()">

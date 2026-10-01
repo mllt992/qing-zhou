@@ -150,7 +150,7 @@
               </n-empty>
             </n-collapse-item>
           </n-collapse>
-          <n-empty v-else-if="!loading" :description="inbSearch ? '无匹配入站' : '暂无入站'" style="padding:40px 0;" />
+          <n-empty v-else-if="!loading" :description="inbSearch ? '无匹配入站' : '下一步：创建入站，并配置节点监听与 TLS / Reality'" style="padding:40px 0;"><template v-if="!inbSearch" #extra><n-button @click="openInbound()">创建入站</n-button></template></n-empty>
         </n-spin>
       </n-tab-pane>
 

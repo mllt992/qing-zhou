@@ -33,7 +33,7 @@
             <span class="nv-ver">{{ n.version || '—' }}</span>
             <n-tag v-if="n.too_old" type="error" size="tiny" :bordered="false">版本过低</n-tag>
             <n-tag v-else-if="!n.version" type="default" size="tiny" :bordered="false">未知</n-tag>
-            <n-tag v-if="n.version && !n.has_v2ray_api" type="warning" size="tiny" :bordered="false">无流量统计</n-tag>
+            <n-tag v-if="n.version && !n.has_v2ray_api" type="error" size="tiny" :bordered="false">缺少 with_v2ray_api</n-tag>
           </div>
           <div class="nv-side">
             <span v-if="n.checked_at" class="nv-time">{{ fmtDateTime(n.checked_at) }}</span>
@@ -51,7 +51,7 @@
           </div>
           <div v-if="n.error" class="nv-err">探测失败：{{ n.error }}</div>
           <div v-else-if="n.version && !n.has_v2ray_api" class="nv-err">
-            该版本不含 <code>v2ray_api</code> 插件 —— 这台机器的流量<b>统计不到</b>，配额也不会生效（界面上一直显示 0）。
+            该版本不含 <code>with_v2ray_api</code> 插件 —— 这台机器的流量<b>统计不到</b>，配额也不会生效（界面上一直显示 0）。
             点「重装」换成面板发布的版本即可；官方发布版不带这个插件。
           </div>
         </div>
@@ -84,7 +84,7 @@
           </div>
         </div>
       </div>
-      <n-empty v-else-if="!loading" description="暂无服务器" style="padding:40px 0;" />
+      <n-empty v-else-if="!loading" description="下一步：添加服务器，或在面板本机安装 sing-box 后重新检测" style="padding:40px 0;"><template #extra><n-button @click="openForm()">添加服务器</n-button></template></n-empty>
     </n-spin>
 
     <n-modal v-model:show="showForm" preset="card" :title="editing?'编辑服务器':'添加服务器'" style="max-width:560px;">

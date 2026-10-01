@@ -13,6 +13,7 @@
     </div>
 
     <!-- 机器健康：管理员进管理概览第一眼扫的是各机器探针，不是运营 KPI。 -->
+    <AdminOnboarding />
     <MachineHealthStrip />
 
     <!-- KPI -->
@@ -237,6 +238,7 @@ import * as echarts from 'echarts'
 import { apiGet, apiList } from '@/api'
 import { fmtBytes, fmtTotal, fmtDate, timeAgo } from '@/utils/format'
 import AdminUsageReport from '@/components/AdminUsageReport.vue'
+import AdminOnboarding from '@/components/AdminOnboarding.vue'
 import MachineHealthStrip from '@/components/MachineHealthStrip.vue'
 
 const message = useMessage()
