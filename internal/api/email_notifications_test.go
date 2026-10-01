@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"qingzhou/internal/mailer"
 	"qingzhou/internal/store"
 )
 
@@ -166,5 +167,17 @@ func TestBusinessEmailDisabledDoesNotBlockPasswordReset(t *testing.T) {
 	st.DB().QueryRow(`SELECT COUNT(*) FROM email_tokens WHERE user_id=? AND purpose='reset'`, uid).Scan(&tokens)
 	if tokens != 1 {
 		t.Fatal("system reset did not create its email token")
+	}
+}
+
+func TestEmailReminderUncertainSMTPAcceptanceDoesNotRetry(t *testing.T) {
+	a, st, uid, _ := emailReminderFixture(t)
+	insertPlan(t, st, uid, "quota", 100<<30, 90<<30, time.Now().Unix()+30*86400)
+	attempts := 0
+	a.mailSendFn = func([]string, string, string) error { attempts++; return mailer.ErrDeliveryUncertain }
+	a.sweepEmailNotifies()
+	a.sweepEmailNotifies()
+	if attempts != 1 {
+		t.Fatalf("uncertain delivery retried %d times", attempts)
 	}
 }

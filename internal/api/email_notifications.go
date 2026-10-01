@@ -2,12 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"qingzhou/internal/mailer"
 	"qingzhou/internal/store"
 )
 
@@ -161,6 +163,10 @@ func (a *API) sendBusinessReminder(u *store.User, kind, subject, title, content 
 	title, content = renderManualNotificationText(title, content, vars)
 	mailSubject, body := renderManualEmailNotification(a.siteName(), title, content)
 	if err := a.sendManualEmail([]string{live.Email.String}, mailSubject, body); err != nil {
+		if errors.Is(err, mailer.ErrDeliveryUncertain) {
+			log.Printf("email reminder: user %d SMTP acceptance unknown; retaining claim to avoid duplicate delivery", u.ID)
+			return
+		}
 		_ = a.st.ClearNotifyChannel(u.ID, "email", kind, subject)
 		log.Printf("email reminder: user %d delivery failed", u.ID)
 	}

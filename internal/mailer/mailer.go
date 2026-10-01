@@ -4,10 +4,12 @@ package mailer
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"mime"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -18,6 +20,10 @@ import (
 // (minutes). The HTTP middleware's request timeout cannot interrupt these blocking
 // net/smtp calls, so the deadline must live here.
 const smtpTimeout = 20 * time.Second
+
+// ErrDeliveryUncertain means DATA was written, but the acceptance reply was
+// lost. Automatic callers must not blindly resend an email that may be queued.
+var ErrDeliveryUncertain = errors.New("SMTP DATA acceptance is uncertain")
 
 type Mailer struct {
 	Host     string
@@ -137,9 +143,16 @@ func deliver(c *smtp.Client, auth smtp.Auth, from string, to []string, msg []byt
 		return err
 	}
 	if err := w.Close(); err != nil {
-		return err
+		var rejection *textproto.Error
+		if errors.As(err, &rejection) && rejection.Code >= 400 {
+			return err
+		}
+		return fmt.Errorf("%w: %v", ErrDeliveryUncertain, err)
 	}
-	return c.Quit()
+	// DATA's final 250 is the delivery acceptance boundary. QUIT is only
+	// connection cleanup; its failure must never re-arm a business notification.
+	_ = c.Quit()
+	return nil
 }
 
 func buildMessage(fromAddr, fromName string, to []string, subject, htmlBody string) []byte {
