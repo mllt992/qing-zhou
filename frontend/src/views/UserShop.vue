@@ -7,14 +7,16 @@
       </div>
       <div class="balance-pill"><small>可用积分</small><b>{{ auth.user?.points || 0 }}</b><span>{{ yuan(auth.user?.points || 0) }}</span></div>
     </div>
-    <n-button size="small" @click="showRedeem = !showRedeem">使用兑换码获取积分</n-button>
-    <PointRedeem v-if="showRedeem" />
-    <div class="shop-summary">
-      <span><b>{{ packages.length }}</b> 件在售商品</span>
-      <span><b>{{ planCount }}</b> 个订阅计划</span>
-      <span><b>{{ trafficCount }}</b> 个流量包</span>
-      <span><b>{{ affordableCount }}</b> 件当前可购买</span>
+    <div class="shop-toolbar">
+      <div class="shop-summary">
+        <span><b>{{ packages.length }}</b> 件在售商品</span>
+        <span><b>{{ planCount }}</b> 个订阅计划</span>
+        <span><b>{{ trafficCount }}</b> 个流量包</span>
+        <span><b>{{ affordableCount }}</b> 件当前可购买</span>
+      </div>
+      <n-button class="shop-redeem" size="small" @click="showRedeem = !showRedeem">使用兑换码获取积分</n-button>
     </div>
+    <PointRedeem v-if="showRedeem" />
     <n-spin :show="loading">
     <div class="shop-grid">
       <div v-for="pkg in packages" :key="pkg.id" class="shop-card" :class="{ dim: !canAfford(pkg) }">
@@ -216,7 +218,9 @@ onMounted(async () => {
 .balance-pill small { grid-column:1 / -1; color:var(--text-3); font-size:10.5px; }
 .balance-pill b { color:var(--text); font-size:20px; font-variant-numeric:tabular-nums; }
 .balance-pill span { color:var(--text-3); font-size:11.5px; }
-.shop-summary { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+.shop-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.shop-summary { display:flex; flex-wrap:wrap; gap:8px; }
+.shop-redeem { flex-shrink:0; margin-left:auto; }
 .shop-summary span { padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:var(--bg-soft); color:var(--text-3); font-size:11.5px; }
 .shop-summary b { color:var(--text-2); }
 .shop-empty { max-width:760px; margin:54px auto 0; padding:34px 30px 22px; border:1px solid var(--border); border-radius:16px; background:var(--card); box-shadow:var(--shadow-sm); }
