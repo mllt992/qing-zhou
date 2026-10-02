@@ -324,3 +324,72 @@ func TestMeteringRelayRejectsUnmeteredEntryAndOverridingRule(t *testing.T) {
 		t.Fatal("earlier custom rule silently bypassed metering route")
 	}
 }
+
+// The public share-link builder defaults VLESS/Trojan to TLS. A relay must
+// instead match its managed listener, including TLS with an empty SNI.
+func TestRelayOutboundPreservesListenerTLS(t *testing.T) {
+	for _, protocol := range []string{"vless", "trojan"} {
+		for _, hasTLS := range []bool{false, true} {
+			for _, metered := range []bool{false, true} {
+				name := protocol + "/plain/legacy"
+				if hasTLS {
+					name = protocol + "/tls/legacy"
+				}
+				if metered {
+					name += "/metered"
+				}
+				t.Run(name, func(t *testing.T) {
+					st, _, serverID, _, inboundID, _ := meteringRelayFixture(t)
+					inbound, err := st.GetSbInbound(inboundID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					inbound.Type = protocol
+					if hasTLS {
+						inbound.TlsID, err = st.SaveSbTls(&SbTls{ServerID: serverID, Name: "test TLS", Mode: "tls", ServerJSON: `{"enabled":true}`, ClientJSON: `{}`})
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					var identity *singbox.User
+					if metered {
+						identity = &singbox.User{Name: "fixture-relay", UUID: "11111111-1111-1111-1111-111111111111", Password: "fixture-only"}
+					}
+					out, err := st.relayOutboundWithIdentity(inbound, map[int64]*Server{}, map[int64]*SbTls{}, identity, "test-relay")
+					if err != nil {
+						t.Fatal(err)
+					}
+					tls, _ := out["tls"].(map[string]any)
+					if (tls["enabled"] == true) != hasTLS {
+						t.Fatalf("relay TLS enabled=%v, listener has TLS=%v", tls["enabled"], hasTLS)
+					}
+					if tls["insecure"] == true {
+						t.Fatal("TLS verification was weakened")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRelayOutboundDoesNotStripInlineTLS(t *testing.T) {
+	for _, protocol := range []string{"vless", "trojan"} {
+		t.Run(protocol, func(t *testing.T) {
+			st, _, _, _, inboundID, _ := meteringRelayFixture(t)
+			inbound, err := st.GetSbInbound(inboundID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inbound.Type = protocol
+			inbound.Options = `{"tls":{"enabled":true}}`
+			out, err := st.relayOutboundWithIdentity(inbound, map[int64]*Server{}, map[int64]*SbTls{}, nil, "test-relay")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tls, _ := out["tls"].(map[string]any)
+			if tls["enabled"] != true || tls["insecure"] == true {
+				t.Fatalf("inline TLS was removed or weakened: %v", tls)
+			}
+		})
+	}
+}

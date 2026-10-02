@@ -463,6 +463,16 @@ func (s *Store) relayOutboundWithIdentity(landing *SbInbound, serverCache map[in
 	if err != nil {
 		return nil, err
 	}
+	// Public VLESS/Trojan share links assume TLS, but managed relay listeners
+	// can explicitly have no TLS profile (for example a private-network hop).
+	// Preserve the actual listener here instead of sending a TLS ClientHello
+	// to a plaintext protocol parser. Never infer this from SNI, and never strip
+	// TLS from an inbound that references a TLS profile or carries an inline
+	// TLS block in its advanced options (even an unrecognized one).
+	_, inlineTLS := opts["tls"]
+	if landing.TlsID == 0 && !inlineTLS && (landing.Type == "vless" || landing.Type == "trojan") {
+		delete(ob, "tls")
+	}
 	ob["tag"] = outboundTag
 	return ob, nil
 }
