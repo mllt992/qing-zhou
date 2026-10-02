@@ -2,25 +2,33 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
+const monitor = await readFile(new URL('../src/views/AdminMonitor.vue', import.meta.url), 'utf8')
+const homepage = await readFile(new URL('../src/views/Monitor.vue', import.meta.url), 'utf8')
+const settings = await readFile(new URL('../src/views/AdminSettings.vue', import.meta.url), 'utf8')
 const overview = await readFile(new URL('../src/views/AdminOverview.vue', import.meta.url), 'utf8')
 const dash = await readFile(new URL('../src/views/UserDashboard.vue', import.meta.url), 'utf8')
 const strip = await readFile(new URL('../src/components/MachineHealthStrip.vue', import.meta.url), 'utf8')
 const detail = await readFile(new URL('../src/views/AdminMonitorDetail.vue', import.meta.url), 'utf8')
 const route = await readFile(new URL('../../internal/api/router.go', import.meta.url), 'utf8')
 
-test('admin overview leads with the multi-machine health strip', () => {
-  const head = overview.indexOf('管理概览')
-  const stripAt = overview.indexOf('<MachineHealthStrip')
-  const kpi = overview.indexOf('<!-- KPI -->')
-  assert.ok(head > 0 && stripAt > head && kpi > stripAt)
-  assert.match(overview, /import MachineHealthStrip/)
+test('health belongs to server monitoring and never loads on admin overview', () => {
+  assert.doesNotMatch(overview, /MachineHealthStrip|AdminOnboarding/)
+  assert.match(monitor, /<MachineHealthStrip \/>/)
+  assert.match(monitor, /import MachineHealthStrip/)
 })
 
-test('the console an admin lands on shows the same strip only for admins', () => {
-  const head = dash.indexOf('控制台')
-  const stripAt = dash.indexOf('<MachineHealthStrip v-if="auth.isAdmin"')
-  const kpi = dash.indexOf('<!-- 核心指标 -->')
-  assert.ok(head > 0 && stripAt > head && kpi > stripAt)
+test('homepage and console health require both administrator status and explicit opt-in', () => {
+  for (const source of [homepage, dash]) {
+    assert.match(source, /<MachineHealthStrip v-if="auth.isAdmin && config.config.homepage_machine_health"/)
+  }
+  assert.doesNotMatch(dash, /AdminOnboarding/)
+  assert.match(settings, /v-model:value="form.homepage_machine_health" checked-value="true" unchecked-value="false"/)
+})
+
+test('deployment checklist has a dedicated lazy-mounted settings section', () => {
+  assert.match(settings, /id: 'settings-onboarding', label: '部署检查清单'/)
+  assert.match(settings, /<AdminOnboarding v-if="activeSectionId === 'settings-onboarding'"/)
+  assert.doesNotMatch(settings, /重新打开部署检查清单/)
 })
 
 test('strip color is probe presence and traffic is only a shade', () => {

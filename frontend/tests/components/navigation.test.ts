@@ -41,6 +41,20 @@ describe('admin navigation accessibility', () => {
       wrapper.unmount()
     })
   }
+  for (const mobile of [false, true]) {
+    it(`places upstream management directly after registration codes on ${mobile ? 'mobile' : 'desktop'}`, async () => {
+      const { wrapper } = await renderNavigation(mobile)
+      if (mobile) {
+        await wrapper.get('button[aria-label="菜单"]').trigger('click')
+        await flushPromises()
+      }
+      const nav = document.querySelector('nav[aria-label="主导航"]')!
+      const labels = Array.from(nav.querySelectorAll('.n-menu-item-content-header')).map(el => el.textContent)
+      expect(labels.indexOf('注册码')).toBeGreaterThan(-1)
+      expect(labels.indexOf('上游管理')).toBe(labels.indexOf('注册码') + 1)
+      wrapper.unmount()
+    })
+  }
   it('home link is keyboard focusable and navigation keeps the SPA route', async () => {
     const { wrapper, router } = await renderNavigation()
     const home = wrapper.get('a.sidebar-brand')

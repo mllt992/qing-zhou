@@ -12,10 +12,6 @@
       </n-radio-group>
     </div>
 
-    <!-- 机器健康：管理员进管理概览第一眼扫的是各机器探针，不是运营 KPI。 -->
-    <AdminOnboarding />
-    <MachineHealthStrip />
-
     <!-- KPI -->
     <div class="kpi-row">
       <div v-for="k in kpis" :key="k.key" class="kpi" :class="{ clickable: k.onClick }" @click="k.onClick?.()">
@@ -238,8 +234,6 @@ import * as echarts from 'echarts'
 import { apiGet, apiList } from '@/api'
 import { fmtBytes, fmtTotal, fmtDate, timeAgo } from '@/utils/format'
 import AdminUsageReport from '@/components/AdminUsageReport.vue'
-import AdminOnboarding from '@/components/AdminOnboarding.vue'
-import MachineHealthStrip from '@/components/MachineHealthStrip.vue'
 
 const message = useMessage()
 const usageReport = ref<any>(null)

@@ -104,6 +104,7 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		homeMode = "monitor"
 	}
 	homeURL, _ := a.st.GetSetting("homepage_url")
+	homeHealth, _ := a.st.GetSettingBool("homepage_machine_health")
 	helpMode, _ := a.st.GetSetting("help_docs_mode")
 	if helpMode != "external" {
 		helpMode = "builtin"
@@ -123,16 +124,17 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"email_enabled": a.mailerConfigured(),
 		// Same non-secret as email_enabled: anyone can observe it by talking
 		// to the bot. The account page uses it to hide a dead bind card.
-		"telegram_enabled":    a.telegramConfigured(),
-		"points_per_cny":      rate,
-		"site_name":           siteName,
-		"site_description":    siteDesc,
-		"homepage_mode":       homeMode,
-		"homepage_url":        homeURL,
-		"help_docs_mode":      helpMode,
-		"help_docs_url":       helpURL,
-		"brand_icon_data_uri": brandIcon,
-		"app_version":         version.Current(),
+		"telegram_enabled":        a.telegramConfigured(),
+		"points_per_cny":          rate,
+		"site_name":               siteName,
+		"site_description":        siteDesc,
+		"homepage_mode":           homeMode,
+		"homepage_url":            homeURL,
+		"homepage_machine_health": homeHealth,
+		"help_docs_mode":          helpMode,
+		"help_docs_url":           helpURL,
+		"brand_icon_data_uri":     brandIcon,
+		"app_version":             version.Current(),
 	})
 }
 

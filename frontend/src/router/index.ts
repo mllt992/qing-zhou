@@ -66,6 +66,11 @@ router.beforeEach(async (to) => {
   if (requiresAdmin && !auth.isAdmin) {
     return { name: 'monitor' }
   }
+  // Keep saved links to the former overview checklist useful after its move.
+  if (to.name === 'admin' && to.query.checklist === '1') {
+    const { checklist, ...query } = to.query
+    return { name: 'admin-settings', query: { ...query, section: 'onboarding' }, replace: true }
+  }
 })
 
 export default router

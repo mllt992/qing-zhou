@@ -490,6 +490,9 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/stats/users", a.handleAdminUserStats)
 		ar.Get("/api/admin/stats/user/{id}/traffic", a.handleAdminUserTraffic)
 		// 用量分析：多选用户 × 任意时间范围 × 套餐维度
+		ar.Get("/api/admin/stats/usage/machine", a.handleAdminMachineUsage)
+		ar.Get("/api/admin/stats/audience", a.handleAdminAudience)
+		ar.Get("/api/admin/stats/audience/counts", a.handleAdminAudienceCounts)
 		ar.Get("/api/admin/stats/usage", a.handleAdminUsage)
 		ar.Get("/api/admin/stats/usage/users", a.handleAdminUsageUsers)
 		ar.Get("/api/admin/stats/usage/packages", a.handleAdminUsagePackages)

@@ -17,6 +17,7 @@ export interface SiteConfig {
   points_per_cny: number
   homepage_mode: string
   homepage_url: string
+  homepage_machine_health: boolean
   help_docs_mode: string
   help_docs_url: string
   brand_icon_data_uri: string
@@ -38,6 +39,7 @@ export const useConfigStore = defineStore('config', () => {
     points_per_cny: 10,
     homepage_mode: 'monitor',
     homepage_url: '',
+    homepage_machine_health: false,
     help_docs_mode: 'builtin',
     help_docs_url: '',
     brand_icon_data_uri: '',

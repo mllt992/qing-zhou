@@ -23,6 +23,7 @@
             <n-card v-for="gv in groupedView" :key="gv.key" size="small" :title="gv.name" class="group-card">
               <template #header-extra>
                 <div class="group-actions">
+                  <n-button v-if="gv.group" size="tiny" @click="openAudience('group', gv.group.id, gv.name)">可用用户 {{ audienceCounts?.groups?.[gv.group.id] ?? (audienceCounts ? 0 : '—') }}</n-button>
                   <n-tag v-if="gv.group?.is_ai" size="tiny" type="success" :bordered="false">AI 路由</n-tag>
                   <n-tag size="tiny" :type="gv.isUngrouped ? 'default' : 'info'" :bordered="false">{{ gv.nodes.length }} 节点</n-tag>
                   <n-button size="tiny" type="primary" secondary @click="openNodeInGroup(gv.group)">＋ 添加节点</n-button>
@@ -46,6 +47,7 @@
                 >
                   <div class="lc-head">
                     <span class="lc-title">{{ r.name || '—' }}</span>
+                    <n-button size="tiny" @click="openAudience('node', r.id, r.name)">可用用户 {{ audienceCounts?.nodes?.[r.id] ?? (audienceCounts ? 0 : '—') }}</n-button>
                     <n-tag :type="r.enabled ? 'success' : 'default'" size="tiny" :bordered="false">{{ r.enabled ? '启用' : '禁用' }}</n-tag>
                   </div>
                   <div class="lc-meta">
@@ -324,6 +326,9 @@
         <n-button type="primary" block :loading="saving" @click="handleSaveSource">保存</n-button>
       </n-drawer-content>
     </n-drawer>
+    <n-modal v-model:show="audienceOpen" preset="card" :title="`${audienceTitle} · 可用用户`" style="width: min(960px, 94vw)">
+      <AdminAudience v-if="audienceOpen" :scope="audienceScope" :id="audienceID" />
+    </n-modal>
   </div>
 </template>
 
@@ -333,9 +338,22 @@ import {
   NTabs, NTabPane, NDrawer, NDrawerContent, NButton, NForm, NFormItem, NInput, NInputNumber,
   NSelect, NSwitch, NRadioGroup, NRadio, NTag, NSpin, NEmpty, NCard, NModal, useMessage
 } from 'naive-ui'
-import { apiList, apiPost, apiPut, apiDelete } from '@/api'
+import AdminAudience from '@/components/AdminAudience.vue'
+import { apiGet, apiList, apiPost, apiPut, apiDelete } from '@/api'
 import { timeAgo, fmtDateTime } from '@/utils/format'
 
+const audienceCounts = ref<any>(null)
+const audienceOpen = ref(false), audienceScope = ref<'node' | 'group'>('node'), audienceID = ref(0), audienceTitle = ref('')
+function openAudience(scope: 'node' | 'group', id: number, title: string) {
+  audienceScope.value = scope; audienceID.value = id; audienceTitle.value = title; audienceOpen.value = true
+}
+let audienceRequest = 0
+async function loadAudienceCounts() {
+  const seq = ++audienceRequest; audienceCounts.value = null
+  try { const data = await apiGet('/api/admin/stats/audience/counts'); if (seq === audienceRequest) audienceCounts.value = data }
+  catch { if (seq === audienceRequest) message.warning('可用用户人数加载失败，可点击查看或刷新重试') }
+}
+onUnmounted(() => { audienceRequest++ })
 const message = useMessage()
 const tab = ref('nodes')
 const loading = ref(false)
@@ -854,6 +872,7 @@ async function handleDeleteSource(id: number) {
 }
 
 async function load() {
+  void loadAudienceCounts()
   loading.value = true
   // 服务器/出口只用于链路拓扑的展示，取不到时降级为空数组，不影响节点管理主流程。
   // 但降级要说出来：出口列表为空会让每条带出口的链路都显示成「出口已失效」，

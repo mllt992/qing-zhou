@@ -17,8 +17,8 @@ test('upstream management page keeps provider queries separate and exposes no sa
   assert.doesNotMatch(source, /v-model:value="ociForm\.private_key"[^>]+show-password/)
 })
 
-test('upstream management is above admin overview in operations navigation', () => {
-  assert.ok(layout.indexOf("{ label: '上游管理'") < layout.indexOf("{ label: '管理概览'"))
+test('upstream management follows registration codes in operations navigation', () => {
+  assert.match(layout, /label: '注册码'[^\n]+\n\s*\{ label: '上游管理'/)
   assert.match(router, /path: 'admin\/upstreams'/)
 })
 

@@ -1,5 +1,11 @@
 <template>
   <div class="usage">
+    <AdminMachineUsage class="sec" />
+    <n-card title="套餐 · 当前可用用户" size="small" class="sec">
+      <n-select v-model:value="audiencePackage" :options="pkgOptions.filter(p => p.value !== -1)" placeholder="选择套餐，查看所有当前生效用户（含零用量）" clearable filterable />
+      <AdminAudience v-if="audiencePackage !== null" scope="package" :id="audiencePackage" />
+      <p class="scope">下方历史用量报表可按套餐筛选并查看用户排名；当前生效名单与历史实际消耗分别统计，过期套餐的历史消耗仍保留。</p>
+    </n-card>
     <!-- 控制条：时间口径 + 用户选择。两者共同决定下面所有数字，所以放在最上面
          而不是各图表各自带筛选，避免几块数据各说各的口径。 -->
     <n-card size="small" class="sec">
@@ -175,7 +181,10 @@
 </template>
 
 <script setup lang="ts">
+import AdminMachineUsage from './AdminMachineUsage.vue'
+import AdminAudience from './AdminAudience.vue'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+const audiencePackage = ref<number | null>(null)
 import { NCard, NRadioGroup, NRadioButton, NSelect, NButton, NSpin, NDatePicker, useMessage } from 'naive-ui'
 import * as echarts from 'echarts'
 import { apiGet, apiList } from '@/api'

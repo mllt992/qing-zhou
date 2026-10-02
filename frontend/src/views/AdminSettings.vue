@@ -10,7 +10,6 @@
                :input-props="{ 'aria-label': '搜索设置' }" @keydown.enter="openFirstSearchResult" />
     </div>
 
-    <n-button size="small" quaternary style="margin-bottom:12px;" @click="router.push({ path: '/admin', query: { checklist: '1' } })">重新打开部署检查清单</n-button>
     <div class="settings-layout">
       <aside class="settings-nav" aria-label="设置分区导航">
         <template v-if="settingsSearch.trim()">
@@ -42,6 +41,7 @@
         {{ loadError }}。为防止空表单覆盖原配置，“保存设置”已禁用。请稍候重试；如果持续失败，请检查服务日志和数据库路径。
         <n-button size="small" :loading="loading" class="settings-retry" @click="loadSettings">重新读取</n-button>
       </n-alert>
+    <AdminOnboarding v-if="activeSectionId === 'settings-onboarding'" id="settings-onboarding" class="settings-section" />
     <OAuth2Settings v-show="activeSectionId === 'settings-oauth'" />
     <n-spin :show="loading">
       <n-card v-show="activeSectionId === 'settings-basic'" id="settings-basic" class="settings-section" size="small">
@@ -191,6 +191,13 @@
           </n-form-item>
           <n-form-item v-if="form.homepage_mode === 'custom'" label="自定义 URL">
             <n-input v-model:value="form.homepage_url" placeholder="https://example.com" />
+          </n-form-item>
+          <n-form-item label="首页显示机器健康">
+            <div>
+              <n-switch v-model:value="form.homepage_machine_health" checked-value="true" unchecked-value="false"
+                        :disabled="!settingsLoaded" aria-label="首页显示机器健康" />
+              <div class="form-hint">默认关闭。开启后，首页监控大屏和控制台仅向已登录的管理员显示机器健康；普通用户和访客不可见。监控管理始终显示，不受此开关影响。</div>
+            </div>
           </n-form-item>
         </n-form>
       </n-card>
@@ -675,6 +682,7 @@
 
 <script setup lang="ts">
 import OAuth2Settings from '@/components/OAuth2Settings.vue'
+import AdminOnboarding from '@/components/AdminOnboarding.vue'
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { NAlert, NCard, NCheckbox, NForm, NFormItem, NInput, NInputGroup, NInputNumber, NSelect, NSwitch, NButton, NSpace, NSpin, useDialog, useMessage } from 'naive-ui'
@@ -696,7 +704,7 @@ const settingsGroups: SettingsGroup[] = [
     { id: 'settings-oauth', label: 'OAuth2 / OIDC', note: '认证中心登录', description: '配置认证中心，支持单点登录和已有账号绑定。此分区单独保存。', keywords: 'OAuth2 OIDC auth2 认证中心 Client ID Secret SSO' },
     { id: 'settings-basic', label: '基本设置', note: '注册与积分', description: '配置站点信息、注册规则和新用户默认权益。', keywords: '站点名称 描述 注册 邮箱验证 积分 流量 免费节点 凭据' },
     { id: 'settings-access', label: '访问地址', note: '面板与节点', description: '设置面板公开地址、节点连接地址和安装命令。', keywords: '域名 public base 节点 IP sing-box 安装 命令' },
-    { id: 'settings-home', label: '首页设置', note: '入口展示', description: '选择访客首页显示监控大屏或自定义页面。', keywords: '首页 监控 自定义 URL' },
+    { id: 'settings-home', label: '首页设置', note: '入口展示', description: '选择访客首页显示监控大屏或自定义页面。', keywords: '首页 监控 自定义 URL 机器健康 控制台' },
     { id: 'settings-help', label: '帮助中心', note: '内置或外部', description: '选择用户使用站内帮助文档或跳转到外部文档站点。', keywords: '帮助 文档 内置 外部 URL 跳转' },
   ] },
   { label: '用户与计费', sections: [
@@ -714,6 +722,7 @@ const settingsGroups: SettingsGroup[] = [
     { id: 'settings-runtime', label: '采集与同步', note: '节点负载', description: '调整探针采集、流量统计和健康检查频率。', keywords: '探针 采集 流量 统计 健康检查 同步 间隔 重建' },
   ] },
   { label: '系统维护', sections: [
+    { id: 'settings-onboarding', label: '部署检查清单', note: '部署状态与引导', description: '检查部署步骤并跳转到对应配置；完成后仍可随时查看。', keywords: '部署 检查 清单 安装 引导 onboarding' },
     { id: 'settings-update', label: '在线更新', note: '版本与令牌', description: '配置在线更新检查使用的 GitHub API 令牌。', keywords: '更新 GitHub Token API 限额' },
     { id: 'settings-backup', label: '数据备份', note: '一致性快照', description: '导出并托管包含全部业务数据的一致性数据库快照。', keywords: '备份 数据库 SQLite WAL 下载 恢复 R2 S3 对象存储 定时' },
   ] },
@@ -1515,6 +1524,7 @@ async function loadSettings() {
       form.brand_icon_data_uri ??= ''
       form.help_docs_mode = data.help_docs_mode === 'external' ? 'external' : 'builtin'
       form.help_docs_url ??= ''
+      form.homepage_machine_health = data.homepage_machine_health === 'true' ? 'true' : 'false'
       emailVerify.value = data.email_verify_required === 'true'
       pointsRate.value = parseInt(data.points_per_cny) || 10
       signupBonus.value = parseInt(data.signup_bonus_points) || 0

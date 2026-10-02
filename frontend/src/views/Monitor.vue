@@ -54,6 +54,8 @@
           </div>
         </div>
 
+        <MachineHealthStrip v-if="auth.isAdmin && config.config.homepage_machine_health" />
+
         <!-- 汇总卡片 -->
         <div class="summary-grid">
           <div class="summary-card">
@@ -326,6 +328,7 @@ import { useConfigStore } from '@/stores/config'
 import { fmtBytes, fmtUptime, timeAgo, pct } from '@/utils/format'
 import { useCountUp } from '@/utils/countup'
 import AppHeader from '@/components/AppHeader.vue'
+import MachineHealthStrip from '@/components/MachineHealthStrip.vue'
 import * as echarts from 'echarts'
 
 interface ServerMetrics {

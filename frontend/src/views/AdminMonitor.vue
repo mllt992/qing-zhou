@@ -3,6 +3,8 @@
     <h2 class="page-title">监控管理</h2>
     <p class="page-sub">服务器监控与告警</p>
 
+    <MachineHealthStrip />
+
     <!-- 汇总卡 -->
     <div class="sum-grid">
       <div class="sum-card">
@@ -282,6 +284,7 @@
 </template>
 
 <script setup lang="ts">
+import MachineHealthStrip from '@/components/MachineHealthStrip.vue'
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
 import {

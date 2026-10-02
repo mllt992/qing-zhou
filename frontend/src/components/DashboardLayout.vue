@@ -141,7 +141,6 @@ const infoItems: MenuOption[] = [
 ]
 
 const adminOpsItems: MenuOption[] = [
-  { label: '上游管理', key: '/admin/upstreams', icon: renderIcon(CloudOutline) },
   { label: '管理概览', key: '/admin', icon: renderIcon(SpeedometerOutline) },
   { label: '用户管理', key: '/admin/users', icon: renderIcon(PeopleOutline) },
   { label: '用户组', key: '/admin/user-groups', icon: renderIcon(PeopleCircleOutline) },
@@ -149,6 +148,7 @@ const adminOpsItems: MenuOption[] = [
   { label: '订单管理', key: '/admin/orders', icon: renderIcon(ReceiptOutline) },
   { label: '积分兑换码', key: '/admin/point-codes', icon: renderIcon(KeyOutline) },
   { label: '注册码', key: '/admin/reg-codes', icon: renderIcon(KeyOutline) },
+  { label: '上游管理', key: '/admin/upstreams', icon: renderIcon(CloudOutline) },
   { label: 'API Token', key: '/admin/api-tokens', icon: renderIcon(KeyOutline) },
 ]
 const adminNodeItems: MenuOption[] = [
