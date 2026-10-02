@@ -54,7 +54,15 @@ func startMeteringBox(t *testing.T, bin string, raw []byte, api string) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	t.Cleanup(func() { cancel(); <-done; log.Close() })
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		log.Close()
+		if t.Failed() {
+			output, _ := os.ReadFile(filepath.Join(dir, "box.log"))
+			t.Logf("sing-box fixture %s: %s", api, output)
+		}
+	})
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", api, 100*time.Millisecond)
@@ -125,8 +133,8 @@ func TestMeteringRelayRealSingboxTraffic(t *testing.T) {
 	}
 	body, err := io.ReadAll(response.Body)
 	response.Body.Close()
-	if err != nil || len(body) != 65536 {
-		t.Fatalf("relay response bytes=%d %v", len(body), err)
+	if err != nil || response.StatusCode != http.StatusOK || len(body) != 65536 {
+		t.Fatalf("relay response status=%s bytes=%d %v", response.Status, len(body), err)
 	}
 	aStats, bStats := sbstats.New(aAPI), sbstats.New(bAPI)
 	defer aStats.Close()
