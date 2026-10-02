@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"sort"
+	"strings"
 )
 
 // DefaultBaseConfig is the log/dns/route/outbounds template used when the admin
@@ -295,7 +296,7 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 		}
 		exp["v2ray_api"] = map[string]interface{}{
 			"listen": v2rayListen,
-			"stats":  map[string]interface{}{"enabled": true, "users": names},
+			"stats":  map[string]interface{}{"enabled": true, "users": names, "outbounds": meteringOutboundTags(relays)},
 		}
 		cfg["experimental"] = exp
 	}
@@ -570,4 +571,18 @@ func stripLegacyDomainStrategy(cfg map[string]interface{}) {
 			}
 		}
 	}
+}
+
+// Outbound observations are a second view of a link, not extra billable bytes.
+func meteringOutboundTags(relays []Relay) []string {
+	tags := []string{}
+	seen := map[string]bool{}
+	for _, r := range relays {
+		if tag, ok := r.Outbound["tag"].(string); ok && strings.HasPrefix(tag, "relay-link-") && !seen[tag] {
+			tags = append(tags, tag)
+			seen[tag] = true
+		}
+	}
+	sort.Strings(tags)
+	return tags
 }

@@ -29,6 +29,7 @@ func (s *Store) migrations() []migration {
 		{1, "legacy_baseline", s.migrateLegacyBaseline},
 		{2, "business_email_preferences", func(tx *sql.Tx) error { _, err := tx.Exec(emailNotificationSchema); return err }},
 		{3, "point_redemption_codes", func(tx *sql.Tx) error { _, err := tx.Exec(PointCodeSchema); return err }},
+		{4, "traffic_observation_ledger", func(tx *sql.Tx) error { _, err := tx.Exec(trafficLedgerSchema); return err }},
 	}
 }
 

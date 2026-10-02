@@ -1222,6 +1222,9 @@ func (a *API) StartMonitorTasks(ctx context.Context) {
 				// an admin happened to open the overview page, so on an unattended
 				// panel the table grew without bound (DB bloat, slow daily-traffic
 				// GROUP BYs, ever-costlier WAL checkpoints).
+				if err := a.st.PruneTrafficLedger(time.Now()); err != nil {
+					log.Printf("traffic ledger prune: %v", err)
+				}
 				if err := a.st.PruneTrafficSamples(35); err != nil {
 					log.Printf("traffic samples prune: %v", err)
 				}

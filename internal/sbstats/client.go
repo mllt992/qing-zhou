@@ -123,8 +123,17 @@ func (c *Client) Close() error {
 // (reset=true). Keys are the user names registered in
 // experimental.v2ray_api.stats.users.
 func (c *Client) QueryUserTraffic(ctx context.Context) (map[string]*Traffic, error) {
-	// Request: patterns=["user>>>"], reset=true → only user counters, reset them.
-	req := encodeQueryRequest("user>>>", true)
+	return c.queryTraffic(ctx, "user>>>", true, false)
+}
+
+// QueryTraffic includes diagnostic outbound counters. Non-user keys are
+// prefixed and must never be treated as quota identities.
+func (c *Client) QueryTraffic(ctx context.Context, reset bool) (map[string]*Traffic, error) {
+	return c.queryTraffic(ctx, "", reset, true)
+}
+
+func (c *Client) queryTraffic(ctx context.Context, pattern string, reset, all bool) (map[string]*Traffic, error) {
+	req := encodeQueryRequest(pattern, reset)
 	frame := frameMessage(req)
 
 	url := "http://" + c.addr + fullMethod
@@ -171,13 +180,20 @@ func (c *Client) QueryUserTraffic(ctx context.Context) (map[string]*Traffic, err
 	for name, val := range stats {
 		// name = user>>>NAME>>>traffic>>>uplink|downlink
 		parts := splitName(name)
-		if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
+		if len(parts) != 4 || (parts[0] != "user" && !(all && parts[0] == "outbound")) || parts[2] != "traffic" {
 			continue
 		}
-		t := out[parts[1]]
+		name := parts[1]
+		if parts[0] == "outbound" {
+			name = "outbound:" + name
+		}
+		if val < 0 {
+			return nil, fmt.Errorf("negative traffic counter")
+		}
+		t := out[name]
 		if t == nil {
 			t = &Traffic{}
-			out[parts[1]] = t
+			out[name] = t
 		}
 		switch parts[3] {
 		case "uplink":

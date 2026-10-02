@@ -1057,8 +1057,8 @@ func ValidateProxyUsername(name string) error {
 	if !proxyUsernameRe.MatchString(name) {
 		return errors.New("用户名需 2-64 位，仅限字母/数字/ _.@- ，且以字母或数字开头")
 	}
-	if strings.HasPrefix(name, "qz_") {
-		return errors.New("用户名不能以 qz_ 开头（系统保留前缀）")
+	if strings.HasPrefix(name, "qz_") || strings.HasPrefix(name, "qzr_") || strings.HasPrefix(name, "relay_") {
+		return errors.New("用户名不能以 qz_、qzr_ 或 relay_ 开头（系统保留前缀）")
 	}
 	return nil
 }
@@ -1233,12 +1233,21 @@ func (s *Store) AddUsageBatch(deltas map[string]UsageDelta) (int, error) {
 	return s.addUsageBatches(map[int64]map[string]UsageDelta{-1: deltas}, false)
 }
 
-// AddUsageBatchesByServer meters the same deltas as AddUsageBatch while also
-// retaining their collection source (0 = panel machine, >0 = remote server).
-// Billing writes and source attribution share a transaction/savepoint, so a
-// source chart can never claim bytes that failed to reach the user's quota.
+// AddUsageBatchesByServer journals each node result before applying it.
+// Service observations include relay and unknown identities; only normal
+// client identities may debit quotas. Use RecordTrafficPoll to replay an
+// existing result idempotently rather than assigning it a fresh ID.
 func (s *Store) AddUsageBatchesByServer(sources map[int64]map[string]UsageDelta) (int, error) {
-	return s.addUsageBatches(sources, true)
+	total := 0
+	var errs []error
+	for serverID, deltas := range sources {
+		n, err := s.RecordTrafficPoll(NewTrafficPoll(serverID, deltas))
+		total += n
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return total, errors.Join(errs...)
 }
 
 func canonicalUsageDeltas(deltas map[string]UsageDelta) map[string]UsageDelta {

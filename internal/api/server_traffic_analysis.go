@@ -128,13 +128,29 @@ func (a *API) handleServerTrafficAnalysis(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	service, err := a.st.ServerServiceTraffic(id, cycleStart.Unix())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "读取业务观测失败")
+		return
+	}
+	if a.sbctl != nil && service.Quality.LastSuccess > 0 && now.Unix()-service.Quality.LastSuccess > int64(2*a.sbctl.SyncInterval()/time.Second) {
+		service.Quality.Status = "stale"
+		service.UserCoverageComplete = false
+	}
 	usage := usageByServer[id]
+	projection := buildTrafficCapacity(now, nextReset, sv.TrafficLimitBytes, usage, attribution, recent)
+	if !service.UserCoverageComplete {
+		projection.Available = false
+		projection.EstimatedAdditionalUsers = 0
+		projection.Reason = "中转用户或统计覆盖不完整，暂不估算可新增人数"
+	}
 	ok(w, J{
+		"schema_version": 2, "service": service,
 		"server_id": id, "server_name": sv.Name,
 		"accounting_mode": sv.TrafficAccountingMode,
 		"cycle_start":     cycleStart.Unix(), "next_reset": nextReset.Unix(),
 		"limit_bytes": sv.TrafficLimitBytes, "usage": usage,
 		"daily": daily, "attribution": attribution,
-		"projection": buildTrafficCapacity(now, nextReset, sv.TrafficLimitBytes, usage, attribution, recent),
+		"projection": projection,
 	})
 }

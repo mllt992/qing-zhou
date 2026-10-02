@@ -100,7 +100,8 @@ type Controller struct {
 
 	remoteSlots chan struct{} // shared SSH budget for applies, probes and stats
 
-	mu sync.Mutex // serializes Rebuild
+	mu      sync.Mutex // serializes Rebuild
+	statsMu sync.Mutex // one authoritative collector per process
 
 	// syncInterval is the period of the Run loop in nanoseconds, published for
 	// callers that let a change ride that pass instead of forcing a rebuild. Zero
@@ -224,6 +225,7 @@ func (c *Controller) currentRestartPolicy() RestartCircuitPolicy {
 // notifyRestart reports one restart, if anyone is listening and this pass was
 // the periodic one.
 func (c *Controller) notifyRestart(periodic bool, serverID int64, name string) (opened bool, count int) {
+	c.recordMeteringRestart(serverID)
 	if !periodic {
 		return false, 0
 	}
@@ -277,6 +279,12 @@ func (c *Controller) desiredNeedsApply(serverID int64, cfg []byte, force bool) b
 }
 
 func (c *Controller) rememberDesired(serverID int64, cfg []byte) {
+	if metering, ok := c.st.(relayMeteringStore); ok {
+		if err := metering.RecordRelayConfigApplied(serverID, cfg); err != nil {
+			log.Printf("sbctl: could not persist relay readiness for server %d: %v", serverID, err)
+			return
+		}
+	}
 	c.desiredMu.Lock()
 	c.desiredHash[serverID] = sha256.Sum256(cfg)
 	c.desiredMu.Unlock()
@@ -594,21 +602,26 @@ func (c *Controller) invalidateRemoteCaches(serverID int64) {
 // applies it (validate + reload). Safe to call on every change; serialized.
 // When multi-server is configured, it iterates over all enabled remote servers
 // in addition to the local instance.
-func (c *Controller) Rebuild() error { return c.rebuild(false, true) }
+func (c *Controller) Rebuild() error { return c.rebuildUntilStable(false, true) }
 
 // rebuildPeriodic is the timer-driven pass. Restarts it causes are reported to
 // the restart observer; restarts from an admin's own edit are not, because a
 // node restarting right after someone changed it is the system working.
-func (c *Controller) rebuildPeriodic() error { return c.rebuild(true, false) }
+func (c *Controller) rebuildPeriodic() error { return c.rebuildUntilStable(true, false) }
 
 // reconcilePeriodic bypasses the desired-config cache. It still performs an
 // idempotent remote comparison, but verifies the node file and service instead
 // of assuming that an unchanged desired hash means the node stayed healthy.
-func (c *Controller) reconcilePeriodic() error { return c.rebuild(true, true) }
+func (c *Controller) reconcilePeriodic() error { return c.rebuildUntilStable(true, true) }
 
 func (c *Controller) rebuild(periodic, forceHealth bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if metering, ok := c.st.(relayMeteringStore); ok {
+		if err := metering.PrepareRelayMetering(); err != nil {
+			return err
+		}
+	}
 
 	// Build the entitlement map once (shared across all servers).
 	byTag, err := c.st.BuildUsersByTag(time.Now().Unix())
@@ -796,6 +809,10 @@ func (c *Controller) rebuild(periodic, forceHealth bool) error {
 // server entry — which may be on the local machine (applied directly) or a
 // remote host (applied via SSH).
 func (c *Controller) RebuildServer(serverID int64) error {
+	if metering, ok := c.st.(relayMeteringStore); ok && metering.RelayMeteringEnabled() {
+		c.invalidateRemoteCaches(serverID)
+		return c.Rebuild()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -909,51 +926,57 @@ func SSHConfigFor(sv *store.Server) *sshctl.ServerConfig {
 // A per-identity sum is correct across servers: bucket client_names are globally
 // unique, and a user reachable on two nodes should be charged for both.
 func (c *Controller) CollectStats(ctx context.Context) (int, error) {
-	sources := map[int64]map[string]store.UsageDelta{}
-	convert := func(m map[string]*sbstats.Traffic) map[string]store.UsageDelta {
-		deltas := map[string]store.UsageDelta{}
-		for name, t := range m {
-			if t.Up == 0 && t.Down == 0 {
-				continue
-			}
-			d := deltas[name]
-			d.Up += t.Up
-			d.Down += t.Down
-			deltas[name] = d
-		}
-		return deltas
-	}
-
+	c.statsMu.Lock()
+	defer c.statsMu.Unlock()
 	var errs []error
-	m, err := c.stats.QueryUserTraffic(ctx)
-	if err != nil {
+	applied := 0
+	if journal, ok := c.st.(interface{ RetryPendingTrafficPolls() (int, error) }); ok {
+		n, err := journal.RetryPendingTrafficPolls()
+		applied += n
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	sources := map[int64]map[string]store.UsageDelta{}
+	if _, ok := c.st.(trafficJournal); ok {
+		fetch, capable := c.stats.(snapshotFetcher)
+		if !capable {
+			fetch = legacySnapshotFetcher{c.stats}
+		}
+		n, err := c.collectTrafficSnapshot(ctx, store.LocalNodeID, nil, fetch)
+		applied += n
+		if err != nil {
+			errs = append(errs, fmt.Errorf("local stats: %w", err))
+			c.recordTrafficFailure(store.LocalNodeID, "unavailable")
+		}
+	} else if m, err := c.stats.QueryUserTraffic(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("local stats: %w", err))
+		c.recordTrafficFailure(store.LocalNodeID, "unavailable")
 	} else {
-		sources[store.LocalNodeID] = convert(m)
+		sources[store.LocalNodeID] = trafficDeltas(m)
 	}
 	for _, rm := range c.remoteStats(ctx) {
+		applied += rm.applied
 		if rm.err != nil {
 			errs = append(errs, rm.err)
+			c.recordTrafficFailure(rm.serverID, "unavailable")
 			continue
 		}
-		sources[rm.serverID] = convert(rm.traffic)
+		if !rm.recorded {
+			sources[rm.serverID] = trafficDeltas(rm.traffic)
+		}
 	}
-
-	// Commit whatever was collected even if some server failed. Each successful
-	// poll used reset=true, so its counters are already zeroed on that node —
-	// bailing out here would throw that traffic away permanently.
-	//
-	// Apply the whole poll in one transaction (one WAL write-lock acquisition
-	// instead of one per identity). AddUsageBatchesByServer isolates each identity in a
-	// savepoint, so one bad delta doesn't discard the rest.
 	n, err := c.st.AddUsageBatchesByServer(sources)
+	applied += n
 	if err != nil {
 		errs = append(errs, err)
 	}
-	return n, errors.Join(errs...)
+	return applied, errors.Join(errs...)
 }
 
 type remoteResult struct {
+	recorded bool
+	applied  int
 	serverID int64
 	traffic  map[string]*sbstats.Traffic
 	err      error
@@ -996,6 +1019,7 @@ func (c *Controller) remoteStats(ctx context.Context) []remoteResult {
 			break
 		}
 		if listen == "" {
+			c.recordTrafficFailure(sv.ID, "unsupported")
 			continue
 		}
 		if err := c.acquireRemote(ctx); err != nil {
@@ -1020,6 +1044,16 @@ func (c *Controller) remoteStats(ctx context.Context) []remoteResult {
 			// is closed. One poll per minute per server otherwise piles up
 			// sshd processes on the node until it runs out of memory.
 			defer client.Close()
+			if _, ok := c.st.(trafficJournal); ok {
+				n, err := c.collectTrafficSnapshot(sctx, sv.ID, sv, client)
+				if err != nil {
+					err = fmt.Errorf("server %d stats: %w", sv.ID, err)
+				}
+				mu.Lock()
+				out = append(out, remoteResult{serverID: sv.ID, recorded: true, applied: n, err: err})
+				mu.Unlock()
+				return
+			}
 			t, err := client.QueryUserTraffic(sctx)
 			if err != nil {
 				err = fmt.Errorf("server %d (%s) stats: %w", sv.ID, sv.Name, err)
@@ -1145,3 +1179,15 @@ func (c *Controller) acquireRemote(ctx context.Context) error {
 	}
 }
 func (c *Controller) releaseRemote() { <-c.remoteSlots }
+
+func (c *Controller) recordTrafficFailure(serverID int64, status string) {
+	if journal, ok := c.st.(interface{ RecordTrafficCollectionFailure(int64, string) error }); ok {
+		_ = journal.RecordTrafficCollectionFailure(serverID, status)
+	}
+}
+
+func (c *Controller) recordMeteringRestart(serverID int64) {
+	if journal, ok := c.st.(interface{ RecordTrafficBoundaryGap(int64, string) error }); ok {
+		_ = journal.RecordTrafficBoundaryGap(serverID, "planned_config_restart_tail")
+	}
+}

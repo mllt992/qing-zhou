@@ -70,11 +70,13 @@ var clearableSecrets = map[string]bool{
 // panel's uid, which on a typical deployment is root. It stays overridable via
 // QZ_UPDATE_REPO, which requires host access the attacker doesn't have.
 var immutableSettings = map[string]bool{
-	"oauth2_config":              true, // validated and saved atomically by the dedicated OAuth2 endpoint
-	"jwt_secret":                 true, // never rotate the signing key through the API
-	"update_repo":                true,
-	"upstream_oci_config":        true,
-	"upstream_cloudflare_config": true,
+	"relay_link_metering":         true, // explicit staged-rollout confirmation endpoint
+	"traffic_cumulative_metering": true, // counter mode requires a controlled boundary
+	"oauth2_config":               true, // validated and saved atomically by the dedicated OAuth2 endpoint
+	"jwt_secret":                  true, // never rotate the signing key through the API
+	"update_repo":                 true,
+	"upstream_oci_config":         true,
+	"upstream_cloudflare_config":  true,
 }
 
 // settingEnv maps a setting key to the env var that overrides it (env wins in

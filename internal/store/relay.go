@@ -60,9 +60,9 @@ func (s *Store) ensureRelaySecret(ib *SbInbound) (string, error) {
 
 // mergeRelayUser appends the landing inbound's relay user (if this tag is a
 // relay target) to its entitled user list, so the relay can authenticate.
-func mergeRelayUser(users []singbox.User, landingUsers map[string]singbox.User, tag string) []singbox.User {
+func mergeRelayUser(users []singbox.User, landingUsers map[string][]singbox.User, tag string) []singbox.User {
 	if ru, ok := landingUsers[tag]; ok {
-		return append(append([]singbox.User(nil), users...), ru)
+		return append(append([]singbox.User(nil), users...), ru...)
 	}
 	return users
 }
@@ -77,7 +77,7 @@ func mergeRelayUser(users []singbox.User, landingUsers map[string]singbox.User, 
 // machine. Relay inbounds whose upstream is missing/disabled or whose landing
 // protocol has no outbound renderer are skipped (their traffic falls through to
 // route.final), never failing the whole build.
-func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, usersByTag map[string][]singbox.User) ([]singbox.Relay, map[string]singbox.User, error) {
+func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, usersByTag map[string][]singbox.User) ([]singbox.Relay, map[string][]singbox.User, error) {
 	byID := make(map[int64]*SbInbound, len(allInbounds))
 	byTag := make(map[string]*SbInbound, len(allInbounds))
 	targeted := map[int64]bool{}
@@ -96,9 +96,16 @@ func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, users
 	}
 
 	// Relay users to inject into this server's targeted landing inbounds.
-	landingUsers := map[string]singbox.User{}
+	landingUsers := map[string][]singbox.User{}
 	for _, ib := range serverInbounds {
 		if !ib.Enabled || !targeted[ib.ID] {
+			continue
+		}
+		compat, err := s.LegacyRelayCompatibility(ib.ServerID, ib.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if compat == "retiring" || compat == "retired" {
 			continue
 		}
 		sec, err := s.ensureRelaySecret(ib)
@@ -106,7 +113,26 @@ func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, users
 			return nil, nil, err
 		}
 		uuid, pw := relayCred(sec)
-		landingUsers[ib.Tag] = singbox.User{Name: fmt.Sprintf("relay_%d", ib.ID), UUID: uuid, Password: pw}
+		landingUsers[ib.Tag] = []singbox.User{{Name: fmt.Sprintf("relay_%d", ib.ID), UUID: uuid, Password: pw}}
+	}
+
+	metered := s.RelayMeteringEnabled()
+	{ // Keep prepared/active credentials accepted during opt-out as well.
+		links, err := s.relayMeteringAcceptedGenerations()
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, link := range links {
+			for _, ib := range serverInbounds {
+				if ib.Enabled && ib.ID == link.TargetInboundID && ib.ServerID == link.TargetServerID {
+					u, err := s.meteringRelayUser(link)
+					if err != nil {
+						return nil, nil, err
+					}
+					landingUsers[ib.Tag] = append(landingUsers[ib.Tag], u)
+				}
+			}
+		}
 	}
 
 	// Upstream outbounds for this server's relay inbounds, grouped by landing so
@@ -139,14 +165,25 @@ func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, users
 			continue
 		}
 		sort.Strings(auth)
-		ob := logicalOutbound[landing.ID]
+		cacheID := landing.ID
+		if metered {
+			cacheID = n.ID
+		}
+		ob := logicalOutbound[cacheID]
 		if ob == nil {
 			var err error
-			ob, err = s.relayOutbound(landing, serverCache, tlsCache)
+			if metered {
+				ob, err = s.meteredRelayOutbound(entry, n.ID, landing, serverCache, tlsCache)
+			} else {
+				ob, err = s.relayOutbound(landing, serverCache, tlsCache)
+			}
+			if metered && err != nil {
+				return nil, nil, err
+			}
 			if err != nil || ob == nil {
 				continue
 			}
-			logicalOutbound[landing.ID] = ob
+			logicalOutbound[cacheID] = ob
 		}
 		relays = append(relays, singbox.Relay{Outbound: ob, InboundTags: []string{entry.Tag}, AuthUsers: auth})
 	}
@@ -161,16 +198,29 @@ func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, users
 		if landing == nil || !landing.Enabled {
 			continue // dangling/disabled upstream — traffic falls through to final
 		}
-		if existing, ok := byLanding[landing.ID]; ok {
+		cacheID := landing.ID
+		if metered {
+			cacheID = r.ID
+		}
+		if existing, ok := byLanding[cacheID]; ok {
 			existing.InboundTags = append(existing.InboundTags, r.Tag)
 			continue
 		}
-		ob, err := s.relayOutbound(landing, serverCache, tlsCache)
+		var ob map[string]interface{}
+		var err error
+		if metered {
+			ob, err = s.meteredRelayOutbound(r, 0, landing, serverCache, tlsCache)
+		} else {
+			ob, err = s.relayOutbound(landing, serverCache, tlsCache)
+		}
+		if metered && err != nil {
+			return nil, nil, err
+		}
 		if err != nil || ob == nil {
 			continue // unsupported landing protocol / bad config — skip this relay
 		}
-		byLanding[landing.ID] = &singbox.Relay{Outbound: ob, InboundTags: []string{r.Tag}}
-		order = append(order, landing.ID)
+		byLanding[cacheID] = &singbox.Relay{Outbound: ob, InboundTags: []string{r.Tag}}
+		order = append(order, cacheID)
 	}
 	for _, id := range order {
 		relays = append(relays, *byLanding[id])
@@ -284,6 +334,10 @@ func egressOutbound(e *SbEgress, trustPEM string) map[string]interface{} {
 // landing inbound's server/TLS/options (mirroring BuildSelfBuiltLinks) and
 // renders it through the subscription outbound renderer.
 func (s *Store) relayOutbound(landing *SbInbound, serverCache map[int64]*Server, tlsCache map[int64]*SbTls) (map[string]interface{}, error) {
+	return s.relayOutboundWithIdentity(landing, serverCache, tlsCache, nil, fmt.Sprintf("relay-to-%d", landing.ID))
+}
+
+func (s *Store) relayOutboundWithIdentity(landing *SbInbound, serverCache map[int64]*Server, tlsCache map[int64]*SbTls, identity *singbox.User, outboundTag string) (map[string]interface{}, error) {
 	// Dial host: the landing server's own host; a local (server_id 0) landing is
 	// reached over loopback on the same machine.
 	host := "127.0.0.1"
@@ -303,6 +357,9 @@ func (s *Store) relayOutbound(landing *SbInbound, serverCache map[int64]*Server,
 		return nil, err
 	}
 	uuid, pw := relayCred(secret)
+	if identity != nil {
+		uuid, pw = identity.UUID, identity.Password
+	}
 
 	var server, client, opts map[string]interface{}
 	if landing.TlsID != 0 {
@@ -406,6 +463,6 @@ func (s *Store) relayOutbound(landing *SbInbound, serverCache map[int64]*Server,
 	if err != nil {
 		return nil, err
 	}
-	ob["tag"] = fmt.Sprintf("relay-to-%d", landing.ID)
+	ob["tag"] = outboundTag
 	return ob, nil
 }

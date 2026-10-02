@@ -10,6 +10,7 @@
       <div class="resource-metric"><b>{{ servers.filter(s => s.probe_enabled).length }}</b><span>探针已开启</span></div>
       <div class="resource-metric" :class="{ danger: versions.filter(v => v.too_old || (v.version && !v.has_v2ray_api)).length }"><b>{{ versions.filter(v => v.too_old || (v.version && !v.has_v2ray_api)).length }}</b><span>版本或统计异常</span></div>
     </div>
+    <AdminRelayMetering />
     <!-- 各节点实际在跑的 sing-box。数据来自面板本来就在做的能力探测，
          以前只取了「有没有 v2ray_api」，版本号被丢掉了。 -->
     <n-card title="节点 sing-box 版本" size="small" style="margin-bottom:16px;">
@@ -167,7 +168,8 @@
               <n-empty v-if="!trafficAnalysis.daily?.length" description="本周期暂无可绘制的探针数据" style="padding:24px 0;" />
             </section>
 
-            <section class="traffic-section">
+            <AdminServiceTraffic v-if="trafficAnalysis.service" :service="trafficAnalysis.service" />
+            <section v-else class="traffic-section">
               <div class="traffic-section-head">
                 <div><h3>流量消耗来源</h3><p>来自本机 sing-box 的用户级统计，不包含系统更新、SSH 等非代理流量。</p></div>
                 <span v-if="trafficAnalysis.attribution.coverage_start" class="coverage-chip">自 {{ fmtDateTime(trafficAnalysis.attribution.coverage_start) }} 归因</span>
@@ -204,6 +206,8 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, shallowRef, 
 import { NSpin, NButton, NModal, NForm, NFormItem, NInput, NInputNumber, NSwitch, NSpace, NTag, NEmpty, NCard, NSelect, NRadioGroup, NRadioButton, NDrawer, NDrawerContent, NAlert, NProgress, useMessage, useDialog } from 'naive-ui'
 import { apiList, apiPost, apiPut, apiDelete, apiGet } from '@/api'
 import { fmtBytes, fmtDateTime, pct } from '@/utils/format'
+import AdminServiceTraffic from '@/components/AdminServiceTraffic.vue'
+import AdminRelayMetering from '@/components/AdminRelayMetering.vue'
 import * as echarts from 'echarts'
 const message = useMessage()
 const dialog = useDialog()
