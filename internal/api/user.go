@@ -792,6 +792,9 @@ type dashTraffic struct {
 	Total     int64 // finite quota the user owns right now
 	Used      int64 // usage counted against Total
 	Remaining int64
+	Upload    int64 // directional usage of the same eligible buckets
+	Download  int64
+	ExpiryAt  int64 // latest eligible expiry; zero for permanent or absent quota
 }
 
 // dashboardTraffic rolls the buckets up into one headline figure.
@@ -807,6 +810,7 @@ type dashTraffic struct {
 // Display-only: enforcement (handleSub) still reads the buckets directly.
 func dashboardTraffic(buckets []*store.Bucket) dashTraffic {
 	var d dashTraffic
+	permanent := false
 	now := time.Now().Unix()
 	for _, b := range buckets {
 		if b.Kind == store.KindFree || (b.Kind == "plan" && b.Status == "queued") {
@@ -822,6 +826,16 @@ func dashboardTraffic(buckets []*store.Bucket) dashTraffic {
 		}
 		d.Total += b.TrafficLimit
 		d.Used += b.Used()
+		d.Upload += b.UsedUp
+		d.Download += b.UsedDown
+		if b.ExpiryAt == 0 {
+			permanent = true
+		} else if b.ExpiryAt > d.ExpiryAt {
+			d.ExpiryAt = b.ExpiryAt
+		}
+	}
+	if permanent {
+		d.ExpiryAt = 0
 	}
 	if d.Total > d.Used {
 		d.Remaining = d.Total - d.Used
@@ -943,6 +957,14 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 	// That preserves an explicitly configured free group while ensuring a zero,
 	// exhausted or expired plan cannot contribute any plan-bound node.
 	now := time.Now().Unix()
+	buckets, err := a.st.ListBuckets(u.ID)
+	if err != nil {
+		http.Error(w, "quota unavailable", http.StatusInternalServerError)
+		return
+	}
+	// Match the dashboard's spendable quota, not the lifetime user mirror.
+	// Expired and queued allowances remain in history but cannot be spent now.
+	traffic := dashboardTraffic(buckets)
 	serviceable := !a.emailBlocksSub(u)
 
 	// Build the link list plus the user's accessible AI-node set, honoring the
@@ -986,13 +1008,13 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(reqFormat, "info") || wantsSubInfoPage(r, reqFormat) {
 		err := a.writeSubInfoHTML(w, subInfo{
 			SiteName: siteName, SubURL: subURL,
-			Used: u.UsedUp + u.UsedDown, Total: u.TrafficLimit, ExpiryAt: u.ExpiryAt,
+			Used: traffic.Used, Total: traffic.Total, ExpiryAt: traffic.ExpiryAt,
 			NodeCount: len(links),
 			// A free group or funded fallback may still provide nodes after a paid
 			// plan ends. Only describe expiry/quota as blocking when entitlement
 			// resolution actually returned no links.
 			Expired:   len(links) == 0 && u.ExpiryAt != 0 && u.ExpiryAt <= now,
-			OverQuota: len(links) == 0 && u.TrafficLimit > 0 && u.UsedUp+u.UsedDown >= u.TrafficLimit,
+			OverQuota: len(links) == 0 && traffic.Total > 0 && traffic.Used >= traffic.Total,
 		})
 		if err == nil {
 			a.recordSubscriptionFetch(u, "info", subscriptionClientForUA(r.Header.Get("User-Agent")))
@@ -1028,7 +1050,7 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 	// "重置后旧链接还能用". The body is per-user and cheap to regenerate anyway.
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Subscription-Userinfo",
-		"upload="+itoa(u.UsedUp)+"; download="+itoa(u.UsedDown)+"; total="+itoa(u.TrafficLimit)+"; expire="+itoa(u.ExpiryAt))
+		"upload="+itoa(traffic.Upload)+"; download="+itoa(traffic.Download)+"; total="+itoa(traffic.Total)+"; expire="+itoa(traffic.ExpiryAt))
 	w.Header().Set("Profile-Update-Interval", "12")
 	// Clash-family clients name the imported profile after this; without it they
 	// fall back to the URL's last path segment, which is the subscription token —
