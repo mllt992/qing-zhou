@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"qingzhou/internal/sbver"
 	"qingzhou/internal/singbox"
 )
 
@@ -23,6 +24,11 @@ func meteringRelayFixture(t *testing.T) (*Store, int64, int64, int64, int64, map
 		t.Fatal(err)
 	}
 	if err = st.SetSetting(RelayMeteringSetting, "true"); err != nil {
+		t.Fatal(err)
+	}
+	// Planner-only capability record for the Trojan landing (#87); it is not a
+	// handshake or live-process proof.
+	if err = st.SetNodeSingbox(b, sbver.Parse("sing-box version "+sbver.TrojanHandshakeFixVersion+"\nTags: with_v2ray_api")); err != nil {
 		t.Fatal(err)
 	}
 	return st, a, b, ai, bi, map[string][]singbox.User{"entry": {{Name: "qz_test", UUID: "11111111-1111-1111-1111-111111111111"}}}

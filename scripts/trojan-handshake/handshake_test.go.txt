@@ -1,0 +1,285 @@
+package trojan
+
+// QZ maintenance regression (qing-zhou #87), patched core only: bounded
+// handshake lifetime, cancellation, earlier deadlines and concurrency.
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math/rand"
+	"net"
+	"os"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func qzSetHandshakeTimeout(t *testing.T, timeout time.Duration) {
+	old := handshakeTimeout
+	handshakeTimeout = timeout
+	t.Cleanup(func() { handshakeTimeout = old })
+}
+
+func qzTCPPair(t *testing.T) (client net.Conn, server net.Conn) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, _ := listener.Accept()
+		accepted <- conn
+	}()
+	client, err = net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server = <-accepted
+	if server == nil {
+		t.Fatal("accept failed")
+	}
+	t.Cleanup(func() { client.Close(); server.Close() })
+	return client, server
+}
+
+type qzEmptyReader struct{ qzScriptedConn }
+
+func (c *qzEmptyReader) Read([]byte) (int, error) { return 0, nil }
+
+func TestQZTrojanNoProgress(t *testing.T) {
+	service, recorder := newQZService(t, true)
+	err := service.NewConnection(context.Background(), &qzEmptyReader{*newQZScriptedConn(false)}, M.Socksaddr{}, nil)
+	if !errors.Is(err, io.ErrNoProgress) || len(recorder.snapshot()) != 0 {
+		t.Fatalf("want ErrNoProgress without handler/fallback, got %v %+v", err, recorder.snapshot())
+	}
+}
+
+func TestQZTrojanPreCancelled(t *testing.T) {
+	service, recorder := newQZService(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	conn := newQZScriptedConn(false, qzRequest(0, CommandTCP, []byte("x")))
+	err := service.NewConnection(ctx, conn, M.Socksaddr{}, nil)
+	if !errors.Is(err, context.Canceled) || conn.Reads() != 0 || len(recorder.snapshot()) != 0 {
+		t.Fatalf("pre-cancelled handshake read or delivered: err=%v reads=%d records=%+v", err, conn.Reads(), recorder.snapshot())
+	}
+}
+
+func qzRunHandshake(service *Service[int], ctx context.Context, conn net.Conn) (time.Duration, error) {
+	start := time.Now()
+	err := service.NewConnection(ctx, conn, M.Socksaddr{}, nil)
+	return time.Since(start), err
+}
+
+func TestQZTrojanEarlierConnDeadlineWins(t *testing.T) {
+	qzSetHandshakeTimeout(t, 5*time.Second)
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprint("fallback-", fallback), func(t *testing.T) {
+			service, recorder := newQZService(t, fallback)
+			client, server := qzTCPPair(t)
+			server.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			client.Write(qzRequest(0, CommandTCP, nil)[:10])
+			elapsed, err := qzRunHandshake(service, context.Background(), server)
+			if !errors.Is(err, os.ErrDeadlineExceeded) || elapsed > 2*time.Second || len(recorder.snapshot()) != 0 {
+				t.Fatalf("earlier conn deadline not respected: err=%v elapsed=%v records=%+v", err, elapsed, recorder.snapshot())
+			}
+		})
+	}
+}
+
+func TestQZTrojanContextCancelMidHandshake(t *testing.T) {
+	qzSetHandshakeTimeout(t, 5*time.Second)
+	for _, stage := range []int{0, 10, 56, 60} {
+		t.Run(fmt.Sprint("after-", stage, "-bytes"), func(t *testing.T) {
+			service, recorder := newQZService(t, true)
+			client, server := qzTCPPair(t)
+			client.Write(qzRequest(0, CommandTCP, nil)[:stage])
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			elapsed, err := qzRunHandshake(service, ctx, server)
+			if !errors.Is(err, context.DeadlineExceeded) || elapsed > 2*time.Second || len(recorder.snapshot()) != 0 {
+				t.Fatalf("earlier context deadline not respected: err=%v elapsed=%v records=%+v", err, elapsed, recorder.snapshot())
+			}
+		})
+	}
+}
+
+func TestQZTrojanBoundedBudget(t *testing.T) {
+	const budget = 300 * time.Millisecond
+	qzSetHandshakeTimeout(t, budget)
+	wire := qzRequest(1, CommandTCP, []byte("payload"))
+	t.Run("no-first-packet", func(t *testing.T) {
+		service, recorder := newQZService(t, true)
+		_, server := qzTCPPair(t)
+		elapsed, err := qzRunHandshake(service, context.Background(), server)
+		if !errors.Is(err, errHandshakeTimeout) || elapsed < budget-50*time.Millisecond || elapsed > 2*time.Second || len(recorder.snapshot()) != 0 {
+			t.Fatalf("silent client not bounded: err=%v elapsed=%v", err, elapsed)
+		}
+	})
+	for _, stop := range []int{20, 56, 58, 60} {
+		t.Run(fmt.Sprint("slow-input-stalls-at-", stop), func(t *testing.T) {
+			// After the stop point one byte arrives every 60 ms: every read makes
+			// progress, but the total budget (started before the first read) must
+			// still end the handshake.
+			service, recorder := newQZService(t, true)
+			client, server := qzTCPPair(t)
+			go func() {
+				for i := 0; i < len(wire); i++ {
+					if _, err := client.Write(wire[i : i+1]); err != nil {
+						return
+					}
+					if i >= stop {
+						time.Sleep(60 * time.Millisecond)
+					}
+				}
+				client.(*net.TCPConn).CloseWrite()
+			}()
+			elapsed, err := qzRunHandshake(service, context.Background(), server)
+			if !errors.Is(err, errHandshakeTimeout) || elapsed > budget+700*time.Millisecond || len(recorder.snapshot()) != 0 {
+				t.Fatalf("slow input extended the handshake: err=%v elapsed=%v records=%+v", err, elapsed, recorder.snapshot())
+			}
+		})
+	}
+	t.Run("slow-but-within-budget", func(t *testing.T) {
+		service, recorder := newQZService(t, false)
+		client, server := qzTCPPair(t)
+		go func() {
+			for _, chunk := range qzSplit(wire, 9, 30, 20, 3) {
+				client.Write(chunk)
+				time.Sleep(30 * time.Millisecond)
+			}
+			client.(*net.TCPConn).CloseWrite()
+		}()
+		_, err := qzRunHandshake(service, context.Background(), server)
+		qzCheckDelivered(t, err, recorder, 1, CommandTCP, []byte("payload"))
+	})
+}
+
+// TestQZTrojanLongConnectionUnaffected: after success the guard is stopped
+// synchronously; no late deadline or close reaches the handed-off connection.
+func TestQZTrojanLongConnectionUnaffected(t *testing.T) {
+	const budget = 100 * time.Millisecond
+	qzSetHandshakeTimeout(t, budget)
+	recorder := &qzRecorder{echo: true}
+	service := NewService[int](recorder, nil, nil)
+	service.UpdateUsers([]int{0, 1}, qzPassword)
+	client, server := qzTCPPair(t)
+	client.Write(qzRequest(0, CommandTCP, []byte("hello")))
+	done := make(chan error, 1)
+	go func() { done <- service.NewConnection(context.Background(), server, M.Socksaddr{}, nil) }()
+	reply := make([]byte, 5)
+	if _, err := io.ReadFull(client, reply); err != nil || string(reply) != "hello" {
+		t.Fatalf("echo failed: %q %v", reply, err)
+	}
+	for _, at := range []time.Duration{3 * budget, 6 * budget} {
+		time.Sleep(at - budget)
+		message := []byte(fmt.Sprintf("later-%v", at))
+		client.Write(message)
+		got := make([]byte, len(message))
+		client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.ReadFull(client, got); err != nil || !bytes.Equal(got, message) {
+			t.Fatalf("long connection disturbed after handshake budget: %q %v", got, err)
+		}
+	}
+	client.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler did not finish after client close")
+	}
+	if records := recorder.snapshot(); len(records) != 1 || records[0].err != nil {
+		t.Fatalf("echo handler ended with error (late interrupt?): %+v", records)
+	}
+}
+
+// TestQZTrojanConcurrentRandomFragments: independent requests over loopback with
+// random fragmentation; every request is recorded and none may fail or retry.
+func TestQZTrojanConcurrentRandomFragments(t *testing.T) {
+	const count = 64
+	service, recorder := newQZService(t, true)
+	before := runtime.NumGoroutine()
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(i)))
+			user := i % 2
+			command := byte(CommandTCP)
+			if i%3 == 0 {
+				command = CommandUDP
+			}
+			payload := bytes.Repeat([]byte{byte(i)}, 64+i)
+			wire := qzRequest(user, command, payload)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer listener.Close()
+			go func() {
+				client, err := net.Dial("tcp", listener.Addr().String())
+				if err != nil {
+					return
+				}
+				defer client.Close()
+				for len(wire) > 0 {
+					n := 1 + rng.Intn(20)
+					if n > len(wire) {
+						n = len(wire)
+					}
+					client.Write(wire[:n])
+					wire = wire[n:]
+					if rng.Intn(4) == 0 {
+						time.Sleep(time.Millisecond)
+					}
+				}
+				client.(*net.TCPConn).CloseWrite()
+				io.Copy(io.Discard, client)
+			}()
+			server, err := listener.Accept()
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer server.Close()
+			if err := service.NewConnection(context.Background(), server, M.Socksaddr{}, nil); err != nil {
+				errs <- fmt.Errorf("request %d user %d: %w", i, user, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	records := recorder.snapshot()
+	if len(records) != count {
+		t.Fatalf("want %d independent deliveries, got %d", count, len(records))
+	}
+	for _, r := range records {
+		if r.kind == "fallback" || !r.hasUser || r.err != nil {
+			t.Fatalf("bad delivery %+v", r)
+		}
+	}
+	// Guards must not outlive their handshakes.
+	deadline := time.Now().Add(3 * time.Second)
+	for runtime.NumGoroutine() > before+4 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := runtime.NumGoroutine(); n > before+4 {
+		t.Fatalf("goroutines leaked: before=%d after=%d", before, n)
+	}
+}

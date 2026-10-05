@@ -12,12 +12,12 @@
 
 这是上述三文件的原样上游 hunks 回补，包含错误清理和同路径 headers.Clone，并非“只改三行”。该官方提交的其它文件/协议修复没有一起引入。
 
-- 完整构建标记：`1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`
+- 完整构建标记：`1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`（当前发布核心另含 Trojan 项目维护补丁，标记为 `…-transport.07512b10-trojan.b85be9da`，见 [CORE_TROJAN_HANDSHAKE_FIX.md](CORE_TROJAN_HANDSHAKE_FIX.md)；新标记同时满足本修复能力）
 - 选定 patch SHA256：`731a661d2121470feb6e04c64d0c6a2b6185819dac9c11fb50af06f2c87e9a44`
 - 共享输入：`scripts/singbox-pins.sh`
 - 每个文件回补前后 SHA256：`scripts/transport-buffer/manifest.json`
 
-`apply-transport-buffer-patch.sh`验证基础 commit、patch hash、精确三文件集合及应用前后文件 hash；异常时中止。CI 与 Release 均调用同一 `build-singbox.sh`，`sing-box-provenance.json` schema 2 包含基础源码、Vision 模块、选定 transport patch、工具链和各架构二进制 hash。版本标记不是对任意同名第三方二进制的来源证明，须核对发布的 provenance/hash。
+`apply-transport-buffer-patch.sh`验证基础 commit、patch hash、精确三文件集合及应用前后文件 hash；异常时中止。CI 与 Release 均调用同一 `build-singbox.sh`，`sing-box-provenance.json`（schema 3，另含 Trojan 维护补丁 manifest）包含基础源码、Vision 模块、选定 transport patch、工具链和各架构二进制 hash。版本标记不是对任意同名第三方二进制的来源证明，须核对发布的 provenance/hash。
 
 ## 确定性回归与完整核心的区别
 

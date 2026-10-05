@@ -27,7 +27,7 @@
           <ul class="node-list">
             <li v-for="node in preflight.nodes" :key="node.server_id">
               <div class="node-heading"><b>{{ node.name }}</b><span>{{ node.requires_reinstall ? '需要重装内核' : node.requires_check ? '需要重新检测' : '已有能力记录' }}</span></div>
-              <small>已安装内核 {{ node.version || '未知' }} · 用户流量统计：{{ capability(node, node.has_v2ray_api) }}<template v-if="node.vision_required"> · Vision 修复标记：{{ capability(node, node.has_vision_framing_fix) }}</template><template v-if="node.transport_required"> · WebSocket/HTTPUpgrade 修复标记：{{ capability(node, !!node.has_transport_read_buffer_fix) }}</template></small>
+              <small>已安装内核 {{ node.version || '未知' }} · 用户流量统计：{{ capability(node, node.has_v2ray_api) }}<template v-if="node.vision_required"> · Vision 修复标记：{{ capability(node, node.has_vision_framing_fix) }}</template><template v-if="node.transport_required"> · WebSocket/HTTPUpgrade 修复标记：{{ capability(node, !!node.has_transport_read_buffer_fix) }}</template><template v-if="node.trojan_required"> · Trojan 分段握手修复标记：{{ capability(node, !!node.has_trojan_handshake_fix) }}</template></small>
               <small v-if="node.checked_at">上次检测：{{ formatTime(node.checked_at) }}（运行能力仍以下发时核验为准）</small>
               <ul v-if="node.reasons.length"><li v-for="(reason,index) in node.reasons" :key="index">{{ reason }}</li></ul>
             </li>
@@ -88,7 +88,7 @@ interface Credential {kind:string;link_id:number;server_id:number;inbound_id:num
 interface Link {id:number;source_name:string;target_name:string;source_server_id?:number;target_server_id?:number;state:string}
 interface Sync {state:string;error?:string;at?:number;revision?:number;request_revision?:number;started_revision?:number}
 interface Ticket {epoch:string;revision:number}
-interface Node {server_id:number;name:string;version:string;has_v2ray_api:boolean;has_vision_framing_fix:boolean;vision_required:boolean;has_transport_read_buffer_fix?:boolean;transport_required?:boolean;checked_at:number;error?:string;requires_reinstall:boolean;requires_check:boolean;reasons:string[]}
+interface Node {server_id:number;name:string;version:string;has_v2ray_api:boolean;has_vision_framing_fix:boolean;vision_required:boolean;has_transport_read_buffer_fix?:boolean;transport_required?:boolean;has_trojan_handshake_fix?:boolean;trojan_required?:boolean;checked_at:number;error?:string;requires_reinstall:boolean;requires_check:boolean;reasons:string[]}
 interface State {enabled:boolean;per_user_enabled:boolean;cumulative_enabled:boolean;cumulative_started:boolean;links:Link[];credentials?:Credential[];sync?:Record<string,Sync>;sync_epoch?:string;nodes?:Node[]}
 interface Preflight {valid:boolean;errors:string[];nodes:Node[];scope_note:string}
 const emptyState = (): State => ({enabled:false,per_user_enabled:false,cumulative_enabled:false,cumulative_started:false,links:[]})

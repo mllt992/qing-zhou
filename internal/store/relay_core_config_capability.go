@@ -38,6 +38,7 @@ func addEndpointCoreRequirements(required *RelayCoreRequirements, endpoint relay
 			required.TransportReadBuffer = true
 		}
 	}
+
 }
 
 // RelayCoreRequirementsForConfig derives the capability from the exact bytes
@@ -133,6 +134,10 @@ func (s *Store) RelayCoreRequirementsForConfig(serverID int64, raw []byte) (Rela
 		}
 		if involved {
 			addEndpointCoreRequirements(&required, endpoint)
+			// The #87 patch is in the Trojan server; a Trojan client outbound does not need it.
+			if endpoint.Type == "trojan" {
+				required.TrojanHandshake = true
+			}
 		}
 	}
 	return required, nil

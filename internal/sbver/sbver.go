@@ -30,12 +30,22 @@ const VisionFramingFixVersion = "1.14.2+qz-vmess.9b95ab8c9478"
 // transport buffering fix 07512b10. Older Vision-only builds do not prove it.
 const TransportReadBufferFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10"
 
+// TrojanHandshakeFixVersion is the current release core. It additionally
+// carries the qing-zhou Trojan handshake maintenance patch (issue #87, patch
+// sha256 b85be9da…; not an upstream fix). Vision-only and transport-only markers
+// do not prove it, and neither does any higher or suffixed version.
+const TrojanHandshakeFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da"
+
 func HasVisionFramingFix(version string) bool {
-	return version == VisionFramingFixVersion || version == TransportReadBufferFixVersion
+	return version == VisionFramingFixVersion || version == TransportReadBufferFixVersion || version == TrojanHandshakeFixVersion
 }
 
 func HasTransportReadBufferFix(version string) bool {
-	return version == TransportReadBufferFixVersion
+	return version == TransportReadBufferFixVersion || version == TrojanHandshakeFixVersion
+}
+
+func HasTrojanHandshakeFix(version string) bool {
+	return version == TrojanHandshakeFixVersion
 }
 
 // Info is what the panel knows about one node's sing-box.
@@ -50,6 +60,8 @@ type Info struct {
 	HasVisionFramingFix bool `json:"has_vision_framing_fix"`
 	// WS/HTTPUpgrade capability is independent from the older Vision-only fix.
 	HasTransportReadBufferFix bool `json:"has_transport_read_buffer_fix"`
+	// Trojan fragmented-handshake capability (#87) is independent of both.
+	HasTrojanHandshakeFix bool `json:"has_trojan_handshake_fix"`
 	// Raw is the first line of output, kept so an unparseable answer can still
 	// be shown to a human instead of an empty box.
 	Raw string `json:"raw"`
@@ -75,6 +87,7 @@ func Parse(out string) Info {
 	}
 	info.HasVisionFramingFix = HasVisionFramingFix(info.Version)
 	info.HasTransportReadBufferFix = HasTransportReadBufferFix(info.Version)
+	info.HasTrojanHandshakeFix = HasTrojanHandshakeFix(info.Version)
 	return info
 }
 

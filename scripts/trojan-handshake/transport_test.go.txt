@@ -1,0 +1,299 @@
+package trojan
+
+// QZ maintenance regression (qing-zhou #87), patched core only: real sing-box
+// TLS + V2Ray transports carrying the Trojan service. Verifies fragmented
+// handshakes, guard-driven cleanup (including the WebSocket close write and the
+// caller's error close), and that cancelling one stream leaves sibling streams
+// on shared HTTP/2, gRPC and QUIC sessions working.
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/common/tls"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/transport/v2ray"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type qzTransportCase struct {
+	name      string
+	options   option.V2RayTransportOptions
+	shared    bool // streams share one HTTP/2, gRPC or QUIC session
+	udpListen bool
+}
+
+var qzTransportCases = []qzTransportCase{
+	{name: "ws", options: option.V2RayTransportOptions{Type: C.V2RayTransportTypeWebsocket, WebsocketOptions: option.V2RayWebsocketOptions{Path: "/qz"}}},
+	{name: "httpupgrade", options: option.V2RayTransportOptions{Type: C.V2RayTransportTypeHTTPUpgrade, HTTPUpgradeOptions: option.V2RayHTTPUpgradeOptions{Path: "/qz"}}},
+	{name: "http2", options: option.V2RayTransportOptions{Type: C.V2RayTransportTypeHTTP, HTTPOptions: option.V2RayHTTPOptions{Path: "/qz"}}, shared: true},
+	{name: "grpc-lite", options: option.V2RayTransportOptions{Type: C.V2RayTransportTypeGRPC, GRPCOptions: option.V2RayGRPCOptions{ServiceName: "qz", ForceLite: true}}, shared: true},
+}
+
+func qzCertificate(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(87), Subject: pkix.Name{CommonName: "localhost"},
+		DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+}
+
+type qzHandshakeResult struct {
+	err        error
+	handshake  time.Duration
+	callerStop time.Duration
+	conn       *qzTrackedConn
+}
+
+// qzTrackedConn forwards everything and counts reads still in flight, so the
+// test can prove an abandoned handshake read really ends after cleanup.
+type qzTrackedConn struct {
+	net.Conn
+	active atomic.Int32
+}
+
+func (c *qzTrackedConn) Read(p []byte) (int, error) {
+	c.active.Add(1)
+	defer c.active.Add(-1)
+	return c.Conn.Read(p)
+}
+
+type qzTransportHandler struct {
+	service *Service[int]
+	results chan qzHandshakeResult
+}
+
+// NewConnectionEx mirrors protocol/trojan Inbound.NewConnection: on error the
+// caller closes through N.CloseOnHandshakeFailure. Both durations are recorded.
+func (h *qzTransportHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	tracked := &qzTrackedConn{Conn: conn}
+	conn = tracked
+	start := time.Now()
+	err := h.service.NewConnection(ctx, conn, source, onClose)
+	result := qzHandshakeResult{err: err, handshake: time.Since(start), conn: tracked}
+	if err != nil {
+		closeStart := time.Now()
+		N.CloseOnHandshakeFailure(conn, onClose, err)
+		result.callerStop = time.Since(closeStart)
+	}
+	h.results <- result
+}
+
+type qzTransportFixture struct {
+	client interface {
+		DialContext(context.Context) (net.Conn, error)
+	}
+	results chan qzHandshakeResult
+}
+
+func newQZTransportFixture(t *testing.T, tc qzTransportCase) *qzTransportFixture {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	certificate, key := qzCertificate(t)
+	serverTLS, err := tls.NewServer(ctx, logger.NOP(), option.InboundTLSOptions{Enabled: true, ServerName: "localhost", Certificate: []string{certificate}, Key: []string{key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = serverTLS.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { serverTLS.Close() })
+	recorder := &qzRecorder{echo: true}
+	service := NewService[int](recorder, nil, logger.NOP())
+	if err = service.UpdateUsers([]int{0, 1}, qzPassword); err != nil {
+		t.Fatal(err)
+	}
+	handler := &qzTransportHandler{service: service, results: make(chan qzHandshakeResult, 16)}
+	server, err := v2ray.NewServerTransport(ctx, logger.NOP(), tc.options, serverTLS, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { server.Close() })
+	var address string
+	if tc.udpListen {
+		packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		address = packetConn.LocalAddr().String()
+		go server.ServePacket(packetConn)
+	} else {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		address = listener.Addr().String()
+		go server.Serve(listener)
+	}
+	clientTLS, err := tls.NewClient(ctx, logger.NOP(), "localhost", option.OutboundTLSOptions{Enabled: true, ServerName: "localhost", Insecure: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := v2ray.NewClientTransport(ctx, N.SystemDialer, M.ParseSocksaddr(address), tc.options, clientTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return &qzTransportFixture{client: client, results: handler.results}
+}
+
+func qzExpectEcho(t *testing.T, conn net.Conn, message string) {
+	t.Helper()
+	if _, err := conn.Write([]byte(message)); err != nil {
+		t.Fatalf("write %q: %v", message, err)
+	}
+	got := make([]byte, len(message))
+	done := make(chan error, 1)
+	go func() { _, err := io.ReadFull(conn, got); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil || string(got) != message {
+			t.Fatalf("echo %q: got %q err=%v", message, got, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("echo %q timed out", message)
+	}
+}
+
+func qzWaitResult(t *testing.T, results chan qzHandshakeResult, within time.Duration) qzHandshakeResult {
+	t.Helper()
+	select {
+	case result := <-results:
+		return result
+	case <-time.After(within):
+		t.Fatal("server handshake did not finish")
+	}
+	return qzHandshakeResult{}
+}
+
+func qzRunTransportCase(t *testing.T, tc qzTransportCase) {
+	const budget = 400 * time.Millisecond
+	qzSetHandshakeTimeout(t, budget)
+	wire := qzRequest(1, CommandTCP, []byte("first"))
+
+	t.Run("fragmented-handshake-and-long-connection", func(t *testing.T) {
+		fixture := newQZTransportFixture(t, tc)
+		conn, err := fixture.client.DialContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, chunk := range qzSplit(wire, 10, 30, 16, 5) {
+			if _, err = conn.Write(chunk); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+		got := make([]byte, len("first"))
+		if _, err = io.ReadFull(conn, got); err != nil || string(got) != "first" {
+			t.Fatalf("first payload: %q %v", got, err)
+		}
+		time.Sleep(2 * budget)
+		qzExpectEcho(t, conn, "after-handshake-budget")
+		conn.Close()
+		result := qzWaitResult(t, fixture.results, 5*time.Second)
+		if result.err != nil {
+			t.Fatalf("legitimate fragmented handshake failed: %v", result.err)
+		}
+	})
+
+	t.Run("stalled-handshake-cleanup", func(t *testing.T) {
+		fixture := newQZTransportFixture(t, tc)
+		var sibling net.Conn
+		if tc.shared {
+			var err error
+			sibling, err = fixture.client.DialContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sibling.Write(qzRequest(0, CommandTCP, nil)); err != nil {
+				t.Fatal(err)
+			}
+			qzExpectEcho(t, sibling, "sibling-before")
+		}
+		stalled, err := fixture.client.DialContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = stalled.Write(wire[:10]); err != nil {
+			t.Fatal(err)
+		}
+		result := qzWaitResult(t, fixture.results, budget+5*time.Second)
+		if !errors.Is(result.err, errHandshakeTimeout) {
+			t.Fatalf("want handshake timeout, got %v", result.err)
+		}
+		if result.handshake > budget+2*time.Second || result.callerStop > 2*time.Second {
+			t.Fatalf("cleanup not bounded: handshake=%v caller-close=%v", result.handshake, result.callerStop)
+		}
+		drain := time.Now().Add(3 * time.Second)
+		for result.conn.active.Load() != 0 && time.Now().Before(drain) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if n := result.conn.active.Load(); n != 0 {
+			t.Fatalf("%d handshake reads still blocked after caller cleanup", n)
+		}
+		t.Logf("handshake=%v caller-close=%v", result.handshake, result.callerStop)
+		peerClosed := make(chan error, 1)
+		go func() {
+			_, err := stalled.Read(make([]byte, 1))
+			peerClosed <- err
+		}()
+		select {
+		case err := <-peerClosed:
+			if err == nil {
+				t.Fatal("stalled stream still delivered data after cleanup")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("client did not observe the stalled stream closing")
+		}
+		stalled.Close()
+		if sibling != nil {
+			qzExpectEcho(t, sibling, fmt.Sprintf("sibling-after-%s", tc.name))
+			fresh, err := fixture.client.DialContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh.Write(qzRequest(1, CommandTCP, nil))
+			qzExpectEcho(t, fresh, "fresh-stream-after-cleanup")
+			fresh.Close()
+			sibling.Close()
+		}
+	})
+}
+
+func TestQZTrojanRealTransports(t *testing.T) {
+	for _, tc := range qzTransportCases {
+		t.Run(tc.name, func(t *testing.T) { qzRunTransportCase(t, tc) })
+	}
+}

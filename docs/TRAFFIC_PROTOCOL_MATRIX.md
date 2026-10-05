@@ -67,3 +67,7 @@ QZ_METERING_SCALE=1 go test ./internal/store -run '^TestMeteringRelayUserScale' 
 开发阶段的云沙箱正常启动核心受`create netlink socket: operation not permitted`阻塞。因此本地配置check成功不能计入真实TCP/UDP通过；最终结果须绑定确定commit及具备正常内核能力的隔离CI日志。测试尚在变更时的早先结果不自动覆盖最终commit，不操作系统安全设置来绕过限制。
 
 实现/测试、合并、发版和生产部署分别执行；合并并不等于自动发布或操作生产。发布前按[总验收清单](TRAFFIC_METERING_VALIDATION.md)收口同commit的Go race/vet/build、前端测试/build、脚本检查、固定核心真实流量和规模日志，并明确列出未测能力。
+
+## Trojan 分段首包（#87）
+
+Trojan 入站的密钥可能分多次到达（HTTPUpgrade 预读缓存、TCP/TLS 分段、WS/gRPC/HTTP2 消息边界）。发布核心带轻舟项目维护补丁（非上游修复），按协议边界累积并有界握手；P1 路径中终结 Trojan 入站的机器需独立能力 `has_trojan_handshake_fix`。细节、补丁摘要和验收范围见 [CORE_TROJAN_HANDSHAKE_FIX.md](CORE_TROJAN_HANDSHAKE_FIX.md)。

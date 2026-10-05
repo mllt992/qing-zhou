@@ -39,6 +39,7 @@
             <n-tag v-if="n.version && !n.has_v2ray_api" type="error" size="tiny" :bordered="false">缺少 with_v2ray_api</n-tag>
             <n-tag v-if="n.version" :type="n.has_vision_framing_fix ? 'info' : 'default'" size="tiny" :bordered="false">{{ n.has_vision_framing_fix ? '版本含 Vision 修复标记' : '未确认 Vision 修复' }}</n-tag>
             <n-tag v-if="n.version" :type="n.has_transport_read_buffer_fix ? 'info' : 'default'" size="tiny" :bordered="false">{{ n.has_transport_read_buffer_fix ? '版本含 WS/HTTPUpgrade 修复标记' : '未确认 WS/HTTPUpgrade 修复' }}</n-tag>
+            <n-tag v-if="n.version" :type="n.has_trojan_handshake_fix ? 'info' : 'default'" size="tiny" :bordered="false">{{ n.has_trojan_handshake_fix ? '版本含 Trojan 分段握手修复标记' : '未确认 Trojan 分段握手修复' }}</n-tag>
           </div>
           <div class="nv-side">
             <span v-if="n.checked_at" class="nv-time">{{ fmtDateTime(n.checked_at) }}</span>

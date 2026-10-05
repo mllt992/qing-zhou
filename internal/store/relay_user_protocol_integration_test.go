@@ -72,6 +72,16 @@ func (s relayTrafficScenario) hasVision() bool {
 	return false
 }
 
+// hasTrojan marks paths terminating a Trojan inbound (#87 handshake patch).
+func (s relayTrafficScenario) hasTrojan() bool {
+	for _, hop := range s.hops {
+		if hop.protocol == "trojan" {
+			return true
+		}
+	}
+	return false
+}
+
 func (p relayProtocolFixture) transport() map[string]any {
 	switch p.tlsMode {
 	case "http-tls":
@@ -234,8 +244,8 @@ func relayFixtureCore(t *testing.T) (string, sbver.Info) {
 		t.Fatalf("read actual fixture core version: %v %s", err, output)
 	}
 	info := sbver.Parse(string(output))
-	if info.Version != sbver.TransportReadBufferFixVersion || !info.HasV2RayAPI || !info.HasTransportReadBufferFix {
-		t.Fatalf("fixture requires the fixed %s core with with_v2ray_api and transport buffered-read capability; got %+v", sbver.TransportReadBufferFixVersion, info)
+	if info.Version != sbver.TrojanHandshakeFixVersion || !info.HasV2RayAPI || !info.HasTransportReadBufferFix || !info.HasTrojanHandshakeFix || !info.HasVisionFramingFix {
+		t.Fatalf("fixture requires the fixed %s core with with_v2ray_api, Vision, transport buffered-read and Trojan handshake capability; got %+v", sbver.TrojanHandshakeFixVersion, info)
 	}
 	t.Logf("actual integration core: %s", strings.TrimSpace(string(output)))
 	return bin, info

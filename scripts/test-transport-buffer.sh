@@ -15,6 +15,11 @@ while (($#)); do
     *) echo "Usage: $0 [--check-baseline] [--source-dir LOCAL_GIT_REPO]" >&2; exit 2 ;;
   esac
 done
+# The frozen Trojan maintenance patch (#87) is regressed by its own script; it
+# is chained here so every CI/Release invocation of this step also runs it.
+trojan_args=()
+"$check_baseline" && trojan_args+=(--check-baseline)
+[[ -n "$source_dir" ]] && trojan_args+=(--source-dir "$(cd "$source_dir" && pwd)")
 [[ "$rounds" =~ ^[1-9][0-9]*$ && "$rounds" -le 1000 ]] || { echo 'Invalid stress rounds' >&2; exit 2; }
 [[ $("$GO" env GOVERSION) == go1.25.14 ]] || { echo 'Use pinned Go 1.25.14' >&2; exit 1; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/qz-transport-regression.XXXXXXXX")
@@ -70,3 +75,5 @@ print('Patched core: '+str(rounds)+' race rounds for each of '+str(len(expected)
 for n in sorted(expected):print('PASS '+n+' x'+str(passed[n]))
 print('Covers 1/7-byte fragmentation, coalesced first data, no payload/normal close, up to 1 MiB flows, 32 concurrent connections and shared WS subprotocol headers')
 PY
+cd "$root/.."
+bash "$root/test-trojan-handshake.sh" "${trojan_args[@]}"

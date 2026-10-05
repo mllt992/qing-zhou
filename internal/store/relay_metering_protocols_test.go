@@ -124,7 +124,7 @@ func newProtocolMeteringFixture(t *testing.T, protocols ...meteringProtocolCase)
 	// This planner-only fixture models a reviewed installed capability for
 	// activation preflight. It is not a real handshake or live-process proof.
 	for _, id := range f.servers {
-		if err := f.st.SetNodeSingbox(id, sbver.Parse("sing-box version "+sbver.TransportReadBufferFixVersion+"\nTags: with_v2ray_api")); err != nil {
+		if err := f.st.SetNodeSingbox(id, sbver.Parse("sing-box version "+sbver.TrojanHandshakeFixVersion+"\nTags: with_v2ray_api")); err != nil {
 			t.Fatal(err)
 		}
 	}

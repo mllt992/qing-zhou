@@ -1,0 +1,360 @@
+package trojan
+
+// QZ maintenance regression (qing-zhou #87). Uses only the public service API
+// so the same file compiles on the unpatched pinned core as a negative control.
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+var (
+	qzDest     = M.ParseSocksaddr("198.51.100.7:8443")
+	qzUDPDest  = M.ParseSocksaddr("203.0.113.9:53")
+	qzPassword = []string{"qz-user-one", "qz-user-two"}
+)
+
+// qzScriptedConn returns each chunk from its own Read call. When chunks run
+// out it returns io.EOF, or blocks until Close when block is set.
+type qzScriptedConn struct {
+	access sync.Mutex
+	chunks [][]byte
+	reads  int
+	block  bool
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newQZScriptedConn(block bool, chunks ...[]byte) *qzScriptedConn {
+	return &qzScriptedConn{chunks: chunks, block: block, closed: make(chan struct{})}
+}
+
+func (c *qzScriptedConn) Read(p []byte) (int, error) {
+	c.access.Lock()
+	c.reads++
+	if len(c.chunks) == 0 {
+		c.access.Unlock()
+		if c.block {
+			<-c.closed
+			return 0, net.ErrClosed
+		}
+		return 0, io.EOF
+	}
+	n := copy(p, c.chunks[0])
+	if n == len(c.chunks[0]) {
+		c.chunks = c.chunks[1:]
+	} else {
+		c.chunks[0] = c.chunks[0][n:]
+	}
+	c.access.Unlock()
+	return n, nil
+}
+
+func (c *qzScriptedConn) Reads() int {
+	c.access.Lock()
+	defer c.access.Unlock()
+	return c.reads
+}
+func (c *qzScriptedConn) Write(p []byte) (int, error) { return len(p), nil }
+func (c *qzScriptedConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+func (c *qzScriptedConn) LocalAddr() net.Addr              { return M.ParseSocksaddr("127.0.0.1:1").TCPAddr() }
+func (c *qzScriptedConn) RemoteAddr() net.Addr             { return M.ParseSocksaddr("127.0.0.1:2").TCPAddr() }
+func (c *qzScriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *qzScriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *qzScriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+type qzRecord struct {
+	kind    string
+	user    int
+	hasUser bool
+	dest    M.Socksaddr
+	payload []byte
+	err     error
+}
+
+type qzRecorder struct {
+	access  sync.Mutex
+	records []qzRecord
+	// echo makes TCP handlers echo instead of reading to EOF (real transports).
+	echo bool
+}
+
+func (r *qzRecorder) add(record qzRecord) {
+	r.access.Lock()
+	r.records = append(r.records, record)
+	r.access.Unlock()
+}
+
+func (r *qzRecorder) snapshot() []qzRecord {
+	r.access.Lock()
+	defer r.access.Unlock()
+	return append([]qzRecord(nil), r.records...)
+}
+
+func (r *qzRecorder) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	user, hasUser := auth.UserFromContext[int](ctx)
+	if r.echo {
+		_, err := io.Copy(conn, conn)
+		conn.Close()
+		if onClose != nil {
+			onClose(err)
+		}
+		r.add(qzRecord{kind: "tcp", user: user, hasUser: hasUser, dest: destination, err: err})
+		return
+	}
+	payload, err := io.ReadAll(conn)
+	r.add(qzRecord{kind: "tcp", user: user, hasUser: hasUser, dest: destination, payload: payload, err: err})
+}
+
+func (r *qzRecorder) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	user, hasUser := auth.UserFromContext[int](ctx)
+	buffer := buf.NewPacket()
+	defer buffer.Release()
+	packetDest, err := conn.ReadPacket(buffer)
+	r.add(qzRecord{kind: "udp", user: user, hasUser: hasUser, dest: packetDest, payload: append([]byte(nil), buffer.Bytes()...), err: err})
+}
+
+type qzFallback struct{ recorder *qzRecorder }
+
+func (f qzFallback) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	payload, err := io.ReadAll(conn)
+	f.recorder.add(qzRecord{kind: "fallback", payload: payload, err: err})
+}
+
+func newQZService(t testing.TB, fallback bool) (*Service[int], *qzRecorder) {
+	recorder := new(qzRecorder)
+	var fallbackHandler N.TCPConnectionHandlerEx
+	if fallback {
+		fallbackHandler = qzFallback{recorder}
+	}
+	service := NewService[int](recorder, fallbackHandler, logger.NOP())
+	if err := service.UpdateUsers([]int{0, 1}, qzPassword); err != nil {
+		t.Fatal(err)
+	}
+	return service, recorder
+}
+
+func qzRequest(user int, command byte, payload []byte) []byte {
+	key := Key(qzPassword[user])
+	var b bytes.Buffer
+	b.Write(key[:])
+	b.Write(CRLF)
+	b.WriteByte(command)
+	destination := qzDest
+	if command == CommandUDP {
+		destination = qzUDPDest
+	}
+	if err := M.SocksaddrSerializer.WriteAddrPort(&b, destination); err != nil {
+		panic(err)
+	}
+	b.Write(CRLF)
+	if command == CommandUDP {
+		if err := M.SocksaddrSerializer.WriteAddrPort(&b, qzUDPDest); err != nil {
+			panic(err)
+		}
+		binary.Write(&b, binary.BigEndian, uint16(len(payload)))
+		b.Write(CRLF)
+	}
+	b.Write(payload)
+	return b.Bytes()
+}
+
+func qzSplit(wire []byte, sizes ...int) [][]byte {
+	var chunks [][]byte
+	for _, size := range sizes {
+		if size >= len(wire) {
+			break
+		}
+		chunks = append(chunks, wire[:size])
+		wire = wire[size:]
+	}
+	if len(wire) > 0 {
+		chunks = append(chunks, wire)
+	}
+	return chunks
+}
+
+func qzBytewise(wire []byte) [][]byte {
+	chunks := make([][]byte, len(wire))
+	for i := range wire {
+		chunks[i] = wire[i : i+1]
+	}
+	return chunks
+}
+
+func qzCheckDelivered(t *testing.T, err error, recorder *qzRecorder, user int, command byte, payload []byte) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("legitimate fragmented request rejected: %v", err)
+	}
+	records := recorder.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("want exactly one handler call, got %+v", records)
+	}
+	r := records[0]
+	wantKind, wantDest := "tcp", qzDest
+	if command == CommandUDP {
+		wantKind, wantDest = "udp", qzUDPDest
+	}
+	if r.kind != wantKind || !r.hasUser || r.user != user || r.dest != wantDest || r.err != nil {
+		t.Fatalf("wrong delivery: %+v", r)
+	}
+	if !bytes.Equal(r.payload, payload) {
+		t.Fatalf("trailing payload altered: got %q want %q", r.payload, payload)
+	}
+}
+
+var qzSplitCases = []struct {
+	name  string
+	split func([]byte) [][]byte
+	// negative marks splits where the first read ends before the 56-byte key.
+	negative bool
+}{
+	{"whole", func(w []byte) [][]byte { return [][]byte{w} }, false},
+	{"key56+rest", func(w []byte) [][]byte { return qzSplit(w, 56) }, false},
+	{"key57+rest", func(w []byte) [][]byte { return qzSplit(w, 57) }, false},
+	{"bytewise", qzBytewise, true},
+	{"key1+rest", func(w []byte) [][]byte { return qzSplit(w, 1) }, true},
+	{"key10+rest", func(w []byte) [][]byte { return qzSplit(w, 10) }, true},
+	{"key55+rest", func(w []byte) [][]byte { return qzSplit(w, 55) }, true},
+	{"7byte", func(w []byte) [][]byte {
+		var sizes []int
+		for i := 0; i < len(w); i += 7 {
+			sizes = append(sizes, 7)
+		}
+		return qzSplit(w, sizes...)
+	}, true},
+}
+
+// TestQZTrojanFragmentedRequest is the deterministic negative control: the
+// unpatched core rejects every case marked negative ("bad request size").
+func TestQZTrojanFragmentedRequest(t *testing.T) {
+	for _, tc := range qzSplitCases {
+		for _, command := range []byte{CommandTCP, CommandUDP} {
+			for _, fallback := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/cmd-%d/fallback-%v", tc.name, command, fallback), func(t *testing.T) {
+					service, recorder := newQZService(t, fallback)
+					payload := []byte("first-application-bytes-" + tc.name)
+					wire := qzRequest(1, command, payload)
+					conn := newQZScriptedConn(false, tc.split(wire)...)
+					err := service.NewConnection(context.Background(), conn, M.Socksaddr{}, nil)
+					qzCheckDelivered(t, err, recorder, 1, command, payload)
+				})
+			}
+		}
+	}
+}
+
+// TestQZTrojanReadAheadCache models HTTPUpgrade/HTTP hijack read-ahead: the
+// first Read returns only the cached prefix, the rest arrives from the socket.
+func TestQZTrojanReadAheadCache(t *testing.T) {
+	for _, cached := range []int{1, 4, 11, 55, 56, 60} {
+		for _, command := range []byte{CommandTCP, CommandUDP} {
+			for _, fallback := range []bool{false, true} {
+				t.Run(fmt.Sprintf("cache-%d/cmd-%d/fallback-%v", cached, command, fallback), func(t *testing.T) {
+					service, recorder := newQZService(t, fallback)
+					payload := bytes.Repeat([]byte{0xA5}, 300)
+					wire := qzRequest(0, command, payload)
+					cache := buf.As(wire[:cached]).ToOwned()
+					conn := bufio.NewCachedConn(newQZScriptedConn(false, qzSplit(wire[cached:], 3)...), cache)
+					cache.Release()
+					err := service.NewConnection(context.Background(), conn, M.Socksaddr{}, nil)
+					qzCheckDelivered(t, err, recorder, 0, command, payload)
+				})
+			}
+		}
+	}
+}
+
+// TestQZTrojanFallbackCompatibility: non-protocol traffic, bad auth and short
+// input reach fallback with every consumed byte exactly once, in order. These
+// are compatibility controls and also pass on the unpatched core.
+func TestQZTrojanFallbackCompatibility(t *testing.T) {
+	wrongKey := Key("not-a-configured-user")
+	cases := []struct {
+		name   string
+		input  []byte
+		chunks func([]byte) [][]byte
+	}{
+		{"http-short-whole", []byte("GET / HTTP/1.1\r\nHost: a\r\n\r\n"), func(w []byte) [][]byte { return [][]byte{w} }},
+		{"http-short-bytewise", []byte("GET / HTTP/1.1\r\nHost: a\r\n\r\n"), qzBytewise},
+		{"tls-clienthello-like", append([]byte{0x16, 0x03, 0x01, 0x02, 0x00}, bytes.Repeat([]byte{1}, 200)...), func(w []byte) [][]byte { return qzSplit(w, 3) }},
+		{"long-text", []byte(strings.Repeat("PROBE-", 50)), func(w []byte) [][]byte { return qzSplit(w, 13, 13) }},
+		{"bad-auth-whole", append(append(wrongKey[:], CRLF...), []byte("tail-after-wrong-key")...), func(w []byte) [][]byte { return [][]byte{w} }},
+		{"bad-auth-fragmented", append(append(wrongKey[:], CRLF...), []byte("tail-after-wrong-key")...), func(w []byte) [][]byte { return qzSplit(w, 56) }},
+		{"hex-prefix-then-eof", []byte(strings.Repeat("ab", 10)), func(w []byte) [][]byte { return [][]byte{w} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/fallback-on", func(t *testing.T) {
+			service, recorder := newQZService(t, true)
+			err := service.NewConnection(context.Background(), newQZScriptedConn(false, tc.chunks(tc.input)...), M.Socksaddr{}, nil)
+			if err != nil {
+				t.Fatalf("fallback not used: %v", err)
+			}
+			records := recorder.snapshot()
+			if len(records) != 1 || records[0].kind != "fallback" || records[0].err != nil {
+				t.Fatalf("want one fallback, got %+v", records)
+			}
+			if !bytes.Equal(records[0].payload, tc.input) {
+				t.Fatalf("fallback replay not complete/ordered/once: got %q want %q", records[0].payload, tc.input)
+			}
+		})
+		t.Run(tc.name+"/fallback-off", func(t *testing.T) {
+			service, recorder := newQZService(t, false)
+			err := service.NewConnection(context.Background(), newQZScriptedConn(false, tc.chunks(tc.input)...), M.Socksaddr{}, nil)
+			if err == nil || !strings.Contains(err.Error(), "fallback disabled") {
+				t.Fatalf("want fallback-disabled rejection, got %v", err)
+			}
+			if records := recorder.snapshot(); len(records) != 0 {
+				t.Fatalf("rejected input reached a handler: %+v", records)
+			}
+		})
+	}
+}
+
+func TestQZTrojanEOFAndMalformed(t *testing.T) {
+	t.Run("eof-before-first-byte", func(t *testing.T) {
+		service, recorder := newQZService(t, true)
+		err := service.NewConnection(context.Background(), newQZScriptedConn(false), M.Socksaddr{}, nil)
+		if !errors.Is(err, io.EOF) || len(recorder.snapshot()) != 0 {
+			t.Fatalf("want EOF without handler, got %v %+v", err, recorder.snapshot())
+		}
+	})
+	valid := qzRequest(0, CommandTCP, nil)
+	header := valid[:56+2]
+	t.Run("unknown-command", func(t *testing.T) {
+		service, recorder := newQZService(t, true)
+		wire := append(append([]byte(nil), header...), 0x09)
+		err := service.NewConnection(context.Background(), newQZScriptedConn(false, qzBytewise(wire)...), M.Socksaddr{}, nil)
+		if err == nil || !strings.Contains(err.Error(), "unknown command") || len(recorder.snapshot()) != 0 {
+			t.Fatalf("want unknown command rejection, got %v %+v", err, recorder.snapshot())
+		}
+	})
+	t.Run("truncated-address-eof", func(t *testing.T) {
+		service, recorder := newQZService(t, true)
+		wire := valid[:56+2+1+3]
+		err := service.NewConnection(context.Background(), newQZScriptedConn(false, qzBytewise(wire)...), M.Socksaddr{}, nil)
+		if err == nil || len(recorder.snapshot()) != 0 {
+			t.Fatalf("want truncated request rejection, got %v %+v", err, recorder.snapshot())
+		}
+	})
+}

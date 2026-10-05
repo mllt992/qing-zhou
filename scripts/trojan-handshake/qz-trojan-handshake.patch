@@ -1,0 +1,246 @@
+diff --git a/transport/trojan/service.go b/transport/trojan/service.go
+--- a/transport/trojan/service.go
++++ b/transport/trojan/service.go
+@@ -3,8 +3,12 @@ package trojan
+ import (
+ 	"context"
+ 	"encoding/binary"
++	"errors"
++	"io"
+ 	"net"
++	"time"
+ 
++	C "github.com/sagernet/sing-box/constant"
+ 	"github.com/sagernet/sing/common/auth"
+ 	"github.com/sagernet/sing/common/buf"
+ 	"github.com/sagernet/sing/common/bufio"
+@@ -59,59 +63,196 @@ func (s *Service[K]) UpdateUsers(userList []K, passwordList []string) error {
+ 	return nil
+ }
+ 
++// QZ maintenance patch (not an upstream fix): stream transports may deliver
++// the 56-byte Trojan key in several reads, e.g. an HTTPUpgrade read-ahead cache
++// followed by the rest of the socket data. The key is accumulated to its
++// boundary before authentication. Only the public format (lowercase hex) is
++// judged early; partial keys are never compared with configured users.
++// The whole request header (key, CRLF, command, address, CRLF) shares one
++// bounded handshake budget that starts before the first read.
++var handshakeTimeout = C.TCPTimeout
++
++// interruptGrace bounds how long a timed-out handshake waits for its reader to
++// observe the interrupt. A transport whose server stream cannot be interrupted
++// before its handler returns (official gRPC) is released by the caller's
++// error cleanup, which always follows a handshake error.
++var interruptGrace = time.Second
++
++const maxEmptyReads = 100
++
++var (
++	errBadKeyFormat     = E.New("non-hex trojan key byte")
++	errHandshakeTimeout = E.New("trojan handshake timeout")
++)
++
++type handshakeResult[K comparable] struct {
++	key         [KeyLength]byte
++	keyRead     int
++	user        K
++	known       bool
++	command     byte
++	destination M.Socksaddr
++	keyErr      error
++	err         error
++}
++
+ func (s *Service[K]) NewConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
+-	var key [KeyLength]byte
+-	n, err := conn.Read(key[:])
+-	if err != nil {
+-		return err
+-	} else if n != KeyLength {
+-		return s.fallback(ctx, conn, source, key[:n], E.New("bad request size"), onClose)
++	if err := ctx.Err(); err != nil {
++		return E.Cause(err, "trojan handshake")
++	}
++	timer := time.NewTimer(handshakeTimeout)
++	defer timer.Stop()
++	resultCh := make(chan handshakeResult[K], 1)
++	go func() { resultCh <- s.readHandshake(conn) }()
++	var result handshakeResult[K]
++	select {
++	case result = <-resultCh:
++	case <-timer.C:
++		return interruptHandshake(conn, resultCh, errHandshakeTimeout)
++	case <-ctx.Done():
++		cause := context.Cause(ctx)
++		if cause == nil {
++			cause = ctx.Err()
++		}
++		return interruptHandshake(conn, resultCh, cause)
++	}
++	// The reader goroutine has finished: nothing else touches conn from here.
++	if result.keyErr != nil {
++		if result.keyRead == 0 {
++			return result.keyErr
++		}
++		if errors.Is(result.keyErr, io.EOF) {
++			return s.fallback(ctx, conn, source, result.key[:result.keyRead], E.New("bad request size: unexpected EOF"), onClose)
++		}
++		if errors.Is(result.keyErr, errBadKeyFormat) {
++			return s.fallback(ctx, conn, source, result.key[:result.keyRead], E.New("bad request format"), onClose)
++		}
++		return E.Cause(result.keyErr, "read trojan key")
++	}
++	if !result.known {
++		return s.fallback(ctx, conn, source, result.key[:], E.New("bad request"), onClose)
+ 	}
++	if result.err != nil {
++		return result.err
++	}
++	ctx = auth.ContextWithUser(ctx, result.user)
++	switch result.command {
++	case CommandTCP:
++		s.handler.NewConnectionEx(ctx, conn, source, result.destination, onClose)
++	case CommandUDP:
++		s.handler.NewPacketConnectionEx(ctx, &PacketConn{Conn: conn}, source, result.destination, onClose)
++	// case CommandMux:
++	default:
++		return HandleMuxConnection(ctx, conn, source, s.handler, s.logger, onClose)
++	}
++	return nil
++}
+ 
+-	if user, loaded := s.keys[key]; loaded {
+-		ctx = auth.ContextWithUser(ctx, user)
+-	} else {
+-		return s.fallback(ctx, conn, source, key[:], E.New("bad request"), onClose)
++// interruptHandshake ends only this connection or stream. Deadline-capable
++// conns (TCP, TLS, HTTPUpgrade, QUIC streams) get an immediate read deadline;
++// existing deadlines are never extended or cleared. Other conns (WebSocket,
++// HTTP/2, gRPC lite) are closed through their own per-stream Close, which never
++// closes a shared session. The WebSocket close frame write is bounded by that
++// transport's own write deadline.
++func interruptHandshake[K comparable](conn net.Conn, resultCh <-chan handshakeResult[K], cause error) error {
++	if conn.SetReadDeadline(time.Now()) != nil {
++		conn.Close()
++	}
++	grace := time.NewTimer(interruptGrace)
++	defer grace.Stop()
++	select {
++	case <-resultCh:
++	case <-grace.C:
+ 	}
++	return E.Cause(cause, "read trojan request")
++}
+ 
+-	err = rw.SkipN(conn, 2)
+-	if err != nil {
+-		return E.Cause(err, "skip crlf")
++// readHandshake reads exactly the request header; bytes after it stay unread.
++// An unknown key stops before the tail so fallback receives it unchanged.
++func (s *Service[K]) readHandshake(conn net.Conn) (result handshakeResult[K]) {
++	reader := &handshakeReader{Reader: conn}
++	result.keyRead, result.keyErr = readKey(reader, result.key[:])
++	if result.keyErr != nil {
++		return
++	}
++	result.user, result.known = s.keys[result.key]
++	if !result.known {
++		return
+ 	}
++	result.command, result.destination, result.err = readRequestTail(reader)
++	return
++}
+ 
++// readKey fills key exactly. It returns errBadKeyFormat as soon as a byte
++// cannot belong to any Trojan key, io.EOF for EOF (n reports consumed bytes)
++// and other read errors unchanged.
++func readKey(reader io.Reader, key []byte) (int, error) {
++	var n int
++	for n < len(key) {
++		m, err := reader.Read(key[n:])
++		for _, c := range key[n : n+m] {
++			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
++				return n + m, errBadKeyFormat
++			}
++		}
++		n += m
++		if n == len(key) {
++			return n, nil
++		}
++		if err != nil {
++			if errors.Is(err, io.ErrUnexpectedEOF) {
++				err = io.EOF
++			}
++			return n, err
++		}
++	}
++	return n, nil
++}
++
++func readRequestTail(reader io.Reader) (byte, M.Socksaddr, error) {
++	err := rw.SkipN(reader, 2)
++	if err != nil {
++		return 0, M.Socksaddr{}, E.Cause(err, "skip crlf")
++	}
+ 	var command byte
+-	err = binary.Read(conn, binary.BigEndian, &command)
++	err = binary.Read(reader, binary.BigEndian, &command)
+ 	if err != nil {
+-		return E.Cause(err, "read command")
++		return 0, M.Socksaddr{}, E.Cause(err, "read command")
+ 	}
+-
+ 	switch command {
+ 	case CommandTCP, CommandUDP, CommandMux:
+ 	default:
+-		return E.New("unknown command ", command)
++		return 0, M.Socksaddr{}, E.New("unknown command ", command)
+ 	}
+-
+-	// var destination M.Socksaddr
+-	destination, err := M.SocksaddrSerializer.ReadAddrPort(conn)
++	destination, err := M.SocksaddrSerializer.ReadAddrPort(reader)
+ 	if err != nil {
+-		return E.Cause(err, "read destination")
++		return 0, M.Socksaddr{}, E.Cause(err, "read destination")
+ 	}
+-
+-	err = rw.SkipN(conn, 2)
++	err = rw.SkipN(reader, 2)
+ 	if err != nil {
+-		return E.Cause(err, "skip crlf")
++		return 0, M.Socksaddr{}, E.Cause(err, "skip crlf")
+ 	}
++	return command, destination, nil
++}
+ 
+-	switch command {
+-	case CommandTCP:
+-		s.handler.NewConnectionEx(ctx, conn, source, destination, onClose)
+-	case CommandUDP:
+-		s.handler.NewPacketConnectionEx(ctx, &PacketConn{Conn: conn}, source, destination, onClose)
+-	// case CommandMux:
+-	default:
+-		return HandleMuxConnection(ctx, conn, source, s.handler, s.logger, onClose)
++// handshakeReader reports io.ErrNoProgress instead of spinning on a reader
++// that keeps returning no bytes and no error.
++type handshakeReader struct {
++	io.Reader
++	empty int
++}
++
++func (r *handshakeReader) Read(p []byte) (int, error) {
++	n, err := r.Reader.Read(p)
++	if n > 0 || err != nil || len(p) == 0 {
++		r.empty = 0
++		return n, err
+ 	}
+-	return nil
++	r.empty++
++	if r.empty >= maxEmptyReads {
++		return 0, io.ErrNoProgress
++	}
++	return 0, nil
+ }
+ 
+ func (s *Service[K]) fallback(ctx context.Context, conn net.Conn, source M.Socksaddr, header []byte, err error, onClose N.CloseHandlerFunc) error {

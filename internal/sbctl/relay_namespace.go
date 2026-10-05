@@ -56,7 +56,8 @@ func (c *Controller) applyWithRelayNamespace(ctx context.Context, serverID int64
 		}
 		requirements.VisionFraming = requirements.VisionFraming || actual.VisionFraming
 		requirements.TransportReadBuffer = requirements.TransportReadBuffer || actual.TransportReadBuffer
-		needsCore = requirements.VisionFraming || requirements.TransportReadBuffer
+		requirements.TrojanHandshake = requirements.TrojanHandshake || actual.TrojanHandshake
+		needsCore = requirements.VisionFraming || requirements.TransportReadBuffer || requirements.TrojanHandshake
 		if needsCore {
 			// Remote callers already hold their apply slot. Reacquiring here
 			// could deadlock when all slots are occupied by guarded applies.

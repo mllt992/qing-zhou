@@ -40,6 +40,7 @@ type nodeVersionView struct {
 	HasV2RayAPI               bool   `json:"has_v2ray_api"`
 	HasVisionFramingFix       bool   `json:"has_vision_framing_fix"`
 	HasTransportReadBufferFix bool   `json:"has_transport_read_buffer_fix"`
+	HasTrojanHandshakeFix     bool   `json:"has_trojan_handshake_fix"`
 	CheckedAt                 int64  `json:"checked_at"`
 	Error                     string `json:"error"`
 	// Reinstall job state, so the list the UI already polls is also what tells it
@@ -88,6 +89,7 @@ func (a *API) handleAdminNodeVersions(w http.ResponseWriter, r *http.Request) {
 		"min_supported":           sbver.MinSupported,
 		"vision_fixed_version":    sbver.VisionFramingFixVersion,
 		"transport_fixed_version": sbver.TransportReadBufferFixVersion,
+		"trojan_fixed_version":    sbver.TrojanHandshakeFixVersion,
 	})
 }
 
@@ -102,6 +104,7 @@ func viewFor(id int64, name, host string, local, enabled bool, observed map[int6
 		v.CheckedAt, v.Error = n.CheckedAt, n.Error
 		v.HasVisionFramingFix = n.HasVisionFramingFix
 		v.HasTransportReadBufferFix = n.HasTransportReadBufferFix
+		v.HasTrojanHandshakeFix = n.HasTrojanHandshakeFix
 		v.TooOld = sbver.Info{Version: n.Version}.TooOld()
 	}
 	if j, ok := jobs[id]; ok {

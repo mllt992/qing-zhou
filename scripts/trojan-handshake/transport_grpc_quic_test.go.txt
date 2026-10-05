@@ -1,0 +1,21 @@
+//go:build with_grpc && with_quic
+
+package trojan
+
+import (
+	"testing"
+
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	_ "github.com/sagernet/sing-box/transport/v2rayquic"
+)
+
+// Official gRPC and QUIC transports exist only with the release build tags.
+func TestQZTrojanRealTransportsTagged(t *testing.T) {
+	for _, tc := range []qzTransportCase{
+		{name: "grpc", options: option.V2RayTransportOptions{Type: C.V2RayTransportTypeGRPC, GRPCOptions: option.V2RayGRPCOptions{ServiceName: "qz"}}, shared: true},
+		{name: "quic", options: option.V2RayTransportOptions{Type: C.V2RayTransportTypeQUIC}, shared: true, udpListen: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { qzRunTransportCase(t, tc) })
+	}
+}

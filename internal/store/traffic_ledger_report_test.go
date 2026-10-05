@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"qingzhou/internal/sbver"
 )
 
 func reportObservation(t *testing.T, st *Store, serverID, ts int64, kind string, linkID, userID, up, down int64, billable bool) {
@@ -91,6 +93,20 @@ func TestServiceTrafficSeparatesObservedCoverageFromRelayReadiness(t *testing.T)
 		t.Fatal(err)
 	}
 	if err = st.SetSetting("relay_user_metering", "true"); err != nil {
+		t.Fatal(err)
+	}
+	// A Trojan landing needs runtime proof of the exact #87 marker; an installed
+	// (planner) record alone is not attribution readiness.
+	if r, e := st.ServerServiceTraffic(b, 0); e != nil || r.AttributionReady || !slices.Contains(r.CoverageReasons, "trojan_core_unverified") {
+		t.Fatalf("Trojan landing without runtime proof was not flagged: %+v %v", r, e)
+	}
+	if err = st.SetNodeVisionRuntime(b, sbver.Parse("sing-box version "+sbver.TransportReadBufferFixVersion+"\nTags: with_v2ray_api")); err != nil {
+		t.Fatal(err)
+	}
+	if r, e := st.ServerServiceTraffic(b, 0); e != nil || !slices.Contains(r.CoverageReasons, "trojan_core_unverified") {
+		t.Fatalf("transport-only runtime marker satisfied the Trojan requirement: %+v %v", r, e)
+	}
+	if err = st.SetNodeVisionRuntime(b, sbver.Parse("sing-box version "+sbver.TrojanHandshakeFixVersion+"\nTags: with_v2ray_api")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = st.db.Exec(`INSERT INTO relay_metering_users(link_id,user_id,generation,identity_name,credential,state,created_at) VALUES(?,?,?,'report-relay-current','fixture','active',100)`, link.ID, uid, link.Generation); err != nil {

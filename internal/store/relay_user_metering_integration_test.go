@@ -659,11 +659,30 @@ func runRelaySharedUserPath(t *testing.T, bin string, coreInfo sbver.Info, scena
 	// Repeated simultaneous independent connections exercise auth routing,
 	// rather than merely showing that one warm connection can pass bytes.
 	batches := 1
-	if scenario.hasVision() && os.Getenv("QZ_VISION_STRESS_BATCHES") != "" {
-		var parseErr error
-		batches, parseErr = strconv.Atoi(os.Getenv("QZ_VISION_STRESS_BATCHES"))
-		if parseErr != nil || batches < 1 || batches > 1000 {
-			t.Fatal("QZ_VISION_STRESS_BATCHES must be 1..1000")
+	stressBatches := func(name string) {
+		if os.Getenv(name) == "" {
+			return
+		}
+		n, parseErr := strconv.Atoi(os.Getenv(name))
+		if parseErr != nil || n < 1 || n > 1000 {
+			t.Fatal(name + " must be 1..1000")
+		}
+		if n > batches {
+			batches = n
+		}
+	}
+	if scenario.hasVision() {
+		stressBatches("QZ_VISION_STRESS_BATCHES")
+	}
+	// #87: sustained concurrent pressure on every Trojan path. Each request is
+	// independent and every failure in a batch is reported (never retried).
+	// CI/Release already set QZ_VISION_STRESS_BATCHES for real-core runs; Trojan
+	// paths reuse that count unless QZ_TROJAN_STRESS_BATCHES overrides it.
+	if scenario.hasTrojan() {
+		if os.Getenv("QZ_TROJAN_STRESS_BATCHES") != "" {
+			stressBatches("QZ_TROJAN_STRESS_BATCHES")
+		} else {
+			stressBatches("QZ_VISION_STRESS_BATCHES")
 		}
 	}
 	for batch := 0; batch < batches; batch++ {
@@ -677,10 +696,15 @@ func runRelaySharedUserPath(t *testing.T, bin string, coreInfo sbver.Info, scena
 		}
 		wg.Wait()
 		close(errors)
+		failed := 0
 		for err := range errors {
 			if err != nil {
-				t.Fatalf("batch %d/%d: %v", batch+1, batches, err)
+				failed++
+				t.Errorf("batch %d/%d: %v", batch+1, batches, err)
 			}
+		}
+		if failed > 0 {
+			t.Fatalf("batch %d/%d: %d of %d concurrent requests failed (no retry)", batch+1, batches, failed, 4*len(customers))
 		}
 	}
 	t.Logf("completed stress batches=%d concurrent_requests_per_batch=%d without retry", batches, 4*len(customers))

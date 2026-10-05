@@ -75,7 +75,7 @@ func meteringScaleCore(t *testing.T) (string, sbver.Info) {
 	if os.Getenv("QZ_SINGBOX_TEST_BIN") != "" || os.Getenv("QZ_SINGBOX_REQUIRE_STATS") == "1" {
 		return relayFixtureCore(t)
 	}
-	info := sbver.Parse("sing-box version " + sbver.TransportReadBufferFixVersion + "\nTags: with_v2ray_api")
+	info := sbver.Parse("sing-box version " + sbver.TrojanHandshakeFixVersion + "\nTags: with_v2ray_api")
 	info.Raw = "synthetic planner-only scale capability; no executable or running process was observed"
 	t.Log("SQL/config-only scale fixture uses explicitly synthetic installed capability; no running-core or traffic evidence")
 	return "", info
