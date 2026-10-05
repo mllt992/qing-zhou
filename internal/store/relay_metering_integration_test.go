@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -207,6 +208,22 @@ func startMeteringBox(t *testing.T, bin string, raw []byte, api string) *exec.Cm
 	output, _ := os.ReadFile(filepath.Join(dir, "box.log"))
 	t.Fatalf("sing-box fixture did not expose stats API: %s", output)
 	return nil
+}
+
+// relayFixtureHTTP2LostDownloadWrites counts download writes that this
+// fixture core itself logged as failed with x/net's errStreamClosed. Only the
+// exact route message is counted; any other error never earns an allowance.
+func relayFixtureHTTP2LostDownloadWrites(t *testing.T, cmd *exec.Cmd) int {
+	t.Helper()
+	f, ok := cmd.Stdout.(*os.File)
+	if !ok {
+		return 0
+	}
+	raw, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatalf("read fixture log: %v", err)
+	}
+	return bytes.Count(raw, []byte("connection download closed: http2: stream closed"))
 }
 
 // Only inspect the test process started above. This is a point-in-time Linux

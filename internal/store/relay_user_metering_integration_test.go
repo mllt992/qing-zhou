@@ -583,6 +583,12 @@ func runRelaySharedUserPath(t *testing.T, bin string, coreInfo sbver.Info, scena
 		state := relayFixtureCounterSettler{
 			targets:  map[relayFixtureCounterID]relayFixtureCounterTarget{},
 			deadline: started.Add(2 * time.Second), stableFor: 50 * time.Millisecond,
+			http2LostWrites: func(hop int) int {
+				if hop >= len(machines) || machines[hop].protocol.tlsMode != "http-tls" || machines[hop].process == nil {
+					return 0
+				}
+				return relayFixtureHTTP2LostDownloadWrites(t, machines[hop].process)
+			},
 		}
 		for hop := range machines {
 			for _, c := range customers {
@@ -608,6 +614,9 @@ func runRelaySharedUserPath(t *testing.T, bin string, coreInfo sbver.Info, scena
 				t.Fatalf("counter visibility phase=%s samples=%d elapsed=%s first=%+v last=%+v targets=%+v: %v", phase, state.samples, time.Since(started), state.first, state.last, state.targets, err)
 			}
 			if ready {
+				for hop, slack := range state.slack {
+					t.Logf("known HTTP/2 transport undercount phase=%s hop=%d down_shortfall=%d logged_stream_closed_download_writes=%d bound=%d (x/net http2 errStreamClosed race, conservative; not the #87 Trojan handshake; see docs/TRAFFIC_PROTOCOL_MATRIX.md)", phase, hop, slack.Shortfall, slack.LostWrites, slack.Bound)
+				}
 				t.Logf("counter visibility phase=%s samples=%d elapsed=%s first=%+v settled=%+v (read-only polling, no traffic retried)", phase, state.samples, time.Since(started), state.first, state.last)
 				return actual
 			}

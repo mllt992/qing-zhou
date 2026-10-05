@@ -55,6 +55,7 @@
 - 实流步骤中每条 Trojan 路径按 `QZ_TROJAN_STRESS_BATCHES`（未设置时沿用 CI/Release 已设的 `QZ_VISION_STRESS_BATCHES=100`）执行：100 批 × 8 个独立并发请求，每批收集并报告全部失败，不重试。原 49 协议 + 3 WS 矩阵、跨协议三跳、逐机器 raw=报表、入口单次扣费、Vision 100 批、8 组 100/1000 用户诊断均不缩减。
 - 新的独立能力 `has_trojan_handshake_fix` 只认精确标记 `…-trojan.b85be9da`。旧 Vision / transport 标记、带后缀版本、更高 semver、伪造的布尔标志都不满足。新标记同时满足 Vision 与 transport 能力。
 - P1 逐用户机器观测中，凡**终结 Trojan 入站**的机器（任何传输）需要此能力；只运行 Trojan 客户端出站的上游不需要。预检、启用校验、下发前后实际运行核心校验及流量归属就绪（`trojan_core_unverified`）都按此独立判断。
+- `http-tls` 传输在并发压力下有一个既有的 x/net HTTP/2 少计竞态，vless/vmess 同样存在，不属于本补丁。测试只做有界、按日志对证的放宽，见 [TRAFFIC_PROTOCOL_MATRIX.md](TRAFFIC_PROTOCOL_MATRIX.md) 的“已知限制”。
 - 计量默认关闭不变；不轮换原账户凭据；历史未知流量不猜分；不修改生产数据库，不自动部署或重启生产节点。合并不等于发布。
 
 ## 边界

@@ -45,7 +45,7 @@ func TestRelayCoreConfigTrojanRequirementIsServerSideOnly(t *testing.T) {
 		// Entry runs only a Trojan client outbound: no server-side patch needed.
 		`{"inbounds":[{"type":"vless","tag":"entry"}],"outbounds":[{"type":"trojan","tag":"relay-link-1-u1-g1"}],` + rules + `}`: false,
 		// Entry terminates Trojan itself.
-		`{"inbounds":[{"type":"trojan","tag":"entry"}],"outbounds":[{"type":"vless","tag":"relay-link-1-u1-g1"}],` + rules + `}`: true,
+		`{"inbounds":[{"type":"trojan","tag":"entry"}],"outbounds":[{"type":"vless","tag":"relay-link-1-u1-g1"}],` + rules + `}`:                                     true,
 		`{"inbounds":[{"type":"trojan","tag":"entry","transport":{"type":"httpupgrade"}}],"outbounds":[{"type":"trojan","tag":"relay-link-1-u1-g1"}],` + rules + `}`: true,
 	}
 	for raw, want := range cases {
