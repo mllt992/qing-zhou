@@ -194,11 +194,28 @@ func (m *RemoteManager) buildClientConfig(cfg *ServerConfig) (*ssh.ClientConfig,
 		return nil, errors.New("ssh: no authentication method configured (set password or key)")
 	}
 
+	var hostAlgorithms []string
+	if cfg.HostKey != "" {
+		key, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(cfg.HostKey))
+		if err != nil || len(bytes.TrimSpace(rest)) != 0 {
+			return nil, errors.New("ssh: invalid pinned host key")
+		}
+		// Negotiate the pinned key type, rather than another valid host key
+		// offered by the same server. The callback still checks exact key bytes.
+		hostAlgorithms = []string{key.Type()}
+		switch key.Type() {
+		case ssh.KeyAlgoRSA:
+			hostAlgorithms = []string{ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA}
+		case ssh.CertAlgoRSAv01:
+			hostAlgorithms = []string{ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSAv01}
+		}
+	}
 	return &ssh.ClientConfig{
-		User:            cfg.SSHUser,
-		Auth:            authMethods,
-		HostKeyCallback: m.hostKeyCallback(cfg),
-		Timeout:         m.timeout,
+		HostKeyAlgorithms: hostAlgorithms,
+		User:              cfg.SSHUser,
+		Auth:              authMethods,
+		HostKeyCallback:   m.hostKeyCallback(cfg),
+		Timeout:           m.timeout,
 	}, nil
 }
 
@@ -785,31 +802,18 @@ func (m *RemoteManager) writeFile(ctx context.Context, client *ssh.Client, remot
 		return fmt.Errorf("mkdir: %w", err)
 	}
 
-	// Use a cat-heredoc approach for reliable transfer.
-	// The delimiter is unlikely to appear in a JSON config.
-	// umask 077 + explicit chmod so the file (which embeds the Reality private
-	// key, user passwords and UUIDs) is never world-readable to other local
-	// users on the landing host.
-	//
-	// The body is trimmed because the heredoc supplies the final newline itself:
-	// what lands on the node is remoteBytes(data), and nodeAlreadyHas hashes the
-	// same function of the same input. Embedding data verbatim instead makes the
-	// two disagree by one byte forever — every sync then rewrites an identical
-	// config and restarts sing-box under the live connections.
-	const delim = "__SSHCTL_EOF_8f3a__"
-	script := fmt.Sprintf(
-		`umask 077; cat > %s << '%s'
-%s
-%s
-chmod 600 %s
-`,
-		shellQuote(remotePath), delim, heredocBody(data), delim, shellQuote(remotePath),
-	)
-
-	if _, err := m.run(ctx, client, script); err != nil {
-		return fmt.Errorf("cat write: %w", err)
+	// Config secrets travel only over SSH stdin. A fixed-size command avoids
+	// both shell argument limits and exposing authentication data in argv.
+	// Keep the historical normalized bytes so unchanged nodes remain no-ops.
+	script := configWriteCommand(remotePath)
+	if _, err := m.runInput(ctx, client, script, bytes.NewReader(remoteBytes(data))); err != nil {
+		return fmt.Errorf("stdin write: %w", err)
 	}
 	return nil
+}
+
+func configWriteCommand(remotePath string) string {
+	return fmt.Sprintf("umask 077; cat > %s && chmod 600 %s", shellQuote(remotePath), shellQuote(remotePath))
 }
 
 // validateConfigPath runs "sing-box check" against the given config path on
@@ -1216,28 +1220,14 @@ func configHash(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// remoteBytes is what writeFile actually leaves on the node for data: a shell
-// heredoc is line-oriented and always terminates its body with a newline, while
-// the generated config comes out of json.MarshalIndent without one.
-//
-// Anything comparing the panel's bytes against the node's file has to go through
-// here. Hashing the raw config instead compares 38 bytes with the 39 on disk, so
-// "the node already has this config" can never be true — which turns the once-a-
-// minute sync pass into a once-a-minute config rewrite and sing-box restart on
-// every SSH-managed node, dropping every user's connection each time.
+// remoteBytes preserves the existing on-disk representation: exactly one
+// trailing newline. Both writes and no-op hash comparisons use these bytes.
 func remoteBytes(data []byte) []byte {
-	body := heredocBody(data)
-	out := make([]byte, 0, len(body)+1)
-	out = append(out, body...)
-	return append(out, '\n')
-}
-
-// heredocBody is data with its trailing newlines removed, ready to be embedded
-// between heredoc delimiters. Trailing blank lines are dropped rather than kept
-// because the delimiter has to start a line of its own: keeping them would make
-// the body no longer round-trip through remoteBytes.
-func heredocBody(data []byte) string {
-	return strings.TrimRight(string(data), "\n")
+	body := bytes.TrimRight(data, "\n")
+	out := make([]byte, len(body)+1)
+	copy(out, body)
+	out[len(body)] = '\n'
+	return out
 }
 
 // UpgradeSingBox reinstalls sing-box on the remote node by running the panel's

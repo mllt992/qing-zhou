@@ -58,7 +58,7 @@ func TestApplyConfigDoesNotRestartANodeThatAlreadyHasTheConfig(t *testing.T) {
 			}
 
 			node := newFakeNode()
-			host, port := startApplyTestSSHServer(t, node.handle)
+			host, port := startApplyTestSSHServerWithInput(t, node.handleWithInput)
 			cfg := tc.cfg
 			cfg.Host, cfg.Port = host, port
 
@@ -103,37 +103,6 @@ func TestApplyConfigDoesNotRestartANodeThatAlreadyHasTheConfig(t *testing.T) {
 	}
 }
 
-// TestRemoteBytesMatchesWhatTheHeredocWrites pins the one invariant the no-op
-// check rests on: the bytes remoteBytes predicts are the bytes the transfer
-// script produces, for configs with and without a trailing newline of their own.
-func TestRemoteBytesMatchesWhatTheHeredocWrites(t *testing.T) {
-	for _, data := range [][]byte{
-		[]byte(`{"a":1}`),
-		[]byte("{\"a\":1}\n"),
-		[]byte("{\n  \"a\": 1\n}"),
-	} {
-		script := fmt.Sprintf(
-			`umask 077; cat > %s << '%s'
-%s
-%s
-chmod 600 %s
-`,
-			shellQuote("/etc/sing-box/config.json"), "__SSHCTL_EOF_8f3a__",
-			heredocBody(data), "__SSHCTL_EOF_8f3a__", shellQuote("/etc/sing-box/config.json"),
-		)
-		path, written, ok := parseHeredocWrite(script)
-		if !ok {
-			t.Fatalf("could not parse transfer script for %q", data)
-		}
-		if path != "/etc/sing-box/config.json" {
-			t.Fatalf("heredoc target = %q", path)
-		}
-		if want := string(remoteBytes(data)); written != want {
-			t.Fatalf("heredoc wrote %q, remoteBytes predicted %q", written, want)
-		}
-	}
-}
-
 // fakeNode is a minimal stand-in for a managed node: a filesystem, a unit, and
 // enough shell literacy to run the handful of commands ApplyConfig sends.
 type fakeNode struct {
@@ -161,6 +130,10 @@ func (n *fakeNode) file(path string) string {
 }
 
 func (n *fakeNode) handle(command string) (string, uint32) {
+	return n.handleWithInput(command, "")
+}
+
+func (n *fakeNode) handleWithInput(command, input string) (string, uint32) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -170,11 +143,11 @@ func (n *fakeNode) handle(command string) (string, uint32) {
 
 	switch {
 	case strings.HasPrefix(command, "umask 077; cat > "):
-		path, body, ok := parseHeredocWrite(command)
-		if !ok {
-			return "cannot parse heredoc", 1
+		file, rest, ok := cutQuoted(strings.TrimPrefix(command, "umask 077; cat > "))
+		if !ok || rest != " && chmod 600 "+shellQuote(file) {
+			return "invalid stdin write command", 1
 		}
-		n.files[path] = body
+		n.files[file] = input
 		return "", 0
 
 	case strings.HasPrefix(command, "umask 077; mktemp "):
@@ -259,31 +232,6 @@ func (n *fakeNode) handle(command string) (string, uint32) {
 	default:
 		return "", 0
 	}
-}
-
-// parseHeredocWrite extracts the target path and the bytes a `cat > PATH << 'D'`
-// script leaves in it, including the newline the heredoc appends to its body.
-func parseHeredocWrite(command string) (string, string, bool) {
-	rest := strings.TrimPrefix(command, "umask 077; cat > ")
-	path, rest, ok := cutQuoted(rest)
-	if !ok {
-		return "", "", false
-	}
-	const opener = " << '"
-	if !strings.HasPrefix(rest, opener) {
-		return "", "", false
-	}
-	rest = rest[len(opener):]
-	end := strings.Index(rest, "'\n")
-	if end < 0 {
-		return "", "", false
-	}
-	delim, rest := rest[:end], rest[end+2:]
-	term := strings.Index(rest, "\n"+delim+"\n")
-	if term < 0 {
-		return "", "", false
-	}
-	return path, rest[:term] + "\n", true
 }
 
 // cutQuoted reads one shellQuote'd argument off the front of s.

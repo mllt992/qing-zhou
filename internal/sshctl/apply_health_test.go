@@ -120,6 +120,10 @@ func TestApplyConfigFailsClosedWhenCurrentStateCannotBeRead(t *testing.T) {
 // startApplyTestSSHServer starts the smallest SSH exec server ApplyConfig needs.
 // Each command is delegated to handler, which supplies stdout and an exit code.
 func startApplyTestSSHServer(t *testing.T, handler func(string) (string, uint32)) (string, int) {
+	return startApplyTestSSHServerWithInput(t, func(command, _ string) (string, uint32) { return handler(command) })
+}
+
+func startApplyTestSSHServerWithInput(t *testing.T, handler func(string, string) (string, uint32)) (string, int) {
 	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -163,7 +167,7 @@ func startApplyTestSSHServer(t *testing.T, handler func(string) (string, uint32)
 	return host, port
 }
 
-func serveApplyTestSSHConn(raw net.Conn, config *ssh.ServerConfig, handler func(string) (string, uint32)) {
+func serveApplyTestSSHConn(raw net.Conn, config *ssh.ServerConfig, handler func(string, string) (string, uint32)) {
 	defer raw.Close()
 	_, channels, requests, err := ssh.NewServerConn(raw, config)
 	if err != nil {
@@ -184,8 +188,9 @@ func serveApplyTestSSHConn(raw net.Conn, config *ssh.ServerConfig, handler func(
 		// closes first makes the client's stdin copy fail, and x/crypto/ssh
 		// surfaces that from session.Wait as a bare EOF — indistinguishable from
 		// the command itself having died.
+		var input strings.Builder
 		drained := make(chan struct{})
-		go func() { defer close(drained); _, _ = io.Copy(io.Discard, channel) }()
+		go func() { defer close(drained); _, _ = io.Copy(&input, channel) }()
 		go func() {
 			defer channel.Close()
 			for request := range channelRequests {
@@ -199,11 +204,13 @@ func serveApplyTestSSHConn(raw net.Conn, config *ssh.ServerConfig, handler func(
 					return
 				}
 				_ = request.Reply(true, nil)
-				out, status := handler(payload.Command)
 				select {
 				case <-drained:
 				case <-time.After(5 * time.Second):
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+					return
 				}
+				out, status := handler(payload.Command, input.String())
 				if out != "" {
 					_, _ = channel.Write([]byte(out))
 				}
