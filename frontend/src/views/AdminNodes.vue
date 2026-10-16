@@ -244,7 +244,7 @@
     <n-drawer v-model:show="showNode" :width="drawerW" placement="right">
       <n-drawer-content :title="editingNode ? '编辑节点' : '添加节点'" closable>
         <n-form label-placement="left" label-width="80">
-          <n-form-item label="名称"><n-input v-model:value="nodeForm.name" /></n-form-item>
+          <n-form-item label="名称" required><n-input v-model:value="nodeForm.name" :placeholder="nodeForm.type === 'external' && !editingNode ? '必填；留空时从分享链接读取' : '必填'" /></n-form-item>
           <n-form-item label="订阅备注">
             <div style="width:100%;">
               <n-input v-model:value="nodeForm.remark" placeholder="可选；优先作为订阅展示名，不影响计量 identity" />
@@ -758,6 +758,9 @@ function openNodeInGroup(g: any | null) {
   if (g) nodeForm.group_ids = [g.id]
 }
 async function handleSaveNode() {
+  nodeForm.name = (nodeForm.name || '').trim()
+  const canFillFromLink = !editingNode.value && nodeForm.type === 'external' && !!nodeForm.share_link.trim()
+  if (!nodeForm.name && !canFillFromLink) { message.warning('请填写节点名称'); return }
   saving.value = true
   try {
     if (editingNode.value) await apiPut(`/api/admin/nodes/${editingNode.value.id}`, nodeForm)

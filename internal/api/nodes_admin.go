@@ -72,6 +72,10 @@ func (a *API) handleAdminCreateNode(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if msg := requireNodeName(&n); msg != "" {
+		fail(w, http.StatusBadRequest, msg)
+		return
+	}
 	id, err := a.st.CreateNode(n)
 	if err != nil {
 		if failRelayTopology(w, err) {
@@ -101,6 +105,10 @@ func (a *API) handleAdminUpdateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.ID = int64(id)
+	if msg := requireNodeName(n); msg != "" {
+		fail(w, http.StatusBadRequest, msg)
+		return
+	}
 	if msg := a.validateNodeRoute(n); msg != "" {
 		fail(w, http.StatusBadRequest, msg)
 		return
@@ -114,6 +122,16 @@ func (a *API) handleAdminUpdateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	a.sbRebuildLog()
 	ok(w, nil)
+}
+
+// requireNodeName trims the node name and rejects a blank one: a node without
+// a name cannot be shown in the node list or subscriptions (#90).
+func requireNodeName(n *store.Node) string {
+	n.Name = strings.TrimSpace(n.Name)
+	if n.Name == "" {
+		return "节点名称不能为空"
+	}
+	return ""
 }
 
 // validateNodeRoute turns a self-built node into a safe logical route. The
