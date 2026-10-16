@@ -268,6 +268,7 @@ func (a *API) Router() http.Handler {
 		pr.Get("/api/auth/me", a.handleMe)
 		pr.Post("/api/auth/logout", a.handleLogout)
 		pr.Get("/api/user/dashboard", a.handleDashboard)
+		pr.Get("/api/user/health-timeline", a.handleUserHealthTimeline)
 		pr.Get("/api/user/oauth2", a.handleUserOAuth)
 		pr.Post("/api/user/oauth2/bind", a.handleOAuthBind)
 		pr.Get("/api/user/plans", a.handleUserPlans)

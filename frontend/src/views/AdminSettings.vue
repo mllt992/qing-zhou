@@ -196,7 +196,7 @@
             <div>
               <n-switch v-model:value="form.homepage_machine_health" checked-value="true" unchecked-value="false"
                         :disabled="!settingsLoaded" aria-label="首页显示机器健康" />
-              <div class="form-hint">默认关闭。开启后，首页监控大屏和控制台仅向已登录的管理员显示机器健康；普通用户和访客不可见。监控管理始终显示，不受此开关影响。</div>
+              <div class="form-hint">默认关闭。开启后，首页监控大屏和控制台向所有已登录用户显示机器健康：管理员看到全部机器，普通用户只看到在公开监控页上可见的机器（仅名称和探针在线/流量色块，不含 IP、SSH 等信息）；未登录访客不可见。监控管理始终显示，不受此开关影响。</div>
             </div>
           </n-form-item>
         </n-form>

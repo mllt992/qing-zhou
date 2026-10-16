@@ -23,7 +23,7 @@
     </div>
 
     <!-- 首页设置控制管理员的快捷健康视图；普通用户不会加载探针数据。 -->
-    <MachineHealthStrip v-if="auth.isAdmin && config.config.homepage_machine_health" />
+    <MachineHealthStrip v-if="auth.isLoggedIn && config.config.homepage_machine_health" />
 
     <!-- 状态提醒：按套餐维度判定，不再拿单一 expiry_at 代表整个账号 -->
     <transition-group name="alert" tag="div">

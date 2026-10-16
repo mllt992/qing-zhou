@@ -54,7 +54,7 @@
           </div>
         </div>
 
-        <MachineHealthStrip v-if="auth.isAdmin && config.config.homepage_machine_health" />
+        <MachineHealthStrip v-if="auth.isLoggedIn && config.config.homepage_machine_health" />
 
         <!-- 汇总卡片 -->
         <div class="summary-grid">

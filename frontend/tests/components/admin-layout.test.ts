@@ -34,6 +34,7 @@ beforeEach(() => {
     if (path === '/api/admin/upstreams') return []
     if (path === '/api/admin/onboarding') return { complete: true, steps: [], checked_at: 1 }
     if (path.startsWith('/api/admin/monitor/health-timeline')) return { machines: [], from: 1, to: 2 }
+    if (path.startsWith('/api/user/health-timeline')) return { machines: [], from: 1, to: 2 }
     return {}
   })
   vi.mocked(apiPut).mockImplementation(async (_path, body) => {
@@ -88,13 +89,22 @@ describe('machine health homepage opt-in', () => {
       wrapper.unmount()
     })
   }
-  for (const role of ['guest', 'user']) {
-    it(`never loads administrator health for ${role}, even when enabled`, async () => {
-      const { wrapper, config } = await render(Monitor, role)
+  it('never loads machine health for guests, even when enabled', async () => {
+    const { wrapper, config } = await render(Monitor, 'guest')
+    config.config.homepage_machine_health = true
+    await flushPromises()
+    expect(healthReads()).toHaveLength(0)
+    expect(wrapper.findComponent({ name: 'MachineHealthStrip' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+  for (const component of [Monitor, UserDashboard]) {
+    it(`shows normal users the gated user copy on ${component.__name}`, async () => {
+      const { wrapper, config } = await render(component, 'user')
+      expect(healthReads()).toHaveLength(0)
       config.config.homepage_machine_health = true
       await flushPromises()
-      expect(healthReads()).toHaveLength(0)
-      expect(wrapper.findComponent({ name: 'MachineHealthStrip' }).exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'MachineHealthStrip' }).exists()).toBe(true)
+      expect(healthReads().map(([path]) => path)).toEqual([expect.stringMatching(/^\/api\/user\/health-timeline\?/)])
       wrapper.unmount()
     })
   }

@@ -32,7 +32,7 @@
               :key="m.server_id"
               type="button"
               class="lab"
-              :title="'查看' + m.name + '的流量状态'"
+              :title="auth.isAdmin ? '查看' + m.name + '的流量状态' : m.name"
               @click="open(m)"
             >
               <span class="lab-name">{{ m.name }}</span>
@@ -70,6 +70,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NCard, NEmpty, NRadioButton, NRadioGroup, NSpin, useMessage } from 'naive-ui'
 import { apiGet } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { fmtBytes, fmtDateTime } from '@/utils/format'
 
 type Cell = { ts: number, state: 'online' | 'gap' | 'bridge', bytes?: number, known?: boolean }
@@ -91,6 +92,10 @@ type Timeline = {
 }
 
 const router = useRouter()
+const auth = useAuthStore()
+// Admins read the full strip; everyone else reads the homepage copy, which the
+// server only serves while 「首页显示机器健康」 is on and limits to public machines.
+const endpoint = computed(() => auth.isAdmin ? '/api/admin/monitor/health-timeline' : '/api/user/health-timeline')
 const message = useMessage()
 const presets = [
   { v: '6h', l: '近 6 小时', sec: 6 * 3600 },
@@ -252,7 +257,7 @@ function onMove(ev: MouseEvent) {
 }
 
 function open(m: Strip) {
-  if (!tl.value) return
+  if (!tl.value || !auth.isAdmin) return
   router.push({
     name: 'admin-monitor-detail',
     params: { id: m.server_id },
@@ -271,7 +276,7 @@ async function load() {
   const now = Math.floor(Date.now() / 1000)
   loading.value = true
   try {
-    tl.value = await apiGet<Timeline>(`/api/admin/monitor/health-timeline?from=${now - span}&to=${now}`)
+    tl.value = await apiGet<Timeline>(`${endpoint.value}?from=${now - span}&to=${now}`)
     ready.value = true
     await nextTick()
     draw()

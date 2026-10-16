@@ -19,7 +19,7 @@ test('health belongs to server monitoring and never loads on admin overview', ()
 
 test('homepage and console health require both administrator status and explicit opt-in', () => {
   for (const source of [homepage, dash]) {
-    assert.match(source, /<MachineHealthStrip v-if="auth.isAdmin && config.config.homepage_machine_health"/)
+    assert.match(source, /<MachineHealthStrip v-if="auth.isLoggedIn && config.config.homepage_machine_health"/)
   }
   assert.doesNotMatch(dash, /AdminOnboarding/)
   assert.match(settings, /v-model:value="form.homepage_machine_health" checked-value="true" unchecked-value="false"/)
