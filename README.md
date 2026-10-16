@@ -21,16 +21,19 @@
 - **🎛️ 9 协议纯可视化** —— 下拉、开关、零手写 JSON 即可管理 TLS / Reality 和入站，覆盖 **vless / vmess / trojan / tuic / hysteria2 / shadowsocks / anytls / hysteria**，外加 **mixed（HTTP/SOCKS5 代理账号）**；含传输层（ws/grpc/httpupgrade）与 uTLS / ALPN / Mux / Brutal。
 - **📜 证书中心** —— 面板内一键 **ACME 签发真实证书**（Let's Encrypt · Cloudflare DNS-01，只填一个 CF Token），或粘贴已有证书 / 一键自签；证书全局复用、被入站引用、**到期自动续期并推送到各落地机**。
 - **🌉 第三方静态 IP 出口** —— 入站可指定一个购买来的 **SOCKS5 / HTTP 代理**作为出口，流量经它出网、出口 IP 即代理 IP；密码库内加密、失效则「fail-closed」不回落直连。
-- **📱 订阅多端自适应** —— 同一条链接按客户端 `User-Agent` 自动返回 **Clash / sing-box / Surge**（含官方 SFA/SFI/SFM/SFT 客户端），其余回退 base64；内置 **URLTest 智能优选**（全局选最快 / 锁定 IP 只切协议）与**防泄漏分流模板**（局域网直连 / 广告拦截 / 公网代理），开箱即用。用浏览器打开订阅链接会看到一张**可读的信息页**（剩余流量 / 到期 / 节点数 + 一键复制），而不是一坨 base64。
+- **📱 订阅多端自适应** —— 同一条链接按客户端 `User-Agent` 自动返回 **Clash / sing-box / Surge**（含官方 SFA/SFI/SFM/SFT 客户端），其余回退 base64；内置 **「◎ 固定节点」/「⚡ 故障转移」** 两种策略（固定节点由客户端记住选择、不会因延迟自行切换；故障转移按顺序只在节点不可用时切换）、可选的 **「★ AI 节点」路由**（分组标记 AI 路由后 AI 域名优先走 AI 节点，且永不回退直连）与**防泄漏分流模板**（局域网直连 / 广告拦截 / 公网代理），开箱即用。用浏览器打开订阅链接会看到一张**可读的信息页**（剩余流量 / 到期 / 节点数 + 一键复制），而不是一坨 base64。
 - **⚡ 面向网速/延迟的调优下发** —— **Brutal / Mux / TCP Fast Open / MPTCP、tuic 0-RTT、ws early-data** 从入站自动镜像到客户端出站——这些两端对称才生效的项，以前配了却在订阅里丢掉，现在端到端对齐（vless vision flow 时自动避让 mux）。
 - **🔀 中转 / 落地链路（多级链式）** —— 入站可设「落地 / 中转」：选一个落地入站，本入站即变**线路机**，流量转发到**落地机**再出网（`客户端 → 线路机 → 落地机 → 互联网`）；支持**多级串联**（A→B→C→…）与末端接第三方代理出口；复用已有落地入站、自动派生并注入中转凭据，无需手工配隧道，**链路拓扑图**可视化。
 - **🧾 多套餐独立计费（桶模型）** —— 一个用户可同时持有多个套餐，每个套餐是独立的「桶」（各自流量 / 到期 / 节点 / 计量身份）；某套餐到期只下线它名下的节点，互不影响。重复购买**同一套餐自动排队**（不再叠加：一次只跑一份，用完/到期后下一份自动顶上），退款按**剩余流量/时间比例**结算（详见[计费与退款业务说明](docs/计费与退款业务说明.md)）。
-- **🌐 多落地服务器** —— 面板在中心机，通过 SSH 把配置下发到多台落地 sing-box，统一管理。
-- **🔢 节点 sing-box 版本可见可升** —— 「服务器管理」页长期显示每台机器实际在跑的 sing-box 版本（数据来自面板本来就在做的能力探测，不额外连机器），低于面板要求的最低版本会标红 —— 那种情况下节点的 `sing-box check` 会失败、面板**停止向它下发任何配置**而表面看不出来；装成官方版（不含 `v2ray_api`）导致**流量统计不到**也会当场点破。可**逐台一键重装**为面板发布的版本（安装脚本经 SSH 推过去执行，节点无需能访问面板）。
-- **📊 服务器监控** —— 内置探针，多机 CPU / 内存 / 磁盘 / 负载 / 流量实时采集，可用性热力图 + 每机趋势卡片。
+- **🌐 多落地服务器** —— 面板在中心机，通过 SSH 把配置下发到多台落地 sing-box，统一管理；主机密钥首连固定、之后逐字节校验，较大的配置文件经 stdin 写入，不出现在远端命令行里。
+- **📐 逐用户中转计量（可选，默认关闭）** —— 中转链路上入口和落地各自实测每个用户的上下行，套餐只在业务入口扣一次；覆盖 VLESS / VMess / Trojan / TUIC / Hysteria / Hysteria2 / AnyTLS / SS2022（mixed 仅作入口）。启用前有预检，按「落地先接受、入口再切换」顺序下发，并核验节点**实际运行**的核心能力（详见[中转计量说明](docs/TRAFFIC_METERING.md)）。
+- **🔑 OAuth2 / OIDC 登录** —— 可接入外部认证中心（授权码 + PKCE），已有账号在账户设置里用当前密码确认绑定，不按邮箱自动合并（详见[接入说明](docs/oauth2.md)）。
+- **✉️ 业务邮件与运营工具** —— 到期 / 流量提醒、用户退订、业务邮件总开关（**默认关闭**，详见[业务邮件](docs/business-email.md)）；一次性**积分兑换码**（原子到账、防爆破，详见[积分兑换](docs/point-redemption.md)）；可选的**部署检查清单**引导首次配置（详见[部署清单](docs/admin-onboarding.md)）。
+- **🔢 节点 sing-box 版本可见可升** —— 「服务器管理」页长期显示每台机器实际在跑的 sing-box 版本（数据来自面板本来就在做的能力探测，不额外连机器），低于面板要求的最低版本会标红 —— 那种情况下节点的 `sing-box check` 会失败、面板**停止向它下发任何配置**而表面看不出来；装成官方版（不含 `v2ray_api`）导致**流量统计不到**也会当场点破。可**逐台一键重装**为面板发布的版本（安装脚本经 SSH 推过去执行，节点无需能访问面板）。当前节点核心基于官方 sing-box **v1.14.2**，另含 Vision 帧头、WS/HTTPUpgrade 读缓冲与 Trojan 分段首包修复，完整标识 `1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da`。
+- **📊 服务器监控** —— 内置探针，多机 CPU / 内存 / 磁盘 / 负载 / 流量实时采集，可用性热力图 + 每机趋势卡片；可按时间段回看单机**流量状态**（网卡进出、TCP 连接数、探针中断），首页可选显示**机器健康色带**（仅管理员可见）。
 - **🔒 安全内建** —— 敏感配置（SMTP 密码 / Reality 私钥等）库内 **AES-256-GCM 加密**；登录 / 注册 / 找回按 IP 限流；JWT 绑 `jti` 支持会话吊销；生成的节点配置**默认阻断私网出口**（内网段 / `127.0.0.1` / 云元数据 `169.254.169.254`），用 IP 或域名访问都拦得住（先解析再判断，否则一个指向内网的 A 记录就能绕过），用户拿不到落地机的内网身份。
 - **⏮️ 版本可回退** —— 「在线更新」页可**一键回滚到上一个版本**（使用本机保留的旧二进制，**不联网、不重新下载**），或指定安装历史版本。替换前自动创建带版本、revision 和校验信息的一致性数据库快照，失败则中止，最多保留 5 份。**二进制回滚不等于数据库降级**：页面提供对应快照下载和[恢复指引](docs/disaster-recovery.md)；新版本完全无法启动时，需由服务器管理员停服恢复配套数据库与二进制。
-- **💾 在线备份** —— 面板一键导出整库一致性快照（`VACUUM INTO`，单文件、无 `-wal` 附件）。WAL 模式下直接拷贝 `.db` 拿到的是残缺副本，这里由 SQLite 自己在读事务上生成，导出期间面板照常读写。
+- **💾 在线备份** —— 面板一键导出整库一致性快照（`VACUUM INTO`，单文件、无 `-wal` 附件），也可在「系统设置 → 数据备份」配置定时上传到 S3 兼容存储（如 Cloudflare R2，详见[灾备说明](docs/disaster-recovery.md)）。WAL 模式下直接拷贝 `.db` 拿到的是残缺副本，这里由 SQLite 自己在读事务上生成，导出期间面板照常读写。
 - **🚀 为小机器而生** —— WAL 模式 SQLite、纯 Go 无 CGO、内存占用低，1H1G 可同时跑面板 + 落地。
 
 ---
@@ -69,11 +72,12 @@
 - 注册 / 登录 / 邮箱验证 / 找回密码
 - 控制台：按**套餐维度**呈现各桶的流量 / 到期 / 节点，积分、趋势图、公告
 - **订阅管理**：聚合链接 + 二维码，多端格式自适应；节点列表按套餐分组并显示链路拓扑
-- 智能优选：`♻️ 自动选择` / `⚡ 锁定服务器` / `✈️ 节点选择`
+- 订阅策略：`◎ 固定节点` / `⚡ 故障转移`，可选 `★ AI 节点`
 - 订阅安全：「更换订阅地址」与「重置节点凭据」是两个独立操作，可只换链接不动凭据
 - **节点管理**：筛选、测速、条件启用、批量开关（仅对自己生效）
 - mixed 代理账号一键复制为 URL，直接喂给浏览器插件 / 终端
-- 积分商城：积分自助购买流量包 / 订阅套餐，订单与积分流水（含可视化）
+- 积分商城：积分自助购买流量包 / 订阅套餐，**兑换码**充积分，订单与积分流水（含可视化）
+- 通知：业务邮件提醒可退订；可绑定 Telegram 接收通知；OAuth2 账号绑定
 - 个人中心：改邮箱 / 改密码 / 登录设备管理（远程注销）
 
 </td><td>
@@ -86,10 +90,11 @@
 - 商品：流量包 / 订阅套餐 CRUD，套餐绑定节点分组
 - **原生 sing-box 管理**：可视化管 TLS/Reality + 9 协议入站；**证书中心**（ACME/粘贴/自签、自动续期）；**代理出口**（第三方静态 IP）
 - **链路拓扑**：客户端→入站→(多级中转→落地→代理出口)→互联网，一键串联落地 / 解除中转
-- 节点 & 分组：按分组卡片聚合、可手动排序；自建 + 外部机场源抓取（base64 / Clash YAML）
+- 节点 & 分组：按分组卡片聚合、可手动排序；自建 + 外部机场源抓取（base64 / Clash YAML）；显示每个节点 / 分组的**可用用户人数**与名单
+- **机器用量报表**：按机器（含面板本机）看近 7/14/30 天各用户上下行、排名与趋势；可选逐用户中转计量
 - **服务器监控**：多机资源 / 流量 / 负载 / 可用性热力图；阈值告警按「事件」聚合，不刷重复条目
 - **在线更新**：升级 / 回滚上一版 / 指定任意历史版本；一键导出整库快照备份
-- 注册码、公告、帮助文档（Markdown 实时预览）、系统设置
+- 注册码、积分兑换码、公告、帮助文档（Markdown 实时预览）、业务邮件、OAuth2 / OIDC、部署检查清单、系统设置
 
 </td></tr>
 </table>
@@ -118,7 +123,7 @@
 
 - **面板与 sing-box 可同机**（最简单）**，也可分离**：面板在中心机，落地 sing-box 在多台机器，面板用 SSH 下发。
 - 轻舟生成 sing-box 的 `config.json` → `sing-box check` 校验 → 原子替换 → reload；再按 `v2ray_api` 采集每用户上下行流量。
-- **中转链路（可选）**：某个入站可指定「落地入站」，其流量经出站转发到另一台机器的落地入站再出网 —— `客户端 → 线路机入站 → 落地机入站 → 互联网`；可**多级串联**，末端还能接第三方代理出口，per-user 计量在入口侧完成。
+- **中转链路（可选）**：某个入站可指定「落地入站」，其流量经出站转发到另一台机器的落地入站再出网 —— `客户端 → 线路机入站 → 落地机入站 → 互联网`；可**多级串联**，末端还能接第三方代理出口，套餐只在入口侧扣量；开启逐用户中转计量后，入口与落地还会各自记录每用户的实测流量。
 
 ---
 
@@ -129,6 +134,7 @@
 - **Go 1.25+**（仅编译时需要；用 release 二进制或 Docker 则不需要）
 - 一台 **Linux amd64 / arm64** 服务器（落地节点用）；面板本身跨平台，但**在线更新与一键安装脚本仅支持 Linux**
 - 可选：域名 + HTTPS 证书（生产强烈建议）、SMTP（邮箱验证 / 找回密码用）
+- **节点 sing-box 请用面板发布的核心**（当前基于 v1.14.2，见下文「最小可用部署」），面板升级**不会**自动替换节点核心
 - **客户端 sing-box ≥ 1.12**（仅当用户使用 sing-box 格式订阅时）。下发的 sing-box 模板用 1.12 引入的
   DNS 服务器写法（`{"type":"https","server":"1.1.1.1"}`），因为 **1.14 已移除旧的 `address` 写法**——
   继续用旧写法的订阅在 1.14 上不是告警而是直接加载失败。两种写法无法同时满足 1.11 和 1.14，因此底线定在 1.12。
@@ -141,6 +147,8 @@
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/mllt992/qing-zhou/main/install.sh)
 ```
+
+> ⚠️ **升级前**请自行独立备份一份一致性数据库，并妥善保存原 `QZ_SECRET_KEY`。新版本带数据库迁移，旧二进制不能直接用新库回退；从 **v0.2.84 或更早**首次升级尤其要备份（旧更新器只备份二进制）。节点核心需在「服务器管理」里逐台重装。
 
 常用选项：`--version vX.Y.Z` 装指定版本；`--force` 同版本强制重装；`--proxy https://mirror.ghproxy.com/` 国内下载加速。装完后升级可重跑脚本，或直接用面板内「在线更新」。
 
@@ -169,7 +177,7 @@ docker compose up -d
 docker compose logs -f qingzhou     # 首启打印随机管理员密码（未设 QZ_ADMIN_PASS 时）
 ```
 
-或直接用镜像：`docker run -d -p 8081:8081 -e QZ_SECRET_KEY=$(openssl rand -hex 32) -v qingzhou-data:/data ghcr.io/mllt992/qing-zhou:latest`。**Docker 用「拉新镜像 + 重建容器」升级**，详见 [Wiki · Docker 部署](https://github.com/mllt992/qing-zhou/wiki/Docker-部署)。
+或直接用镜像：`docker run -d -p 8081:8081 -e QZ_SECRET_KEY=$(openssl rand -hex 32) -v qingzhou-data:/data ghcr.io/mllt992/qing-zhou:latest`。镜像只含面板和探针，不含 sing-box。发布流程会同时更新版本标签与 `latest`，生产建议固定明确的版本标签（如 `ghcr.io/mllt992/qing-zhou:v0.2.88`）。**Docker 用「拉新镜像 + 重建容器」升级**，详见 [Wiki · Docker 部署](https://github.com/mllt992/qing-zhou/wiki/Docker-部署)。
 
 通过当前发布工作流新构建的 GHCR 镜像会携带构建来源证明（provenance）与 SBOM，并标记
 对应的源码 revision。可用 Buildx 查看镜像清单和证明；把示例版本换成实际安装的 tag：
@@ -260,7 +268,7 @@ systemctl daemon-reload && systemctl enable --now qingzhou
 
 1. **服务器** —— 单机落地用默认值即可；多落地则「新增」，填一键脚本输出的 host / SSH / 路径。
 2. **TLS / Reality** —— 一键生成 Reality 密钥对 + short_id，填个借用域名（如 `www.microsoft.com`），抗封锁且无需自有证书。需要真实证书（套 CDN 的 WS-TLS 等）时，去 **证书管理** 一键 ACME 签发（Let's Encrypt，填 Cloudflare Token 走 DNS-01）或粘贴已有证书，再在入站里「引用证书」。
-3. **入站（节点）** —— 选协议建入站并绑定上一步的 TLS；同机可建多协议入站，订阅会自动聚成「锁定 IP·切协议」优选组。需要中转时，在入站的「落地 / 中转」里选一个落地入站即可（或在 sing-box→链路拓扑里一键「串联落地」，支持多级）；想让某入站从**购买的静态 IP** 出网，则在「代理出口」页录入该 SOCKS5/HTTP 代理后，在入站上选它作出口。
+3. **入站（节点）** —— 选协议建入站并绑定上一步的 TLS；同机可建多协议入站。需要中转时，在入站的「落地 / 中转」里选一个落地入站即可（或在 sing-box→链路拓扑里一键「串联落地」，支持多级）；想让某入站从**购买的静态 IP** 出网，则在「代理出口」页录入该 SOCKS5/HTTP 代理后，在入站上选它作出口。
 4. **分组** —— 把节点归类（免费 / 高级…），订阅与套餐都按分组授权；在「设置」里可指定**免费分组**（所有用户可见）。
 5. **套餐（商品）** —— 建流量包 / 订阅套餐并绑定可访问的分组。
 6. **机场订阅源（可选）** —— 粘贴外部机场订阅链接，定时抓取聚合进来。
@@ -297,6 +305,9 @@ systemctl daemon-reload && systemctl enable --now qingzhou
 | `QZ_MONITOR_PROBE_INTERVAL` | `60s` | 节点探针与面板本机的指标采集周期；可在「系统设置 → 采集与同步」在线修改，本变量设置后界面只读 |
 | `QZ_SINGBOX_STATS_INTERVAL` | `10m` | 采集用量并生成期望配置（剔除超额/到期用户）的周期；可在设置页在线修改，本变量优先 |
 | `QZ_SINGBOX_RECONCILE_INTERVAL` | `60m` | 绕过摘要缓存，核对远端配置文件与 sing-box 运行状态的周期；可在设置页在线修改，本变量优先 |
+| `QZ_SSH_KEY_DIR` | 数据库同级 `ssh-keys/` | 远程服务器 SSH 私钥文件目录 |
+| `QZ_TELEGRAM_BOT_TOKEN` / `QZ_TELEGRAM_BOT_USERNAME` | — | Telegram 通知机器人（也可在设置页填；本变量优先） |
+| `QZ_BACKUP_MANIFEST` | 空 | 设为灾备清单的绝对路径后，远端备份改为上传完整灾备包，见[灾备说明](docs/disaster-recovery.md) |
 | `QZ_SMTP_HOST` / `PORT` / `USER` / `PASS` / `FROM` / `FROM_NAME` / `SECURITY` | — | SMTP 配置（也可在面板「设置」页填，密码加密存储） |
 
 > 完整示例见 [`deploy/qingzhou.env.example`](deploy/qingzhou.env.example)。
@@ -321,16 +332,16 @@ systemctl daemon-reload && systemctl enable --now qingzhou
 
 机器用 **API Token**（`qz_at_…`，管理页 `/admin/api-tokens`）：可 scope / 过期 / 吊销；首批 scope 为 `stats:read`、`users:read`、`nodes:read`、`servers:read`、`backup:write`。Token **不能**调用 `update/*`；管理 Token 本身只能用管理员登录会话。明文只在创建时返回一次，库内仅存哈希。
 
-- **公开**：`GET /api/health`、`GET /api/config`、`POST /api/auth/{login,register,forgot,reset}`、`GET /api/auth/verify`、`GET /sub/{token}`（聚合订阅，UA 自适应或 `?format=clash|singbox|surge`）、`GET /install-singbox.sh`、`GET /api/monitor/{public,heatmap,install.sh,agent/{arch}}`
-- **用户**：`/api/user/{dashboard,plans,subscription,reset-sub,reset-node-creds,packages,purchase,orders,points,announcements,sessions,nodes,proxies,stats/traffic,password,email}`、`GET /api/auth/me`
+- **公开**：`GET /api/health`、`GET /api/config`、`POST /api/auth/{login,register,forgot,reset}`、`GET /api/auth/verify`、`/api/auth/oauth2/*`、`GET /sub/{token}`（聚合订阅，UA 自适应或 `?format=clash|singbox|surge`）、`GET /install-singbox.sh`、`GET /api/monitor/{public,heatmap,install.sh,agent/{arch}}`
+- **用户**：`/api/user/{dashboard,plans,subscription,reset-sub,reset-node-creds,packages,purchase,orders,points,points/redeem,announcements,sessions,nodes,proxies,stats/traffic,password,email,notifications/email,telegram,oauth2}`、`GET /api/auth/me`
 - **管理**：
-  - 业务 `/api/admin/{users,user-groups,packages,orders,reg-codes,announcements,help,settings,tokens}`（含 `orders/{id}/refund-preview`、`packages/{id}/retire`；`tokens` 为 API Token 创建/列表/吊销）
+  - 业务 `/api/admin/{users,user-groups,packages,orders,reg-codes,point-codes,announcements,help,settings,tokens,oauth2,onboarding,manual-notifications,ops-recipients,upstreams}`（含 `orders/{id}/refund-preview`、`packages/{id}/retire`；`tokens` 为 API Token 创建/列表/吊销）
   - 节点 `/api/admin/{nodes,node-groups,node-sources,servers}`（含 `nodes/singbox` 版本探测与 `nodes/{id}/singbox/upgrade` 一键重装）
   - 原生 sing-box `/api/admin/sb/*`（TLS、入站、代理出口 `sb/egresses`、`sb/preview`、`sb/port-check`、`sb/sni-test`、`sb/import-remote/*`）
   - 证书中心 `/api/admin/certs/*`
-  - 统计 `/api/admin/stats/{overview,traffic,top,distribution,packages,users,usage,usage/users,usage/packages}`
-  - 监控 `/api/admin/monitor/{dashboard,servers,heatmap,alerts}`
-  - 运维 `/api/admin/{backup,rebuild,update/*}`（`update` 含 `check`/`apply`/`releases`/`rollback`/`status`）
+  - 统计 `/api/admin/stats/{overview,traffic,distribution,packages,users,audience,usage,usage/users,usage/packages,usage/machine}`；逐用户中转计量 `/api/admin/relay-metering/*`（含 `preflight`）
+  - 监控 `/api/admin/monitor/{dashboard,servers,heatmap,health-timeline,alerts}`（含 `servers/{id}/traffic-status`）
+  - 运维 `/api/admin/{backup,backups,rebuild,update/*}`（`update` 含 `check`/`apply`/`releases`/`rollback`/`status`/`snapshots`）
 
 ---
 
@@ -338,6 +349,8 @@ systemctl daemon-reload && systemctl enable --now qingzhou
 
 - **[部署与配置手册](docs/部署与配置手册.md)** —— 从零把面板 + sing-box 跑起来、多落地、协议选型、运维排错。
 - **[订阅使用指南](docs/订阅使用指南.md)** —— 面向普通用户：各客户端导入、智能优选、分流、常见问题。
+- **[OAuth2 / OIDC 接入](docs/oauth2.md)**、**[业务邮件](docs/business-email.md)**、**[积分兑换码](docs/point-redemption.md)**、**[部署检查清单](docs/admin-onboarding.md)**、**[机器用量报表](docs/admin-usage-report.md)**
+- **[中转计量说明](docs/TRAFFIC_METERING.md)** · **[协议矩阵](docs/TRAFFIC_PROTOCOL_MATRIX.md)** · **[Trojan 握手修复](docs/CORE_TROJAN_HANDSHAKE_FIX.md)** · **[灾备与恢复](docs/disaster-recovery.md)** · **[数据库迁移](docs/database-migrations.md)**
 - **[计费与退款业务说明](docs/计费与退款业务说明.md)** —— 面向运营者：桶模型、重复购买排队生效、多套餐并存、按剩余比例退款与后台操作。
 
 ---
