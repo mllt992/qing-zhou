@@ -300,15 +300,57 @@
         </template>
       </p>
       <n-form label-placement="left" label-width="80">
-        <n-form-item label="调整 (GB)">
+        <n-form-item v-if="adjustPlan?.periodic" label="调整范围">
+          <n-radio-group v-model:value="adjustScope" size="small">
+            <n-radio-button value="period">只改本月</n-radio-button>
+            <n-radio-button value="monthly">改每月流量</n-radio-button>
+          </n-radio-group>
+        </n-form-item>
+        <n-form-item v-if="adjustScope === 'monthly' && adjustPlan?.periodic" label="每月 (GB)">
+          <n-input-number v-model:value="monthlyGB" :min="0" style="width:100%;" />
+        </n-form-item>
+        <n-form-item v-else label="调整 (GB)">
           <n-input-number v-model:value="adjustGB" :show-button="true" style="width:100%;" />
         </n-form-item>
       </n-form>
       <p class="form-hint" style="margin:-4px 0 12px;">
-        正数增加、负数扣减。扣减不会低于已用流量。排队中尚未生效的份也可以改额度。
-        这不是退款：积分与订单都不动。
+        <template v-if="adjustScope === 'monthly' && adjustPlan?.periodic">
+          这条订阅以后每个月都按新流量发放，本月的额度也会按差额同步调整。
+        </template>
+        <template v-else>
+          正数增加、负数扣减。扣减不会低于已用流量。排队中尚未生效的份也可以改额度。
+          <template v-if="adjustPlan?.periodic">只对本月有效，下次重置后恢复为每月流量。</template>
+          这不是退款：积分与订单都不动。
+        </template>
       </p>
-      <n-button type="primary" block :loading="saving" :disabled="!adjustGB" @click="handleAdjust">确认</n-button>
+      <n-button type="primary" block :loading="saving"
+                :disabled="adjustScope === 'monthly' && adjustPlan?.periodic ? monthlyGB === null : !adjustGB"
+                @click="handleAdjust">确认</n-button>
+
+      <!-- 按月重置相关：每份套餐所在的这条订阅一起设置 -->
+      <template v-if="adjustPlan && adjustPlan.kind === 'plan' && adjustPlan.package_id > 0">
+        <div class="line-sec">
+          <template v-if="adjustPlan.periodic">
+            <div class="line-row">
+              <span>允许预支</span>
+              <n-select v-model:value="advanceMode" size="small" style="width:150px;"
+                        :options="[{ label: '跟随套餐设置', value: -1 }, { label: '允许', value: 1 }, { label: '不允许', value: 0 }]"
+                        :disabled="saving" @update:value="saveAdvance" />
+            </div>
+            <p class="form-hint">允许后，这位用户本月用完可以先用下个月的流量，最多一个月。</p>
+            <div v-if="resetLogs.length" class="line-log">
+              <div class="line-log-t">最近重置</div>
+              <div v-for="r in resetLogs" :key="r.reset_at + '-' + r.bucket_id" class="line-log-r">
+                {{ fmtDateTime(r.reset_at) }} · 上月用了 {{ fmtBytes(r.used) }} / {{ fmtBytes(r.quota) }} · 本月 {{ fmtBytes(r.next_quota) }}
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <p class="form-hint">这条订阅是之前买的，整个有效期共用一份流量，不会每月重置。</p>
+            <n-button size="small" secondary block :loading="saving" @click="convertLine">改为按月重置</n-button>
+          </template>
+        </div>
+      </template>
     </n-modal>
 
     <!-- 订单历史 -->
@@ -440,9 +482,15 @@ function planNote(u: any) {
   if (!s.active) return '没有生效中的套餐，点击处理'
   const names = activeNamesText(s)
   if (!s.next_expiry_at) return names ? `${names} · 均不过期` : '均不过期'
-  const d = daysLeft(s.next_expiry_at)
-  const when = `${s.active > 1 ? '最近 ' : ''}${fmtDate(s.next_expiry_at)} 到期（剩 ${Math.max(d ?? 0, 0)} 天）`
+  const end = finalExpiry(s)
+  const d = daysLeft(end)
+  let when = `有效期至 ${fmtDate(end)}（剩 ${Math.max(d ?? 0, 0)} 天）`
+  if (end !== s.next_expiry_at) when += ` · 当前这份 ${fmtDate(s.next_expiry_at)} 到期`
   return names ? `${names} · ${when}` : when
+}
+// 整体到期：含排队中的份，排到最后一份结束
+function finalExpiry(s: any): number {
+  return Math.max(s?.final_expiry_at || 0, s?.next_expiry_at || 0)
 }
 function activeNamesText(s: any) {
   const counts = new Map<string, number>()
@@ -459,7 +507,7 @@ function needsPlan(u: any) {
   return u.role !== 'admin' || hasAnyPlan(u)
 }
 function expiringSoon(u: any) {
-  const ts = u.plan_summary?.next_expiry_at
+  const ts = u.plan_summary?.next_expiry_at ? finalExpiry(u.plan_summary) : 0
   if (!ts) return false
   const d = daysLeft(ts)
   return d !== null && d <= 7
@@ -501,7 +549,7 @@ const filtered = computed(() => {
       case 'subfetch': return (b.sub_last_fetched_at || 0) - (a.sub_last_fetched_at || 0)
       case 'usage': return usedPctOf(b) - usedPctOf(a) || (b.traffic?.used || 0) - (a.traffic?.used || 0)
       // 不过期的份排在最后：它们永远轮不到「需要续费」
-      case 'expiry': return (a.plan_summary?.next_expiry_at || Infinity) - (b.plan_summary?.next_expiry_at || Infinity)
+      case 'expiry': return ((a.plan_summary?.next_expiry_at && finalExpiry(a.plan_summary)) || Infinity) - ((b.plan_summary?.next_expiry_at && finalExpiry(b.plan_summary)) || Infinity)
       case 'points': return (b.points || 0) - (a.points || 0)
     }
     return 0
@@ -716,14 +764,72 @@ const adjustAmountText = computed(() => {
   if (!p) return ''
   return `${fmtBytes(p.used || 0)} / ${fmtBytes(p.traffic_limit)}`
 })
+const adjustScope = ref<'period' | 'monthly'>('period')
+const monthlyGB = ref<number | null>(null)
+const advanceMode = ref<number>(-1)
+const resetLogs = ref<any[]>([])
+const lineKey = (p: any) => p.queue_key || 'pkg:' + p.package_id
 function openAdjust(p: any) {
   adjustPlan.value = p
   adjustGB.value = null
+  adjustScope.value = 'period'
+  monthlyGB.value = p.periodic ? Math.round((p.period_quota || 0) / GiB * 100) / 100 : null
+  advanceMode.value = p.advance_override ?? -1
+  resetLogs.value = []
   showAdjust.value = true
+  if (p.periodic && plansUser.value) loadResetLogs(plansUser.value.id, p)
+}
+async function loadResetLogs(uid: number, p: any) {
+  try {
+    const ids = new Set(userPlans.value.filter((x: any) => lineKey(x) === lineKey(p)).map((x: any) => x.id))
+    const all = await apiList(`/api/admin/users/${uid}/period-resets`)
+    resetLogs.value = (all || []).filter((r: any) => ids.has(r.bucket_id)).slice(0, 5)
+  } catch { resetLogs.value = [] }
+}
+async function afterLineChange(text: string) {
+  const u = plansUser.value
+  message.success(text)
+  showAdjust.value = false
+  if (u) await Promise.all([loadPlans(u.id), load()])
+  syncPlansUser()
+}
+async function saveAdvance(mode: number) {
+  const u = plansUser.value, p = adjustPlan.value
+  if (!u || !p) return
+  saving.value = true
+  try {
+    await apiPut(`/api/admin/users/${u.id}/plan-lines/advance`, { queue_key: lineKey(p), mode })
+    await afterLineChange('预支设置已保存')
+  } catch (e: any) { message.error(e.message) } finally { saving.value = false }
+}
+function convertLine() {
+  const u = plansUser.value, p = adjustPlan.value
+  if (!u || !p) return
+  dialog.warning({
+    title: '改为按月重置',
+    content: `把「${p.name}」这条订阅（含排队中的份）改成每 30 天重置一次。每月流量按原来的总流量平均分到每个月；正在用的这份从本期开始重新计量。改了就不能改回去，确定吗？`,
+    positiveText: '确定修改', negativeText: '取消',
+    onPositiveClick: async () => {
+      saving.value = true
+      try {
+        await apiPost(`/api/admin/users/${u.id}/plan-lines/convert`, { queue_key: lineKey(p) })
+        await afterLineChange('已改为按月重置')
+      } catch (e: any) { message.error(e.message) } finally { saving.value = false }
+    },
+  })
 }
 async function handleAdjust() {
   const u = plansUser.value
   const p = adjustPlan.value
+  if (u && p && p.periodic && adjustScope.value === 'monthly') {
+    if (monthlyGB.value === null) return
+    saving.value = true
+    try {
+      await apiPut(`/api/admin/users/${u.id}/plan-lines/monthly`, { queue_key: lineKey(p), monthly_bytes: Math.round(monthlyGB.value * GiB) })
+      await afterLineChange('每月流量已修改')
+    } catch (e: any) { message.error(e.message) } finally { saving.value = false }
+    return
+  }
   if (!u || !p || !adjustGB.value) return
   saving.value = true
   try {
@@ -971,6 +1077,11 @@ onMounted(load)
 .au-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .modal-sub { font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
 .form-hint { margin-top: 4px; font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.line-sec { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.line-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.line-log { margin-top: 8px; font-size: 12px; color: var(--text-2); }
+.line-log-t { font-weight: 600; margin-bottom: 4px; }
+.line-log-r { line-height: 1.7; }
 
 /* 概览条：既是数字也是筛选器 */
 .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; margin-bottom: 14px; }

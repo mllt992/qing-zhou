@@ -63,6 +63,8 @@ type adminPlanRollup struct {
 	// and folding it into the plan counts makes both numbers unreadable.
 	PoolLimit int64 `json:"pool_limit"`
 	PoolUsed  int64 `json:"pool_used"`
+	// FinalExpiryAt is when the user's last queued份 ends (#96); 0 = none or never.
+	FinalExpiryAt int64 `json:"final_expiry_at"`
 }
 
 // adminPlanRollupOf summarises a user's buckets. The free bucket is skipped for
@@ -82,7 +84,7 @@ func adminPlanRollupOf(buckets []*store.Bucket) adminPlanRollup {
 			continue
 		case b.Status == "queued":
 			s.Queued++
-		case !b.NotExpired(now) || !b.HasQuota():
+		case !b.NotExpired(now) || (!b.HasQuota() && !b.Periodic()):
 			s.Finished++
 		default:
 			s.Active++
@@ -92,6 +94,7 @@ func adminPlanRollupOf(buckets []*store.Bucket) adminPlanRollup {
 			}
 		}
 	}
+	s.FinalExpiryAt, _, _ = store.FinalExpiry(buckets, now)
 	return s
 }
 

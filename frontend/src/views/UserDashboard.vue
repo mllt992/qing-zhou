@@ -202,7 +202,9 @@ const trafficSub = computed(() => {
   const t = traffic.value
   if (!dash.value.traffic) return ''
   const parts: string[] = []
-  if (metered.value) parts.push(`已用 ${fmtBytes(t.used)} / ${fmtBytes(t.total)}`)
+  if (metered.value) parts.push(`${dash.value.next_reset_at ? '本月已用' : '已用'} ${fmtBytes(t.used)} / ${fmtBytes(t.total)}`)
+  if (dash.value.advanced > 0) parts.push(`已预支下期 ${fmtBytes(dash.value.advanced)}`)
+  if (dash.value.next_reset_at) parts.push(`${fmtDate(dash.value.next_reset_at)} 重置`)
   return parts.join(' · ') || '还没有可用套餐'
 })
 
@@ -226,20 +228,29 @@ const ringFoot = computed(() => {
 // ---- 套餐（只报汇总，不在控制台铺明细：多份并存时任何单份都代表不了账号）----
 const plans = computed<any[]>(() => dash.value.plans || [])
 const activePlans = computed(() => plans.value.filter(p => p.status === 'active'))
+// 按月重置的套餐本月用完只是暂停，下次重置自动恢复，不算到期
+const pausedPlans = computed(() => plans.value.filter(p => p.periodic && p.status === 'exhausted'))
 const activeCount = computed(() => activePlans.value.length)
 const queuedCount = computed(() => plans.value.filter(p => p.status === 'queued').length)
-// 最近到期的那一份，作为「什么时候需要续」的提示；不过期的份不参与比较
+// 什么时候需要续：按整条续期线（含排队中的份）的最终到期算，不过期的份不参与比较
+const livePlans = computed(() => [...activePlans.value, ...pausedPlans.value])
 const nextExpiry = computed<number | null>(() => {
-  const ts = activePlans.value.map(p => p.expiry_at).filter((t: number) => t > 0)
+  const ts = livePlans.value.map(p => p.line_end_at || p.expiry_at).filter((t: number) => t > 0)
+  return ts.length ? Math.min(...ts) : null
+})
+const currentExpiry = computed<number | null>(() => {
+  const ts = livePlans.value.map(p => p.expiry_at).filter((t: number) => t > 0)
   return ts.length ? Math.min(...ts) : null
 })
 const nextExpiryDays = computed(() => daysLeft(nextExpiry.value))
 const planSub = computed(() => {
   if (!plans.value.length) return '还没有套餐，去商城看看'
-  if (!activeCount.value) return '全部已到期或用尽'
-  if (nextExpiry.value === null) return activeCount.value > 1 ? '均不过期' : '不过期'
-  const prefix = activeCount.value > 1 ? '最近 ' : ''
-  return `${prefix}${fmtDate(nextExpiry.value)} 到期（剩 ${nextExpiryDays.value} 天）`
+  if (!activeCount.value && !pausedPlans.value.length) return '全部已到期或用尽'
+  if (nextExpiry.value === null) return livePlans.value.length > 1 ? '均不过期' : '不过期'
+  let text = `有效期至 ${fmtDate(nextExpiry.value)}`
+  if (queuedCount.value) text += `（含排队 ${queuedCount.value} 份）`
+  if (currentExpiry.value && currentExpiry.value !== nextExpiry.value) text += ` · 当前这份 ${fmtDate(currentExpiry.value)} 到期`
+  return text
 })
 
 const dPoints = useCountUp(() => dash.value.points || 0)
@@ -253,7 +264,15 @@ const alerts = computed(() => {
     out.push({ key: 'banned', type: 'error', text: '账号已被封禁，请联系管理员' })
     return out
   }
-  if (plans.value.length && !activeCount.value) {
+  if (plans.value.length && !activeCount.value && pausedPlans.value.length) {
+    const r = dash.value.next_reset_at || Math.min(...pausedPlans.value.map(p => p.next_reset_at || Infinity))
+    out.push({
+      key: 'paused', type: 'warning',
+      text: Number.isFinite(r) && r > 0 ? `本月流量已用完，${fmtDate(r)} 自动恢复。急用可以` : '本月流量已用完。急用可以',
+      to: '/shop', action: '购买流量包',
+    })
+    return out
+  } else if (plans.value.length && !activeCount.value) {
     out.push({
       key: 'no-active', type: 'warning', text: '套餐已全部到期或用尽，',
       to: '/shop', action: '去续费',
@@ -262,7 +281,7 @@ const alerts = computed(() => {
     const many = activeCount.value > 1
     out.push({
       key: 'expiring', type: 'warning',
-      text: `${many ? '最近一份套餐' : '套餐'}将在 ${Math.max(nextExpiryDays.value, 0)} 天后到期，`,
+      text: `${many ? '最近一份套餐' : '套餐'}将在 ${Math.max(nextExpiryDays.value, 0)} 天后全部到期，`,
       to: '/shop', action: '去续费',
     })
   }

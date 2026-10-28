@@ -105,6 +105,9 @@ func (a *API) notifyExpiry(b *store.TelegramBind, username string, buckets []*st
 		if bk.ExpiryAt <= 0 {
 			continue
 		}
+		if renewedBeyond(bk, buckets) {
+			continue // reminders follow the end of the whole queue (#96)
+		}
 		name := bucketDisplayName(bk, names)
 		switch {
 		case bk.ExpiryAt <= now:

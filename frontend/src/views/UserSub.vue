@@ -123,7 +123,7 @@
                 <n-checkbox v-if="line.autoRenewPlanID" size="small"
                             :checked="line.autoRenew" :disabled="renewSaving === line.autoRenewPlanID"
                             @update:checked="enabled => updateAutoRenew(line, enabled)">自动续订</n-checkbox>
-                <span class="pl-sub">{{ line.all.length }} 段 · 累计已用 {{ fmtBytes(line.totalUsed) }}</span>
+                <span class="pl-sub">{{ line.all.length }} 段<template v-if="lineEnd(line)"> · 有效期至 {{ fmtDate(lineEnd(line)) }}</template> · 累计已用 {{ fmtBytes(line.totalUsed) }}</span>
               </div>
             </div>
             <!-- 展开键在时间线上方：历史段按时间序插在最前，键放下面的话，点开
@@ -359,7 +359,7 @@ import { SpeedometerOutline } from '@vicons/ionicons5'
 import { apiGet, apiList, apiPost, apiPut } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { fmtBytes, fmtTotal, fmtDate, pct } from '@/utils/format'
-import { planStatusMeta, planTimeText, planSortKey } from '@/utils/plan'
+import { planStatusMeta, planTimeText, planSortKey, planUsageText } from '@/utils/plan'
 import { copyText } from '@/utils/clipboard'
 import QRCode from 'qrcode'
 
@@ -471,7 +471,7 @@ const planLines = computed<PlanLine[]>(() => {
     out.push({
       key, name: all[0].name || '套餐 #' + all[0].id, all, segs,
       hidden: all.length - segs.length, finished,
-      totalUsed: all.reduce((n, p) => n + (p.used || 0), 0),
+      totalUsed: all.reduce((n, p) => n + (p.life_used || p.used || 0), 0),
       autoRenew: renewable?.auto_renew !== false,
       autoRenewPlanID: renewable?.id || 0,
     })
@@ -513,12 +513,10 @@ function segRange(p: any): string {
   return start ? `${fmtDate(start)} → ${end}` : end
 }
 // 一段用掉了多少。排队中的还没开始计量，只报待用额度。
-function segUsage(p: any): string {
-  if (p.status === 'queued') return '待用流量 ' + fmtTotal(p.traffic_limit)
-  if (p.traffic_limit <= 0) return `已用 ${fmtBytes(p.used)} / 0 B · 剩 0 B`
-  return `已用 ${fmtBytes(p.used)} / ${fmtTotal(p.traffic_limit)} · 剩 ${fmtBytes(p.remaining < 0 ? 0 : p.remaining)}`
-}
-function planPct(p: any) { return p.status === 'queued' ? 0 : pct(p.used, p.traffic_limit) }
+function segUsage(p: any): string { return planUsageText(p, fmtBytes, fmtTotal, fmtDate) }
+function planPct(p: any) { return p.status === 'queued' ? 0 : Math.min(100, pct(p.used, p.traffic_limit)) }
+// 整条线最后一份的到期时间（含排队中的）
+function lineEnd(line: PlanLine): number { return Math.max(0, ...line.all.map(p => p.line_end_at || 0)) }
 const planStatus = planStatusMeta
 const planTime = (p: any) => planTimeText(p, fmtDate)
 // 由后端的 node_creds_reset_enabled 决定，缺省按关闭处理——拿不到就当没开，

@@ -27,14 +27,16 @@
             <span class="kv">订阅 <b>{{ p.subscribers || 0 }}</b></span>
           </div>
           <div class="lc-meta" style="color:var(--text-2);">
-            <span class="kv">{{ fmtTotal(p.traffic_bytes) }}</span>
+            <span v-if="p.type === 'plan' && p.monthly_reset" class="kv">每月 <b>{{ fmtTotal(monthlyOf(p)) }}</b>，每 30 天重置</span>
+            <span v-else class="kv">{{ fmtTotal(p.traffic_bytes) }}</span>
             <span v-if="p.duration_days" class="kv">{{ p.duration_days }}天</span>
+            <span v-if="p.type === 'plan' && p.monthly_reset && p.allow_advance" class="kv">可预支</span>
             <span v-if="p.type === 'plan' && p.queue_key" class="kv">续期组 <b>{{ p.queue_key }}</b></span>
           </div>
           <!-- 多时长套餐：把每档时长的价格摊开，免得只看到默认那档 -->
           <div v-if="p.options?.length > 1" class="lc-opts">
             <span v-for="(o, i) in p.options" :key="o.days" class="opt-chip" :class="{ def: i === 0 }">
-              {{ o.days }}天 · {{ o.price_points }}分 · {{ fmtTotal(o.traffic_bytes) }}
+              {{ o.days }}天 · {{ o.price_points }}分 · {{ p.monthly_reset ? '每月 ' + fmtTotal(monthlyOf(p, o)) : fmtTotal(o.traffic_bytes) }}
             </span>
           </div>
           <div v-if="p.user_group_ids?.length" class="lc-meta" style="color:var(--text-3);">
@@ -80,12 +82,30 @@
             </div>
           </div>
         </n-form-item>
-        <!-- 订阅计划：时长可以有多档，用户在商城里自己挑；流量按档单独给，
-             因为一份套餐的流量在有效期内不会按月重置，长档不加量就是更亏。 -->
+        <n-form-item v-if="form.type==='plan'" label="流量重置">
+          <div style="width:100%;">
+            <n-switch v-model:value="form.monthly_reset" />
+            <span class="opt-tip" style="margin-left:8px;">{{ form.monthly_reset ? '每 30 天重置一次，填的是每月流量' : '不重置，整个有效期共用一份流量' }}</span>
+            <div class="opt-tip">
+              开启后，一次买几个月也只给每月的流量，每 30 天自动恢复，没用完的不结转；用完就暂停到下次重置。
+              改这个开关只影响之后开始生效的套餐，已经在用的不变。
+            </div>
+          </div>
+        </n-form-item>
+        <n-form-item v-if="form.type==='plan' && form.monthly_reset" label="允许预支">
+          <div style="width:100%;">
+            <n-switch v-model:value="form.allow_advance" />
+            <div class="opt-tip">
+              开启后，用户本月流量用完可以先用下个月的，最多预支一个月，下个月的流量相应变少。
+              用户详情里可以对单个用户单独开或关。
+            </div>
+          </div>
+        </n-form-item>
+        <!-- 订阅计划：时长可以有多档，用户在商城里自己挑。 -->
         <n-form-item v-if="form.type==='plan'" label="时长/价格">
           <div style="width:100%;">
             <div class="opt-head">
-              <span>天数</span><span>流量 (GB)</span><span>积分</span><span />
+              <span>天数</span><span>{{ form.monthly_reset ? '每月流量 (GB)' : '流量 (GB)' }}</span><span>积分</span><span />
             </div>
             <div v-for="(o, i) in form.options" :key="i" class="opt-row">
               <n-input-number v-model:value="o.days" :min="1" :show-button="false" placeholder="30" />
@@ -143,7 +163,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import {
   NSpin, NButton, NModal, NForm, NFormItem, NInput, NInputNumber,
-  NSelect, NTag, NEmpty, NDynamicInput, useMessage, useDialog
+  NSelect, NTag, NEmpty, NDynamicInput, NSwitch, useMessage, useDialog
 } from 'naive-ui'
 import { apiList, apiPost, apiPut, apiDelete } from '@/api'
 import { fmtTotal, yuan } from '@/utils/format'
@@ -159,9 +179,16 @@ const reordering = ref(false)
 const showForm = ref(false)
 const editing = ref<any>(null)
 type OptRow = { days: number | null; traffic_gb: number | null; price: number | null }
-const form = reactive({ name: '', type: 'traffic', queue_key: '', description: '', highlights: [] as string[], traffic_gb: 100, days: 30, price: 100, stock: -1, options: [] as OptRow[], group_ids: [] as number[], user_group_ids: [] as number[] })
+const form = reactive({ name: '', type: 'traffic', queue_key: '', description: '', highlights: [] as string[], traffic_gb: 100, days: 30, price: 100, stock: -1, options: [] as OptRow[], group_ids: [] as number[], user_group_ids: [] as number[], monthly_reset: true, allow_advance: false })
 
 const GB = 1024 * 1024 * 1024
+const periodsOf = (days: number) => Math.max(1, Math.ceil((days || 0) / 30))
+// 每月流量：填过就用填的，没填过按总流量平均分到每个 30 天
+function monthlyOf(p: any, o?: any) {
+  const src = o || p
+  if (src.monthly_bytes > 0) return src.monthly_bytes
+  return Math.floor((src.traffic_bytes || 0) / periodsOf(o ? o.days : p.duration_days))
+}
 
 // 订阅计划的时长档位。表单里始终至少有一档：单档保存成普通套餐（不写
 // options），多档才写成可选时长。
@@ -172,7 +199,8 @@ function addOption(days?: number) {
     const k = days / first.days
     form.options.push({
       days,
-      traffic_gb: Math.round((first.traffic_gb || 0) * k * 100) / 100,
+      // 按月重置时填的是每月流量，长档不用放大
+      traffic_gb: form.monthly_reset ? first.traffic_gb : Math.round((first.traffic_gb || 0) * k * 100) / 100,
       price: Math.round((first.price || 0) * k),
     })
   } else {
@@ -198,8 +226,10 @@ function userGroupNames(ids: number[]) {
 // 切成「订阅计划」时表格里是原来的数，而不是空的。
 function optRowsOf(pkg?: any): OptRow[] {
   const opts = Array.isArray(pkg?.options) ? pkg.options : []
-  if (opts.length) return opts.map((o: any) => ({ days: o.days, traffic_gb: (o.traffic_bytes || 0) / GB, price: o.price_points || 0 }))
-  return [{ days: pkg?.duration_days || 30, traffic_gb: pkg ? (pkg.traffic_bytes || 0) / GB : 100, price: pkg?.price_points ?? 100 }]
+  const monthly = !pkg || pkg.monthly_reset
+  const gb = (bytes: number) => Math.round(bytes / GB * 100) / 100
+  if (opts.length) return opts.map((o: any) => ({ days: o.days, traffic_gb: gb(monthly ? monthlyOf(pkg, o) : (o.traffic_bytes || 0)), price: o.price_points || 0 }))
+  return [{ days: pkg?.duration_days || 30, traffic_gb: pkg ? gb(monthly ? monthlyOf(pkg) : (pkg.traffic_bytes || 0)) : 100, price: pkg?.price_points ?? 100 }]
 }
 
 function openForm(pkg?: any) {
@@ -212,9 +242,10 @@ function openForm(pkg?: any) {
       price: pkg.price_points || 0, stock: pkg.stock ?? -1,
       options: optRowsOf(pkg),
       group_ids: pkg.group_ids || [], user_group_ids: pkg.user_group_ids || [],
+      monthly_reset: pkg.type === 'plan' ? !!pkg.monthly_reset : true, allow_advance: !!pkg.allow_advance,
     })
   } else {
-    Object.assign(form, { name: '', type: 'traffic', queue_key: '', description: '', highlights: [], traffic_gb: 100, days: 30, price: 100, stock: -1, options: optRowsOf(), group_ids: [], user_group_ids: [] })
+    Object.assign(form, { name: '', type: 'traffic', queue_key: '', description: '', highlights: [], traffic_gb: 100, days: 30, price: 100, stock: -1, options: optRowsOf(), group_ids: [], user_group_ids: [], monthly_reset: true, allow_advance: false })
   }
   showForm.value = true
 }
@@ -226,7 +257,13 @@ async function handleSave() {
     const isPlan = form.type === 'plan'
     // 计划的价格/流量/天数都来自档位表；单档不写 options，存成普通套餐。
     const opts = isPlan
-      ? options.map(o => ({ days: o.days || 0, price_points: o.price || 0, traffic_bytes: Math.round((o.traffic_gb || 0) * GB) }))
+      ? options.map(o => {
+          const gbBytes = Math.round((o.traffic_gb || 0) * GB)
+          // 按月重置：填的是每月流量，总流量 = 每月 × 月数
+          return form.monthly_reset
+            ? { days: o.days || 0, price_points: o.price || 0, monthly_bytes: gbBytes, traffic_bytes: gbBytes * periodsOf(o.days || 0) }
+            : { days: o.days || 0, price_points: o.price || 0, traffic_bytes: gbBytes }
+        })
       : []
     const first = opts[0]
     const body = {
@@ -236,6 +273,9 @@ async function handleSave() {
       traffic_bytes: isPlan ? (first?.traffic_bytes || 0) : Math.round(traffic_gb * GB),
       duration_days: isPlan ? (first?.days || 0) : days,
       price_points: isPlan ? (first?.price_points || 0) : price,
+      monthly_reset: isPlan && form.monthly_reset,
+      monthly_bytes: isPlan && form.monthly_reset ? ((first as any)?.monthly_bytes || 0) : 0,
+      allow_advance: isPlan && form.monthly_reset && form.allow_advance,
     }
     if (editing.value) await apiPut(`/api/admin/packages/${editing.value.id}`, body)
     else await apiPost('/api/admin/packages', body)

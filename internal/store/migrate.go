@@ -1179,6 +1179,36 @@ func (s *Store) migrateLegacyBaseline(tx *sql.Tx) error {
 		`UPDATE nodes SET route_upstream_inbound_id=0, route_upstream_broken=1
 		 WHERE route_upstream_inbound_id<>0
 		   AND route_upstream_inbound_id NOT IN (SELECT id FROM sb_inbounds)`,
+		// Monthly traffic reset (#96). Packages default to resetting every 30 days;
+		// already-sold user_plans rows default to period_days=0, i.e. they keep the
+		// old lump-sum behaviour until an admin converts them explicitly, so the
+		// upgrade never silently changes an entitlement someone already holds.
+		`ALTER TABLE packages ADD COLUMN monthly_reset INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE packages ADD COLUMN monthly_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE packages ADD COLUMN allow_advance INTEGER NOT NULL DEFAULT 0`,
+		// period_days>0 marks a periodic份: traffic_limit/used_* then describe the
+		// CURRENT period only; earlier periods' usage moves to life_used_*.
+		// period_base is this period's own quota (period_quota minus anything the
+		// previous period borrowed); traffic_limit may exceed it by one period when
+		// 预支 is allowed. allow_advance: -1 follow the package, 0 off, 1 on.
+		`ALTER TABLE user_plans ADD COLUMN period_days INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE user_plans ADD COLUMN period_quota INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE user_plans ADD COLUMN period_start INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE user_plans ADD COLUMN period_base INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE user_plans ADD COLUMN allow_advance INTEGER NOT NULL DEFAULT -1`,
+		`ALTER TABLE user_plans ADD COLUMN life_used_up INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE user_plans ADD COLUMN life_used_down INTEGER NOT NULL DEFAULT 0`,
+		`CREATE TABLE IF NOT EXISTS plan_period_resets (
+		   id INTEGER PRIMARY KEY AUTOINCREMENT,
+		   bucket_id INTEGER NOT NULL,
+		   user_id INTEGER NOT NULL,
+		   reset_at INTEGER NOT NULL,
+		   period_start INTEGER NOT NULL,
+		   used INTEGER NOT NULL,
+		   quota INTEGER NOT NULL,
+		   next_quota INTEGER NOT NULL
+		 )`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_period_resets_user ON plan_period_resets(user_id, reset_at)`,
 	} {
 		if strings.HasPrefix(stmt, "CREATE ") {
 			deferredIndexes = append(deferredIndexes, stmt)

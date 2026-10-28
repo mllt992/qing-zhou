@@ -106,14 +106,14 @@ func computeRefundQuote(q txLike, orderID, userID, packageID int64, snap orderSn
 	// Read the live bucket this order fed (its own plan bucket by order_id, or the
 	// shared pool). A missing bucket (fully consumed & expired → deleted) means
 	// nothing is left to refund.
-	var limit, used, expiry int64
+	var limit, used, expiry, periodDays int64
 	var found bool
 	if snap.Type == "plan" {
 		// Queue model: one purchase = one bucket, so prefer this order's own bucket.
 		var status string
-		oerr := q.QueryRow(`SELECT traffic_limit, used_up+used_down, expiry_at, status FROM user_plans
+		oerr := q.QueryRow(`SELECT traffic_limit, used_up+used_down, expiry_at, status, period_days FROM user_plans
 			WHERE kind='plan' AND user_id=? AND order_id=? ORDER BY id LIMIT 1`, userID, orderID).
-			Scan(&limit, &used, &expiry, &status)
+			Scan(&limit, &used, &expiry, &status, &periodDays)
 		switch {
 		case oerr == nil && status == "queued":
 			// Never activated, nothing consumed → fully refundable (fee still applies).
@@ -121,7 +121,7 @@ func computeRefundQuote(q txLike, orderID, userID, packageID int64, snap orderSn
 			quote.Ratio = applyFee(1, pol.FeePercent)
 			quote.RefundPoints = roundRefund(price, quote.Ratio)
 			return quote, nil
-		case oerr == nil && !(status == "active" && snap.TrafficBytes > 0 && limit > snap.TrafficBytes):
+		case oerr == nil && (periodDays > 0 || !(status == "active" && snap.TrafficBytes > 0 && limit > snap.TrafficBytes)):
 			// This order's own (single-order) active bucket: use its live values.
 			found = true
 		default:
@@ -152,7 +152,12 @@ func computeRefundQuote(q txLike, orderID, userID, packageID int64, snap orderSn
 
 	// Remaining-traffic fraction: the unused part of THIS order's quota still
 	// sitting in the bucket, over the order's full quota.
-	if snap.TrafficBytes > 0 {
+	// A monthly-reset份 refills every period, so its unused traffic is not a
+	// meaningful share of the order: refund it by remaining time only (#96).
+	if periodDays > 0 {
+		quote.RefundTraffic = 0
+		quote.TrafficRatio = -1
+	} else if snap.TrafficBytes > 0 {
 		remain := int64(0)
 		if found {
 			remain = limit - used

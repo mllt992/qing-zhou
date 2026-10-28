@@ -47,14 +47,28 @@ func enqueuePlanBucket(tx txLike, userID int64, username string, pkg *Package, o
 	if err != nil {
 		return err
 	}
-	_, err = insertBucket(tx, &Bucket{
+	nb := &Bucket{
 		UserID: userID, Kind: "plan", PackageID: pkg.ID, Name: pkg.Name,
 		QueueKey:     queueKey,
 		ClientName:   fmt.Sprintf("qz_%s_p%d", username, orderID),
 		TrafficLimit: pkg.TrafficBytes,
 		Status:       "queued", ExpiryAt: 0, DurationDays: pkg.DurationDays,
 		AutoRenew: autoRenew, OrderID: orderID, CreatedAt: now,
-	})
+		AdvanceOverride: -1,
+	}
+	if pkg.Type == "plan" && pkg.MonthlyReset {
+		// A queued periodic份 already shows its per-period quota, never the sum.
+		nb.PeriodDays = PeriodDays
+		nb.PeriodQuota = pkg.PeriodQuota()
+		nb.TrafficLimit = nb.PeriodQuota
+		nb.PeriodBase = nb.PeriodQuota
+		ov, err := queueAdvanceOverride(tx, userID, queueKey)
+		if err != nil {
+			return err
+		}
+		nb.AdvanceOverride = ov
+	}
+	_, err = insertBucket(tx, nb)
 	return err
 }
 
@@ -94,10 +108,13 @@ func usableExpr(alias string) string {
 		AND ` + a + `used_up+` + a + `used_down<` + a + `traffic_limit)`
 }
 
+// A periodic head keeps its slot until its TIME runs out: using up one
+// period's quota pauses it until the next reset, it does not burn the next
+// queued份 early (#96). Legacy份 still hand over on exhaustion.
 const usableHeadPredicate = `h.kind='plan' AND h.status='active'
 	AND (h.expiry_at=0 OR h.expiry_at>?)
-	AND h.traffic_limit>0
-	AND h.used_up+h.used_down<h.traffic_limit`
+	AND (h.period_days>0 OR (h.traffic_limit>0
+	AND h.used_up+h.used_down<h.traffic_limit))`
 
 // StatusRetired marks a plan bucket that has finished its turn and handed the
 // renewal line's slot to the next份.
@@ -218,8 +235,18 @@ func advanceUserQueues(tx txLike, userID, now int64) (bool, error) {
 		if dur > 0 {
 			newExpiry = now + dur*86400
 		}
-		if _, err := tx.Exec(`UPDATE user_plans SET status='active', expiry_at=?, updated_at=? WHERE id=?`,
-			newExpiry, now, id); err != nil {
+		// A periodic份 starts its first period now. If the head it replaces
+		// borrowed from "next period" (预支), that next period is this one.
+		carry, err := borrowedFromLine(tx, userID, queueKey, id)
+		if err != nil {
+			return changed, err
+		}
+		if _, err := tx.Exec(`UPDATE user_plans SET status='active', expiry_at=?, updated_at=?,
+			period_start=CASE WHEN period_days>0 THEN ? ELSE period_start END,
+			period_base=CASE WHEN period_days>0 THEN MAX(period_quota-?,0) ELSE period_base END,
+			traffic_limit=CASE WHEN period_days>0 THEN MAX(period_quota-?,0) ELSE traffic_limit END
+			WHERE id=?`,
+			newExpiry, now, now, carry, carry, id); err != nil {
 			return changed, err
 		}
 		// Retire whoever was holding the slot. Nothing is moved: the credentials
@@ -237,6 +264,11 @@ func advanceUserQueues(tx txLike, userID, now int64) (bool, error) {
 	// head's now-past date. Enforcement reads buckets and is already correct; this
 	// only keeps the display mirror in sync when promotion happens outside a
 	// purchase/refund (i.e. the periodic ticker).
+	// The borrowable limit depends on whether a next period exists, which a
+	// purchase, refund or promotion just may have changed.
+	if err := refreshPeriodLimits(tx, userID, now); err != nil {
+		return changed, err
+	}
 	if changed {
 		if _, _, _, _, err := recomputeUserAggregate(tx, userID, now); err != nil {
 			return changed, err
@@ -341,10 +373,25 @@ func (s *Store) AdvanceQueueFor(userID int64) (bool, error) {
 		WHERE q.user_id=? AND `+queueDuePredicate, userID, now).Scan(&due); err != nil {
 		return false, err
 	}
-	if due == 0 {
-		return false, nil
+	var periodDue int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_plans WHERE user_id=? AND `+periodDuePredicate,
+		userID, now).Scan(&periodDue); err != nil {
+		return false, err
 	}
-	return s.advanceOne(userID, now)
+	changed := false
+	if periodDue > 0 {
+		// Reading after a period boundary must already see the refilled quota.
+		ch, err := s.resetUserPeriodsTx(userID, now)
+		if err != nil {
+			return false, err
+		}
+		changed = ch
+	}
+	if due == 0 {
+		return changed, nil
+	}
+	ch, err := s.advanceOne(userID, now)
+	return ch || changed, err
 }
 
 // reversePlanBucket undoes one plan order's contribution to its package bucket
@@ -388,10 +435,10 @@ func reversePlanBucket(tx txLike, userID, packageID, trafficBytes, durationDays,
 // than this one order's quota (a legacy merged bucket whose order_id points here),
 // so refunding an old stacked order never wipes several orders' entitlement.
 func reverseOrderBucket(tx txLike, orderID, userID, packageID, trafficBytes, durationDays, now int64) error {
-	var id, limit int64
+	var id, limit, periodDays int64
 	var status string
-	err := tx.QueryRow(`SELECT id, traffic_limit, status FROM user_plans
-		WHERE kind='plan' AND user_id=? AND order_id=? ORDER BY id LIMIT 1`, userID, orderID).Scan(&id, &limit, &status)
+	err := tx.QueryRow(`SELECT id, traffic_limit, status, period_days FROM user_plans
+		WHERE kind='plan' AND user_id=? AND order_id=? ORDER BY id LIMIT 1`, userID, orderID).Scan(&id, &limit, &status, &periodDays)
 	if errors.Is(err, sql.ErrNoRows) {
 		return reversePlanBucket(tx, userID, packageID, trafficBytes, durationDays, now)
 	}
@@ -401,7 +448,7 @@ func reverseOrderBucket(tx txLike, orderID, userID, packageID, trafficBytes, dur
 	// A single-order (queue-model) bucket holds exactly this order's quota; a legacy
 	// merged bucket holds the sum of several stacked orders (limit > this order's
 	// bytes) — reverse that the old, clamped way instead of deleting it wholesale.
-	if status == "active" && trafficBytes > 0 && limit > trafficBytes {
+	if periodDays == 0 && status == "active" && trafficBytes > 0 && limit > trafficBytes {
 		return reversePlanBucket(tx, userID, packageID, trafficBytes, durationDays, now)
 	}
 	if _, err := tx.Exec(`DELETE FROM user_plans WHERE id=?`, id); err != nil {
@@ -475,6 +522,15 @@ func recomputeUserAggregate(tx txLike, userID, now int64) (limit, up, down, expi
 		KindFree, KindFree, KindFree, userID).Scan(&limit, &up, &down, &expiry)
 	if err != nil {
 		return
+	}
+	// expiry_at mirrors the END of the whole queue (#96): a user holding three
+	// queued months is valid until the last one ends, not the current one.
+	var buckets []*Bucket
+	if buckets, err = listBucketsTx(tx, userID); err != nil {
+		return
+	}
+	if final, _, _ := FinalExpiry(buckets, now); final > expiry {
+		expiry = final
 	}
 	_, err = tx.Exec(`UPDATE users SET traffic_limit=?, used_up=?, used_down=?, expiry_at=?, updated_at=? WHERE id=?`,
 		limit, up, down, expiry, now, userID)
@@ -728,6 +784,56 @@ type Bucket struct {
 	ProxyUsername  string `json:"-"`
 	ProxyPassword  string `json:"-"`
 	ProxyExpiresAt int64  `json:"-"`
+	// Monthly reset (#96). PeriodDays>0 makes this a periodic份: TrafficLimit and
+	// UsedUp/UsedDown describe the CURRENT period only. PeriodBase is this
+	// period's own quota (PeriodQuota minus what the previous period borrowed);
+	// TrafficLimit is PeriodBase plus one more period when 预支 is in effect.
+	// AdvanceOverride is the per-user setting (-1 follow the package);
+	// AllowAdvance is the effective value.
+	PeriodDays      int64 `json:"period_days"`
+	PeriodQuota     int64 `json:"period_quota"`
+	PeriodStart     int64 `json:"period_start"`
+	PeriodBase      int64 `json:"period_base"`
+	AdvanceOverride int64 `json:"advance_override"`
+	AllowAdvance    bool  `json:"allow_advance"`
+	LifeUsedUp      int64 `json:"life_used_up"`
+	LifeUsedDown    int64 `json:"life_used_down"`
+}
+
+// Periodic reports whether this份 resets its traffic every PeriodDays.
+func (b *Bucket) Periodic() bool { return b.Kind == "plan" && b.PeriodDays > 0 }
+
+// NextResetAt is when the current period ends and the quota refills; 0 when it
+// is not periodic, not yet started, or the份 expires before then.
+func (b *Bucket) NextResetAt() int64 {
+	if !b.Periodic() || b.Status != "active" || b.PeriodStart <= 0 {
+		return 0
+	}
+	next := b.PeriodStart + b.PeriodDays*86400
+	if b.ExpiryAt > 0 && next >= b.ExpiryAt {
+		return 0
+	}
+	return next
+}
+
+// ShownQuota is the per-period quota a user should see: the period's own quota,
+// never the sum of several months. Non-periodic份 show their whole limit.
+func (b *Bucket) ShownQuota() int64 {
+	if !b.Periodic() || b.Status == "queued" {
+		return b.TrafficLimit
+	}
+	return b.PeriodBase
+}
+
+// Advanced is how much of the NEXT period this period has already borrowed.
+func (b *Bucket) Advanced() int64 {
+	if !b.Periodic() || b.Status != "active" {
+		return 0
+	}
+	if over := b.Used() - b.PeriodBase; over > 0 {
+		return over
+	}
+	return 0
 }
 
 // ProxyName is the mixed-proxy stats identity for this bucket: the custom
@@ -805,7 +911,11 @@ const bucketCols = `p.id, p.user_id, p.kind, p.package_id, p.queue_key, p.name,
 	CASE WHEN COALESCE(i.proxy_username,'')<>'' THEN i.proxy_username ELSE p.proxy_username END,
 	CASE WHEN COALESCE(i.proxy_username,'')<>'' THEN i.proxy_password ELSE p.proxy_password END,
 	CASE WHEN COALESCE(i.proxy_username,'')<>'' THEN i.proxy_expires_at ELSE p.proxy_expires_at END,
-	p.status, p.duration_days, p.auto_renew`
+	p.status, p.duration_days, p.auto_renew,
+	p.period_days, p.period_quota, p.period_start, p.period_base, p.allow_advance,
+	CASE WHEN p.allow_advance>=0 THEN p.allow_advance
+	     ELSE COALESCE((SELECT k.allow_advance FROM packages k WHERE k.id=p.package_id),0) END,
+	p.life_used_up, p.life_used_down`
 
 // bucketFrom is the FROM clause bucketCols expects. The join is scoped to real
 // plan份 (package_id>0); pool/free and package-less grants keep their row stats
@@ -820,7 +930,9 @@ func scanBucket(sc scanner) (*Bucket, error) {
 	err := sc.Scan(&b.ID, &b.UserID, &b.Kind, &b.PackageID, &b.QueueKey, &b.Name, &b.ClientName, &b.ClientUUID,
 		&b.ClientSecret, &b.TrafficLimit, &b.UsedUp, &b.UsedDown, &b.ExpiryAt, &b.LastOnlineAt,
 		&b.OrderID, &b.CreatedAt, &b.UpdatedAt,
-		&b.ProxyUsername, &b.ProxyPassword, &b.ProxyExpiresAt, &b.Status, &b.DurationDays, &b.AutoRenew)
+		&b.ProxyUsername, &b.ProxyPassword, &b.ProxyExpiresAt, &b.Status, &b.DurationDays, &b.AutoRenew,
+		&b.PeriodDays, &b.PeriodQuota, &b.PeriodStart, &b.PeriodBase, &b.AdvanceOverride, &b.AllowAdvance,
+		&b.LifeUsedUp, &b.LifeUsedDown)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1006,8 +1118,13 @@ func (s *Store) AdjustBucketTraffic(userID, bucketID, delta int64) (*Bucket, err
 	if newLimit < b.Used() || newLimit < 0 {
 		return nil, ErrTrafficFloor
 	}
-	if _, err := tx.Exec(`UPDATE user_plans SET traffic_limit=?, updated_at=? WHERE id=? AND user_id=?`,
-		newLimit, now, bucketID, userID); err != nil {
+	// On a monthly-reset份 the change is temporary: it applies to the current
+	// period only and the next reset restores the monthly quota.
+	if _, err := tx.Exec(`UPDATE user_plans SET traffic_limit=?,
+		period_base=CASE WHEN period_days>0 AND status='active' THEN MAX(period_base+?,0) ELSE period_base END,
+		period_quota=CASE WHEN period_days>0 AND status='queued' THEN ? ELSE period_quota END,
+		updated_at=? WHERE id=? AND user_id=?`,
+		newLimit, delta, newLimit, now, bucketID, userID); err != nil {
 		return nil, err
 	}
 	if _, err := advanceUserQueues(tx, userID, now); err != nil {
@@ -1157,10 +1274,12 @@ func insertBucket(ex execer, b *Bucket) (int64, error) {
 	}
 	res, err := ex.Exec(`INSERT INTO user_plans
 		(user_id, kind, package_id, queue_key, name, client_name,
-		 traffic_limit, used_up, used_down, expiry_at, last_online_at, order_id, status, duration_days, auto_renew, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 traffic_limit, used_up, used_down, expiry_at, last_online_at, order_id, status, duration_days, auto_renew, created_at, updated_at,
+		 period_days, period_quota, period_start, period_base, allow_advance)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		b.UserID, b.Kind, b.PackageID, b.QueueKey, b.Name, b.ClientName,
-		b.TrafficLimit, b.UsedUp, b.UsedDown, b.ExpiryAt, b.LastOnlineAt, b.OrderID, status, b.DurationDays, b.AutoRenew, b.CreatedAt, now)
+		b.TrafficLimit, b.UsedUp, b.UsedDown, b.ExpiryAt, b.LastOnlineAt, b.OrderID, status, b.DurationDays, b.AutoRenew, b.CreatedAt, now,
+		b.PeriodDays, b.PeriodQuota, b.PeriodStart, b.PeriodBase, advanceOverrideOrDefault(b))
 	if err != nil {
 		return 0, err
 	}

@@ -74,7 +74,17 @@ func (a *API) sweepQueues() {
 	if len(renewed) > 0 {
 		log.Printf("automatic renewal: renewed due plan for %d user(s)", len(renewed))
 	}
+	// Monthly reset (#96): refill every period that ended; users who were paused
+	// for running out come back, so their config is rebuilt below.
+	revived, resetErr := a.st.ResetDuePeriods()
+	if resetErr != nil {
+		log.Printf("traffic period reset: %v", resetErr)
+	}
+	if len(revived) > 0 {
+		log.Printf("traffic period reset: restored service for %d user(s)", len(revived))
+	}
 	changed := append(promoted, renewed...)
+	changed = append(changed, revived...)
 	if len(changed) > 0 {
 		seen := make(map[int64]struct{}, len(changed))
 		unique := make([]int64, 0, len(changed))

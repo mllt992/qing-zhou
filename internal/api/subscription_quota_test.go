@@ -86,21 +86,21 @@ func TestDashboardTrafficSubscriptionMetadata(t *testing.T) {
 			live("pool", "active", 0, 7, 8, 0),
 		}, dashTraffic{}},
 		{"finite", []*store.Bucket{live("plan", "active", 100, 3, 7, now+100)},
-			dashTraffic{Total: 100, Used: 10, Remaining: 90, Upload: 3, Download: 7, ExpiryAt: now + 100}},
+			dashTraffic{Total: 100, Used: 10, Remaining: 90, Upload: 3, Download: 7, ExpiryAt: now + 100, CurrentExpiryAt: now + 100}},
 		{"exhausted", []*store.Bucket{live("plan", "active", 100, 50, 70, now+100)},
-			dashTraffic{Total: 100, Used: 120, Upload: 50, Download: 70, ExpiryAt: now + 100}},
+			dashTraffic{Total: 100, Used: 120, Upload: 50, Download: 70, ExpiryAt: now + 100, CurrentExpiryAt: now + 100}},
 		{"multiple", []*store.Bucket{
 			live("plan", "active", 100, 3, 7, now+100),
 			live("plan", "active", 200, 4, 6, now+200),
-		}, dashTraffic{Total: 300, Used: 20, Remaining: 280, Upload: 7, Download: 13, ExpiryAt: now + 200}},
+		}, dashTraffic{Total: 300, Used: 20, Remaining: 280, Upload: 7, Download: 13, ExpiryAt: now + 200, CurrentExpiryAt: now + 100}},
 		{"permanent-after-finite", []*store.Bucket{
 			live("plan", "active", 100, 3, 7, now+100),
 			live("pool", "active", 200, 4, 6, 0),
-		}, dashTraffic{Total: 300, Used: 20, Remaining: 280, Upload: 7, Download: 13}},
+		}, dashTraffic{Total: 300, Used: 20, Remaining: 280, Upload: 7, Download: 13, CurrentExpiryAt: now + 100}},
 		{"permanent-before-finite", []*store.Bucket{
 			live("pool", "active", 200, 4, 6, 0),
 			live("plan", "active", 100, 3, 7, now+100),
-		}, dashTraffic{Total: 300, Used: 20, Remaining: 280, Upload: 7, Download: 13}},
+		}, dashTraffic{Total: 300, Used: 20, Remaining: 280, Upload: 7, Download: 13, CurrentExpiryAt: now + 100}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := dashboardTraffic(tc.buckets); got != tc.want {

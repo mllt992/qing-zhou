@@ -99,6 +99,9 @@ func (a *API) notifyEmailExpiry(u *store.User, buckets []*store.Bucket, names ma
 		if b.Kind == store.KindFree || b.Status == "queued" || b.TrafficLimit <= 0 || b.ExpiryAt <= 0 {
 			continue
 		}
+		if renewedBeyond(b, buckets) {
+			continue // a later份 in the same line takes over: reminders follow the final expiry
+		}
 		kind, title, content := "", "", ""
 		switch {
 		case b.ExpiryAt <= now && now-b.ExpiryAt <= 86400:
@@ -170,4 +173,30 @@ func (a *API) sendBusinessReminder(u *store.User, kind, subject, title, content 
 		_ = a.st.ClearNotifyChannel(u.ID, "email", kind, subject)
 		log.Printf("email reminder: user %d delivery failed", u.ID)
 	}
+}
+
+// renewedBeyond reports whether another份 in the same renewal line continues
+// after b ends (queued behind it, or already in service with a later end), so
+// expiry reminders go by the line's final expiry rather than each份's own.
+func renewedBeyond(b *store.Bucket, buckets []*store.Bucket) bool {
+	if b.Kind != "plan" || b.PackageID <= 0 {
+		return false
+	}
+	for _, o := range buckets {
+		if o.ID == b.ID || o.Kind != "plan" || o.PackageID <= 0 || o.QueueKey != b.QueueKey {
+			continue
+		}
+		if o.PackageID != b.PackageID && o.QueueKey == "" {
+			continue
+		}
+		switch o.Status {
+		case "queued":
+			return true
+		case "active":
+			if o.ExpiryAt == 0 || o.ExpiryAt > b.ExpiryAt {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -27,6 +27,17 @@ func validatePackage(p *store.Package) string {
 	if p.Name == "" {
 		return "商品名称不能为空"
 	}
+	if p.MonthlyBytes < 0 {
+		return "每月流量不能为负数"
+	}
+	for _, o := range p.Options {
+		if o.MonthlyBytes < 0 {
+			return "每月流量不能为负数"
+		}
+	}
+	if p.Type != "plan" {
+		p.MonthlyReset, p.MonthlyBytes, p.AllowAdvance = false, 0, false
+	}
 	if p.Type != "plan" && p.QueueKey != "" {
 		return "只有订阅计划支持续期组"
 	}
@@ -108,11 +119,14 @@ func (a *API) handleAdminListPackages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleAdminCreatePackage(w http.ResponseWriter, r *http.Request) {
-	var p store.Package
+	// Monthly reset is the default for new plans (#96); a client that does not
+	// send the field gets it on.
+	p := store.Package{MonthlyReset: true}
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	p.NormalizeMonthly()
 	if msg := validatePackage(&p); msg != "" {
 		fail(w, http.StatusBadRequest, msg)
 		return
@@ -183,6 +197,7 @@ func (a *API) handleAdminUpdatePackage(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	p.NormalizeMonthly()
 	if msg := validatePackage(p); msg != "" {
 		fail(w, http.StatusBadRequest, msg)
 		return

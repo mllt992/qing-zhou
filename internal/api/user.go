@@ -322,6 +322,13 @@ func (a *API) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		// them isn't actually in use yet.
 		"plans":     buildPlanViews(buckets, pkgNames),
 		"expiry_at": u.ExpiryAt,
+		// #96: valid-until is the end of the whole queue; current_expiry_at is
+		// when the份 in service ends; next_reset_at the next monthly refill.
+		"final_expiry_at":   tr.ExpiryAt,
+		"current_expiry_at": tr.CurrentExpiryAt,
+		"queued_count":      tr.Queued,
+		"next_reset_at":     tr.NextResetAt,
+		"advanced":          tr.Advanced,
 	})
 }
 
@@ -718,6 +725,24 @@ type planView struct {
 	// instant. Falls back to the grant time when either half is unknown (legacy份,
 	// or one that never expires). 0 for a queued份 — it has not started.
 	StartedAt int64 `json:"started_at,omitempty"`
+	// Monthly reset (#96). Periodic is true for a份 whose traffic refills every
+	// 30 days; TrafficLimit/Used/Remaining are then the CURRENT period's, never
+	// the sum of several months. NextResetAt is the next refill (0 = none left),
+	// Advanced the part of next period already borrowed (预支), CanAdvance
+	// whether borrowing is on for this份.
+	Periodic    bool  `json:"periodic"`
+	PeriodQuota int64 `json:"period_quota,omitempty"`
+	NextResetAt int64 `json:"next_reset_at,omitempty"`
+	Advanced    int64 `json:"advanced,omitempty"`
+	CanAdvance  bool  `json:"can_advance,omitempty"`
+	// LifeUsed is everything this份 has used across all its periods.
+	LifeUsed int64 `json:"life_used,omitempty"`
+	// LineEndAt is when this renewal line as a whole ends (queued份 included),
+	// LineQueued how many份 wait behind the current one.
+	LineEndAt  int64 `json:"line_end_at,omitempty"`
+	LineQueued int   `json:"line_queued,omitempty"`
+	// AdvanceOverride (admin views): -1 follows the package, 0 off, 1 on.
+	AdvanceOverride int64 `json:"advance_override"`
 }
 
 // queueActivations estimates, for each queued plan bucket, the LATEST time it
@@ -748,7 +773,8 @@ func queueActivations(buckets []*store.Bucket, now int64) map[int64]int64 {
 		switch {
 		case b.Status == "queued":
 			q.queued = append(q.queued, b) // ListBuckets is id-ordered → FIFO
-		case b.Status == "active" && b.NotExpired(now) && b.HasQuota():
+		case b.Status == "active" && b.NotExpired(now) && (b.HasQuota() || b.Periodic()):
+			// A periodic head that used up this period still holds its slot.
 			q.hasHead = true
 			if b.ExpiryAt > q.base {
 				q.base = b.ExpiryAt
@@ -794,7 +820,12 @@ type dashTraffic struct {
 	Remaining int64
 	Upload    int64 // directional usage of the same eligible buckets
 	Download  int64
-	ExpiryAt  int64 // latest eligible expiry; zero for permanent or absent quota
+	ExpiryAt  int64 // end of the whole queue (#96); zero for permanent or absent quota
+	// CurrentExpiryAt is when the份 in service now ends (soonest live one).
+	CurrentExpiryAt int64
+	Queued          int   // queued份 behind the current ones
+	NextResetAt     int64 // soonest monthly refill, 0 = none
+	Advanced        int64 // next period's quota already borrowed (预支)
 }
 
 // dashboardTraffic rolls the buckets up into one headline figure.
@@ -824,15 +855,44 @@ func dashboardTraffic(buckets []*store.Bucket) dashTraffic {
 		if b.TrafficLimit <= 0 {
 			continue
 		}
-		d.Total += b.TrafficLimit
+		// A monthly-reset份 counts with this period's quota only; while the
+		// user is borrowing from next period the borrowable part is shown too.
+		total := b.TrafficLimit
+		if b.Periodic() {
+			total = b.PeriodBase
+			if adv := b.Advanced(); adv > 0 && b.TrafficLimit > total {
+				total = b.TrafficLimit
+			}
+			d.Advanced += b.Advanced()
+			if r := b.NextResetAt(); r > 0 && (d.NextResetAt == 0 || r < d.NextResetAt) {
+				d.NextResetAt = r
+			}
+		}
+		d.Total += total
 		d.Used += b.Used()
 		d.Upload += b.UsedUp
 		d.Download += b.UsedDown
 		if b.ExpiryAt == 0 {
 			permanent = true
-		} else if b.ExpiryAt > d.ExpiryAt {
-			d.ExpiryAt = b.ExpiryAt
+		} else {
+			if b.ExpiryAt > d.ExpiryAt {
+				d.ExpiryAt = b.ExpiryAt
+			}
+			if d.CurrentExpiryAt == 0 || b.ExpiryAt < d.CurrentExpiryAt {
+				d.CurrentExpiryAt = b.ExpiryAt
+			}
 		}
+	}
+	// Valid-until is the end of the whole queue, not the份 in service: a user
+	// who was renewed three months ahead must see the last day of the third.
+	if final, never, queued := store.FinalExpiry(buckets, now); (final > d.ExpiryAt && final > now) || never {
+		d.ExpiryAt = final
+		d.Queued = queued
+		if never {
+			permanent = true
+		}
+	} else {
+		d.Queued = queued
 	}
 	if permanent {
 		d.ExpiryAt = 0
@@ -863,6 +923,7 @@ func startedAt(b *store.Bucket) int64 {
 func buildPlanViews(buckets []*store.Bucket, pkgNames map[int64]string) []planView {
 	now := time.Now().Unix()
 	acts := queueActivations(buckets, now)
+	ends := store.LineEnds(buckets, now)
 	out := []planView{}
 	for _, b := range buckets {
 		if b.Kind == store.KindFree {
@@ -879,9 +940,30 @@ func buildPlanViews(buckets []*store.Bucket, pkgNames map[int64]string) []planVi
 		}
 		pv := planView{ID: b.ID, Kind: b.Kind, PackageID: b.PackageID, QueueKey: b.QueueKey, Name: name, TrafficLimit: b.TrafficLimit,
 			Used: b.Used(), ExpiryAt: b.ExpiryAt, Remaining: 0, CreatedAt: b.CreatedAt, OrderID: b.OrderID,
-			DurationDays: b.DurationDays, AutoRenew: b.AutoRenew, StartedAt: startedAt(b)}
+			DurationDays: b.DurationDays, AutoRenew: b.AutoRenew, StartedAt: startedAt(b),
+			AdvanceOverride: b.AdvanceOverride}
+		if b.Kind == "plan" && b.PackageID > 0 {
+			key := b.QueueKey
+			if key == "" {
+				key = fmt.Sprintf("pkg:%d", b.PackageID)
+			}
+			if e := ends[key]; e != nil && !e.Never {
+				pv.LineEndAt, pv.LineQueued = e.EndAt, e.Queued
+			}
+		}
+		if b.Periodic() {
+			pv.Periodic = true
+			pv.PeriodQuota = b.PeriodQuota
+			pv.NextResetAt = b.NextResetAt()
+			pv.Advanced = b.Advanced()
+			pv.CanAdvance = b.AllowAdvance
+			pv.LifeUsed = b.Used() + b.LifeUsedUp + b.LifeUsedDown
+			if b.Status != "queued" {
+				pv.TrafficLimit = b.PeriodBase
+			}
+		}
 		if b.TrafficLimit > 0 {
-			if rem := b.TrafficLimit - b.Used(); rem > 0 {
+			if rem := pv.TrafficLimit - b.Used(); rem > 0 {
 				pv.Remaining = rem
 			} else {
 				pv.Remaining = 0
@@ -894,7 +976,7 @@ func buildPlanViews(buckets []*store.Bucket, pkgNames map[int64]string) []planVi
 		case !b.NotExpired(now):
 			pv.Status = "expired"
 		case !b.HasQuota():
-			pv.Status = "exhausted"
+			pv.Status = "exhausted" // periodic: paused until NextResetAt
 		default:
 			pv.Status = "active"
 		}

@@ -40,6 +40,7 @@ const bucket = computed<'active' | 'queued' | 'finished'>(() =>
 const canAdjust = computed(() => {
   return meta.value.label !== '已过期'
 })
+// 看起来已用完但仍在预支，用量会超过本月额度，进度条封顶即可
 
 const usedPct = computed(() => pct(props.plan.used, props.plan.traffic_limit))
 const fillWidth = computed(() =>
@@ -57,7 +58,14 @@ const amountText = computed(() => {
 
 const whenText = computed(() => {
   const p = props.plan
-  const when = planTimeText(p, fmtDate)
+  let when = planTimeText(p, fmtDate)
+  if (p.periodic) {
+    const bits = [`每月 ${fmtBytes(p.period_quota || 0)}`]
+    if (p.next_reset_at && p.status !== 'expired' && p.status !== 'queued') bits.push(`${fmtDate(p.next_reset_at)} 重置`)
+    if (p.advanced > 0) bits.push(`已预支下期 ${fmtBytes(p.advanced)}`)
+    when = [when, ...bits].join(' · ')
+  }
+  if (p.line_end_at && p.line_end_at !== p.expiry_at && p.status !== 'queued') when += ` · 整体有效期至 ${fmtDate(p.line_end_at)}`
   const born = p.created_at ? `开通 ${fmtDateTime(p.created_at)}` : ''
   const from = p.order_id ? `订单 #${p.order_id}` : sourceLabel(p)
   return [when, born, from].filter(Boolean).join(' · ')

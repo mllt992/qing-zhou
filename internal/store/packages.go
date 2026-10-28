@@ -19,6 +19,9 @@ type PlanOption struct {
 	Days         int64 `json:"days"`
 	PricePoints  int64 `json:"price_points"`
 	TrafficBytes int64 `json:"traffic_bytes"`
+	// MonthlyBytes is the per-30-day quota of a monthly-reset package. 0 = derive
+	// it from TrafficBytes (see PeriodQuota).
+	MonthlyBytes int64 `json:"monthly_bytes,omitempty"`
 }
 
 type Package struct {
@@ -42,16 +45,69 @@ type Package struct {
 	GroupIDs     []int64      `json:"group_ids,omitempty"`      // plan↔node-groups: which nodes it grants (not a column)
 	UserGroupIDs []int64      `json:"user_group_ids,omitempty"` // package↔user-groups: who may buy it; empty = public (not a column)
 	Subscribers  int64        `json:"subscribers,omitempty"`    // users currently on this plan (not a column)
+	// MonthlyReset makes every newly activated份 of this plan reset its traffic
+	// every PeriodDays (30) days instead of carrying one lump sum for the whole
+	// duration. MonthlyBytes is the per-period quota (0 = derived).
+	MonthlyReset bool  `json:"monthly_reset"`
+	MonthlyBytes int64 `json:"monthly_bytes"`
+	// AllowAdvance lets a user who used up this period borrow the next period's
+	// quota early. Admins can override it per user.
+	AllowAdvance bool `json:"allow_advance"`
+}
+
+// PeriodDays is the fixed length of one traffic period for monthly-reset plans.
+const PeriodDays int64 = 30
+
+// PeriodCount is how many traffic periods a duration spans (at least one).
+func PeriodCount(days int64) int64 {
+	if days <= 0 {
+		return 1
+	}
+	return (days + PeriodDays - 1) / PeriodDays
+}
+
+// PeriodQuota is the per-period quota a份 of this (already option-resolved)
+// package gets: the explicit monthly figure when set, otherwise the total split
+// evenly across the duration's periods.
+func (p *Package) PeriodQuota() int64 {
+	if p.MonthlyBytes > 0 {
+		return p.MonthlyBytes
+	}
+	n := PeriodCount(p.DurationDays)
+	q := p.TrafficBytes / n
+	if q <= 0 {
+		q = p.TrafficBytes
+	}
+	return q
+}
+
+// NormalizeMonthly keeps total traffic and the monthly figure consistent for a
+// monthly-reset plan: when the admin entered 每月流量, the total becomes
+// monthly × periods, so refunds, order snapshots and the shop all see one number.
+func (p *Package) NormalizeMonthly() {
+	if p.Type != "plan" || !p.MonthlyReset {
+		return
+	}
+	for i := range p.Options {
+		if p.Options[i].MonthlyBytes > 0 {
+			p.Options[i].TrafficBytes = p.Options[i].MonthlyBytes * PeriodCount(p.Options[i].Days)
+		}
+	}
+	if len(p.Options) == 0 && p.MonthlyBytes > 0 {
+		p.TrafficBytes = p.MonthlyBytes * PeriodCount(p.DurationDays)
+	}
 }
 
 const pkgCols = `id, type, name, queue_key, description, highlights, price_points, traffic_bytes,
-	duration_days, duration_options, stock, enabled, sort_order, created_at`
+	duration_days, duration_options, stock, enabled, sort_order, created_at,
+	monthly_reset, monthly_bytes, allow_advance`
 
 func scanPackage(sc scanner) (*Package, error) {
 	var p Package
 	var highlights, options string
 	err := sc.Scan(&p.ID, &p.Type, &p.Name, &p.QueueKey, &p.Description, &highlights, &p.PricePoints, &p.TrafficBytes,
-		&p.DurationDays, &options, &p.Stock, &p.Enabled, &p.SortOrder, &p.CreatedAt)
+		&p.DurationDays, &options, &p.Stock, &p.Enabled, &p.SortOrder, &p.CreatedAt,
+		&p.MonthlyReset, &p.MonthlyBytes, &p.AllowAdvance)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -101,6 +157,7 @@ func encodeOptions(opts []PlanOption) string {
 // stale leftover from before the options were edited.
 func (p *Package) applyDefaultOption() {
 	p.Options = decodeOptions(encodeOptions(p.Options)) // drop blank rows once, here
+	p.NormalizeMonthly()
 	if len(p.Options) == 0 {
 		return
 	}
@@ -108,6 +165,7 @@ func (p *Package) applyDefaultOption() {
 	p.DurationDays = first.Days
 	p.PricePoints = first.PricePoints
 	p.TrafficBytes = first.TrafficBytes
+	p.MonthlyBytes = first.MonthlyBytes
 }
 
 // ErrOptionNotFound means the requested duration is not (or is no longer) on sale
@@ -145,6 +203,7 @@ func (p *Package) forDuration(days int64) (*Package, error) {
 			eff.DurationDays = o.Days
 			eff.PricePoints = o.PricePoints
 			eff.TrafficBytes = o.TrafficBytes
+			eff.MonthlyBytes = o.MonthlyBytes
 			return &eff, nil
 		}
 	}
@@ -175,6 +234,13 @@ func (p *Package) forAdminDuration(days int64) (*Package, error) {
 		return nil, err
 	}
 	eff := *base
+	if eff.MonthlyReset {
+		// Custom length of a monthly plan: keep the default option's per-period
+		// quota and give it for every period of the custom length.
+		q := base.PeriodQuota()
+		eff.MonthlyBytes = q
+		eff.TrafficBytes = q * PeriodCount(days)
+	}
 	eff.DurationDays = days
 	return &eff, nil
 }
@@ -288,10 +354,12 @@ func (s *Store) ListPackagesForUser(userID int64) ([]*Package, error) {
 func (s *Store) CreatePackage(p Package) (int64, error) {
 	p.applyDefaultOption()
 	res, err := s.db.Exec(`INSERT INTO packages
-		(type, name, queue_key, description, highlights, price_points, traffic_bytes, duration_days, duration_options, stock, enabled, sort_order, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(type, name, queue_key, description, highlights, price_points, traffic_bytes, duration_days, duration_options, stock, enabled, sort_order, created_at,
+		 monthly_reset, monthly_bytes, allow_advance)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.Type, p.Name, strings.TrimSpace(p.QueueKey), p.Description, encodeHighlights(p.Highlights), p.PricePoints, p.TrafficBytes,
-		p.DurationDays, encodeOptions(p.Options), p.Stock, boolToInt(p.Enabled), p.SortOrder, time.Now().Unix())
+		p.DurationDays, encodeOptions(p.Options), p.Stock, boolToInt(p.Enabled), p.SortOrder, time.Now().Unix(),
+		boolToInt(p.MonthlyReset), p.MonthlyBytes, boolToInt(p.AllowAdvance))
 	if err != nil {
 		return 0, err
 	}
@@ -308,9 +376,16 @@ func (s *Store) UpdatePackage(p Package) error {
 	key := strings.TrimSpace(p.QueueKey)
 	if _, err := tx.Exec(`UPDATE packages SET
 		type=?, name=?, queue_key=?, description=?, highlights=?, price_points=?, traffic_bytes=?,
-		duration_days=?, duration_options=?, stock=?, enabled=?, sort_order=? WHERE id=?`,
+		duration_days=?, duration_options=?, stock=?, enabled=?, sort_order=?,
+		monthly_reset=?, monthly_bytes=?, allow_advance=? WHERE id=?`,
 		p.Type, p.Name, key, p.Description, encodeHighlights(p.Highlights), p.PricePoints, p.TrafficBytes,
-		p.DurationDays, encodeOptions(p.Options), p.Stock, boolToInt(p.Enabled), p.SortOrder, p.ID); err != nil {
+		p.DurationDays, encodeOptions(p.Options), p.Stock, boolToInt(p.Enabled), p.SortOrder,
+		boolToInt(p.MonthlyReset), p.MonthlyBytes, boolToInt(p.AllowAdvance), p.ID); err != nil {
+		return err
+	}
+	// The package default for 预支 applies to every held份 that has no per-user
+	// override; re-derive their borrowable limit right away.
+	if err := refreshPeriodLimitsForPackage(tx, p.ID, time.Now().Unix()); err != nil {
 		return err
 	}
 	// queue_key is snapshotted on every entitlement so package edits/deletions do
