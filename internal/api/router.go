@@ -51,11 +51,11 @@ type API struct {
 	redeemRL   *rateLimiter
 	redeemIPRL *rateLimiter
 
-	sbctl        *sbctl.Controller // native sing-box orchestrator; nil if not enabled
+	sbctl *sbctl.Controller // native sing-box orchestrator; nil if not enabled
 	// complianceRun overrides how 合规检测 lists sockets on a machine (tests).
 	complianceRun func(ctx context.Context, serverID int64, cmd string) (string, error)
-	updater      *updater.Manager  // GitHub-release self-updater
-	remoteBackup *backup.Manager
+	updater       *updater.Manager // GitHub-release self-updater
+	remoteBackup  *backup.Manager
 
 	linkMu    sync.Mutex
 	linkCache map[int64]linkCacheEntry
