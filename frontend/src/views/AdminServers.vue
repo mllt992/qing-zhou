@@ -2,7 +2,7 @@
   <div>
     <div class="page-head">
       <div><h2 class="page-title">服务器管理</h2><p class="page-sub">远程机器、SSH 接管、探针与 sing-box 运行版本</p></div>
-      <div class="page-actions"><n-button type="primary" @click="openForm()">添加服务器</n-button></div>
+      <div class="page-actions"><AdminComplianceCheck /><n-button type="primary" @click="openForm()">添加服务器</n-button></div>
     </div>
     <div class="resource-overview">
       <div class="resource-metric"><b>{{ servers.length }}</b><span>全部远程服务器</span></div>
@@ -213,6 +213,7 @@ import { apiList, apiPost, apiPut, apiDelete, apiGet } from '@/api'
 import { fmtBytes, fmtDateTime, pct } from '@/utils/format'
 import AdminServiceTraffic from '@/components/AdminServiceTraffic.vue'
 import AdminRelayMetering from '@/components/AdminRelayMetering.vue'
+import AdminComplianceCheck from '@/components/AdminComplianceCheck.vue'
 import * as echarts from 'echarts'
 const message = useMessage()
 const dialog = useDialog()

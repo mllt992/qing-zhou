@@ -52,6 +52,8 @@ type API struct {
 	redeemIPRL *rateLimiter
 
 	sbctl        *sbctl.Controller // native sing-box orchestrator; nil if not enabled
+	// complianceRun overrides how 合规检测 lists sockets on a machine (tests).
+	complianceRun func(ctx context.Context, serverID int64, cmd string) (string, error)
 	updater      *updater.Manager  // GitHub-release self-updater
 	remoteBackup *backup.Manager
 
@@ -426,6 +428,7 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/sb/inbounds/{id}/ack-upstream", a.handleAdminAckUpstreamBroken)
 		ar.Get("/api/admin/sb/preview", a.handleAdminSbPreview)
 		ar.Get("/api/admin/sb/check", a.handleAdminSbCheck)
+		ar.Post("/api/admin/compliance/check", a.handleAdminComplianceCheck)
 		ar.Get("/api/admin/sb/port-check", a.handleAdminPortCheck)
 		ar.Get("/api/admin/sb/import-remote/list-files", a.handleAdminImportRemoteListFiles)
 		ar.Get("/api/admin/sb/import-remote/preview", a.handleAdminImportRemotePreview)
