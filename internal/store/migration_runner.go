@@ -36,6 +36,7 @@ func (s *Store) migrations() []migration {
 		{8, "relay_protocol_auth_verification", s.migrateRelayProtocolAuthVerification},
 		{9, "relay_user_retirement", func(tx *sql.Tx) error { _, err := tx.Exec(relayUserRetirementSchema); return err }},
 		{10, "source_node_key_aliases", func(tx *sql.Tx) error { _, err := tx.Exec(sourceNodeKeyAliasSchema); return err }},
+		{11, "monthly_reset", s.migrateMonthlyReset},
 	}
 }
 
