@@ -1088,6 +1088,14 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 				legacyKeys = subconv.NodeKeys(oldLink)
 			}
 			out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link, LegacyKeys: legacyKeys})
+			// 可选 IPv6 订阅地址：同一入站额外出一条「原名-v6」节点，原节点不变。
+			if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
+				p6 := p
+				p6.Host, p6.Tag = v6, remark+"-v6"
+				if link6 := singbox.BuildShareLink(p6); link6 != "" {
+					out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link6})
+				}
+			}
 		}
 	}
 	return out
@@ -1249,6 +1257,11 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 			p.MeterPlan = meterPlan
 		}
 		out = append(out, p)
+		if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
+			p6 := p
+			p6.Host, p6.Tag = v6, ib.Tag+"-v6"
+			out = append(out, p6)
+		}
 	}
 	return out
 }
@@ -1699,4 +1712,16 @@ func (s *Store) UserOwnedNodes(userID, now int64) (map[int64]*Bucket, error) {
 		}
 	}
 	return out, nil
+}
+
+// serverHostV6 returns the cached server's optional IPv6 subscription address.
+// The caller has already resolved the server into cache for its Host override.
+func serverHostV6(cache map[int64]*Server, id int64) string {
+	if id == 0 {
+		return ""
+	}
+	if sv := cache[id]; sv != nil {
+		return strings.TrimSpace(sv.HostV6)
+	}
+	return ""
 }

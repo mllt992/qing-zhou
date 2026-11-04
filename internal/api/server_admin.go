@@ -68,6 +68,7 @@ func (a *API) handleAdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	sv.Name = strings.TrimSpace(sv.Name)
 	sv.Host = strings.TrimSpace(sv.Host)
+	sv.HostV6 = strings.Trim(strings.TrimSpace(sv.HostV6), "[]")
 	if sv.Name == "" || sv.Host == "" {
 		fail(w, http.StatusBadRequest, "名称和主机不能为空")
 		return
@@ -132,6 +133,7 @@ func (a *API) handleAdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	sv.ID = id
 	sv.Name = strings.TrimSpace(sv.Name)
 	sv.Host = strings.TrimSpace(sv.Host)
+	sv.HostV6 = strings.Trim(strings.TrimSpace(sv.HostV6), "[]")
 	if sv.Name == "" || sv.Host == "" {
 		fail(w, http.StatusBadRequest, "名称和主机不能为空")
 		return
