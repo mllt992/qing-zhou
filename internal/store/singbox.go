@@ -1530,7 +1530,10 @@ func orderBuckets(bs []*Bucket, now, freeGroup int64, planGroups func(int64) []i
 		// A zero-limit legacy plan is not a node entitlement. In particular, an
 		// active pool/grant must not revive its groups and turn "0" back into an
 		// implicit unlimited plan through the fallback path below.
-		if b.TrafficLimit > 0 {
+		// An expired plan no longer entitles any node: the pool and grant buckets
+		// must not keep using its groups after the plan's validity period ends.
+		// An exhausted-but-valid plan still counts, so the pool can top it up.
+		if b.TrafficLimit > 0 && b.NotExpired(now) {
 			for _, g := range planGroups(b.PackageID) {
 				allPlanGroups[g] = true
 			}
