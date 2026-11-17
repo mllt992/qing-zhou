@@ -167,7 +167,7 @@ func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, users
 			continue
 		}
 		entry, landing := byTag[n.InboundTag], byID[n.RouteUpstreamInboundID]
-		if entry == nil || !entry.Enabled || landing == nil || !landing.Enabled {
+		if entry == nil || !entry.Enabled || !s.serverEnabled(serverCache, entry.ServerID) || landing == nil || !landing.Enabled || !s.serverEnabled(serverCache, landing.ServerID) {
 			continue
 		}
 		auth := make([]string, 0)
@@ -220,7 +220,7 @@ func (s *Store) buildRelayWiring(serverInbounds, allInbounds []*SbInbound, users
 			continue
 		}
 		landing := byID[r.UpstreamInboundID]
-		if landing == nil || !landing.Enabled {
+		if landing == nil || !landing.Enabled || !s.serverEnabled(serverCache, landing.ServerID) {
 			continue // dangling/disabled upstream — traffic falls through to final
 		}
 		if perUser {

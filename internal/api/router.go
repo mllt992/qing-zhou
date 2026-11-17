@@ -114,6 +114,9 @@ func (a *API) sbRebuild() error {
 // succeeded. The scheduler coalesces bursts and records a per-target status the
 // admin UI can poll; a failed push self-heals on the next controller tick.
 func (a *API) sbRebuildLog() {
+	// Node / inbound / server changes also affect subscriptions. Flush the
+	// 30s link cache even when the sing-box controller is not attached.
+	a.invalidateAllLinks()
 	if a.sbctl == nil {
 		return
 	}

@@ -38,7 +38,7 @@
                   v-for="r in gv.nodes"
                   :key="r.id"
                   class="list-card node-sort-card"
-                  :class="{ dragging: draggingNodeId === r.id, 'drag-over': dragOverNodeId === r.id }"
+                  :class="{ dragging: draggingNodeId === r.id, 'drag-over': dragOverNodeId === r.id, 'is-disabled': nodeHidden(r) }"
                   draggable="true"
                   @dragstart="handleNodeDragStart(r.id, $event)"
                   @dragover.prevent="handleNodeDragOver(r.id, $event)"
@@ -48,7 +48,14 @@
                   <div class="lc-head">
                     <span class="lc-title">{{ r.name || '—' }}</span>
                     <n-button size="tiny" @click="openAudience('node', r.id, r.name)">可用用户 {{ audienceCounts?.nodes?.[r.id] ?? (audienceCounts ? 0 : '—') }}</n-button>
-                    <n-tag :type="r.enabled ? 'success' : 'default'" size="tiny" :bordered="false">{{ r.enabled ? '启用' : '禁用' }}</n-tag>
+                    <div class="node-toggles" @mousedown.stop @pointerdown.stop @click.stop @dragstart.stop>
+                      <n-switch size="small" :value="!!r.enabled" :loading="togglingNode[r.id] === 'enabled'" @update:value="v => toggleNodeEnabled(r, v)" />
+                      <n-tag v-if="!r.enabled" type="warning" size="tiny" :bordered="false">已禁用</n-tag>
+                      <template v-if="r.type === 'self_built'">
+                        <n-tag size="tiny" :type="familyTagType(r, 'v4')" :bordered="false" style="cursor:pointer;" @click="toggleNodeFamily(r, 'output_v4')">v4</n-tag>
+                        <n-tag size="tiny" :type="familyTagType(r, 'v6')" :bordered="false" style="cursor:pointer;" :title="nodeHasV6(r) ? '' : '当前机器未填写 IPv6 订阅地址，打开也不会输出'" @click="toggleNodeFamily(r, 'output_v6')">v6</n-tag>
+                      </template>
+                    </div>
                   </div>
                   <div class="lc-meta">
                     <span class="kv"><n-tag :type="r.type === 'self_built' ? 'info' : 'warning'" size="tiny" :bordered="false">{{ r.type === 'self_built' ? '自建' : '外部' }}</n-tag></span>
@@ -273,7 +280,26 @@
           <n-form-item label="分组">
             <n-select v-model:value="nodeForm.group_ids" :options="groupOptions" multiple placeholder="选择分组" />
           </n-form-item>
-          <n-form-item label="启用"><n-switch v-model:value="nodeForm.enabled" /></n-form-item>
+          <n-form-item label="启用">
+            <div>
+              <n-switch v-model:value="nodeForm.enabled" />
+              <div class="form-tip">关闭后该节点从订阅和用户节点列表中隐藏，配置保留，重新打开即恢复。</div>
+            </div>
+          </n-form-item>
+          <template v-if="nodeForm.type === 'self_built'">
+            <n-form-item label="输出 IPv4 节点">
+              <div>
+                <n-switch v-model:value="nodeForm.output_v4" />
+                <div class="form-tip">关闭后订阅中不再出现该节点的 IPv4 / 主机名条目，不影响 IPv6。</div>
+              </div>
+            </n-form-item>
+            <n-form-item label="输出 IPv6 节点">
+              <div>
+                <n-switch v-model:value="nodeForm.output_v6" />
+                <div class="form-tip">关闭后订阅中不再出现「原名-v6」节点。{{ nodeFormHasV6 ? '' : '当前机器未填写 IPv6 订阅地址，打开也不会输出。' }}</div>
+              </div>
+            </n-form-item>
+          </template>
         </n-form>
         <n-button type="primary" block :loading="saving" @click="handleSaveNode">保存</n-button>
       </n-drawer-content>
@@ -541,7 +567,7 @@ function chooseReuseEntry(entry: ReuseCatalogEntry) {
   Object.assign(nodeForm, {
     name: `${entry.serverLabel} · 新线路`, type: 'self_built', inbound_tag: entry.tag,
     route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '',
-    group_ids: reuseTargetGroup.value ? [reuseTargetGroup.value.id] : [], enabled: true,
+    group_ids: reuseTargetGroup.value ? [reuseTargetGroup.value.id] : [], enabled: true, output_v4: true, output_v6: true,
   })
   showReuse.value = false
   showNode.value = true
@@ -742,15 +768,63 @@ const editingNode = ref<any>(null)
 // share_link must match store.Node's JSON tag — it was `link`, so the field was
 // never sent: created external nodes had no link at all, and saving an existing
 // one blanked its stored link.
-const nodeForm = reactive({ name: '', remark: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [] as number[], enabled: true })
+const nodeForm = reactive({ name: '', remark: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [] as number[], enabled: true, output_v4: true, output_v6: true })
 function openNode(n?: any) {
   editingNode.value = n || null
   if (n) {
-    Object.assign(nodeForm, { name: n.name, remark: n.remark || '', type: n.type || 'self_built', inbound_tag: n.inbound_tag || '', route_upstream_inbound_id: n.route_upstream_inbound_id || 0, route_upstream_broken: !!n.route_upstream_broken, share_link: n.share_link || '', group_ids: n.group_ids || [], enabled: n.enabled })
+    Object.assign(nodeForm, { name: n.name, remark: n.remark || '', type: n.type || 'self_built', inbound_tag: n.inbound_tag || '', route_upstream_inbound_id: n.route_upstream_inbound_id || 0, route_upstream_broken: !!n.route_upstream_broken, share_link: n.share_link || '', group_ids: n.group_ids || [], enabled: n.enabled !== false, output_v4: n.output_v4 !== false, output_v6: n.output_v6 !== false })
   } else {
-    Object.assign(nodeForm, { name: '', remark: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [], enabled: true })
+    Object.assign(nodeForm, { name: '', remark: '', type: 'self_built', inbound_tag: '', route_upstream_inbound_id: 0, route_upstream_broken: false, share_link: '', group_ids: [], enabled: true, output_v4: true, output_v6: true })
   }
   showNode.value = true
+}
+const togglingNode = reactive<Record<number, string>>({})
+const nodeFormHasV6 = computed(() => nodeInboundHasV6(nodeForm.inbound_tag))
+function nodeInboundHasV6(tag: string) {
+  if (!tag) return false
+  const ib = inboundMap.value.get(tag)
+  if (!ib || !ib.server_id) return false
+  const s = servers.value.find(sv => sv.id === ib.server_id)
+  return !!(s && String(s.host_v6 || '').trim())
+}
+function nodeHasV6(n: any) { return nodeInboundHasV6(n?.inbound_tag) }
+function familyOn(n: any, key: 'output_v4' | 'output_v6') { return n?.[key] !== false }
+function nodeHidden(n: any) {
+  if (!n?.enabled) return true
+  if (n.type === 'self_built' && !familyOn(n, 'output_v4') && !familyOn(n, 'output_v6')) return true
+  return false
+}
+function familyTagType(n: any, family: 'v4' | 'v6') {
+  if (family === 'v4') return familyOn(n, 'output_v4') && n.enabled ? 'success' : 'default'
+  if (!familyOn(n, 'output_v6') || !n.enabled) return 'default'
+  return nodeHasV6(n) ? 'success' : 'warning'
+}
+async function toggleNodeEnabled(r: any, enabled: boolean) {
+  if (togglingNode[r.id]) return
+  const prev = r.enabled
+  r.enabled = enabled
+  togglingNode[r.id] = 'enabled'
+  try {
+    await apiPut(`/api/admin/nodes/${r.id}`, { enabled })
+    message.success(enabled ? '已启用' : '已禁用，订阅中不再显示')
+  } catch (e: any) {
+    r.enabled = prev
+    message.error(e.message || '更新失败')
+  } finally { delete togglingNode[r.id] }
+}
+async function toggleNodeFamily(r: any, key: 'output_v4' | 'output_v6') {
+  if (togglingNode[r.id]) return
+  const prev = familyOn(r, key)
+  r[key] = !prev
+  togglingNode[r.id] = key
+  try {
+    await apiPut(`/api/admin/nodes/${r.id}`, { [key]: r[key] })
+    const label = key === 'output_v4' ? 'IPv4' : 'IPv6'
+    message.success(r[key] ? `已输出 ${label} 节点` : `已停止输出 ${label} 节点`)
+  } catch (e: any) {
+    r[key] = prev
+    message.error(e.message || '更新失败')
+  } finally { delete togglingNode[r.id] }
 }
 // 从分组卡片直接添加节点，预选该分组。
 function openNodeInGroup(g: any | null) {
@@ -939,6 +1013,8 @@ async function load() {
 
 /* 节点卡片：链路是主体，操作退到卡片底部。 */
 .list-card { gap: 9px; border-radius: 10px; }
+.list-card.is-disabled { opacity: 0.72; }
+.node-toggles { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .route-preview {
   margin-top: 1px; padding: 10px 10px 8px; border-radius: 9px;
   background: rgba(32, 128, 240, 0.045); border: 1px solid rgba(32, 128, 240, 0.1);

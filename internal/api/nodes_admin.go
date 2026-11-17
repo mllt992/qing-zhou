@@ -49,11 +49,17 @@ func (a *API) handleAdminReorderNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleAdminCreateNode(w http.ResponseWriter, r *http.Request) {
-	var n store.Node
-	if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	var n store.Node
+	if err := json.Unmarshal(body, &n); err != nil {
+		fail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	applyNodeOutputDefaults(&n, body)
 	if n.Type != "self_built" && n.Type != "external" {
 		fail(w, http.StatusBadRequest, "节点类型必须为 self_built / external")
 		return
@@ -134,6 +140,22 @@ func requireNodeName(n *store.Node) string {
 	return ""
 }
 
+// applyNodeOutputDefaults turns a missing output_v4 / output_v6 key into
+// "both on" (the historical behaviour) and records the choice as explicit, so
+// CreateNode can still honour "both off".
+func applyNodeOutputDefaults(n *store.Node, body []byte) {
+	keys := map[string]json.RawMessage{}
+	_ = json.Unmarshal(body, &keys)
+	v4, v6 := true, true
+	if raw, ok := keys["output_v4"]; ok {
+		_ = json.Unmarshal(raw, &v4)
+	}
+	if raw, ok := keys["output_v6"]; ok {
+		_ = json.Unmarshal(raw, &v6)
+	}
+	n.SetOutputFamilies(v4, v6)
+}
+
 // validateNodeRoute turns a self-built node into a safe logical route. The
 // physical inbound remains the listener; a positive override selects the first
 // landing hop and must not create a cycle with the landing's existing chain.
@@ -167,6 +189,9 @@ func (a *API) validateNodeRoute(n *store.Node) string {
 	if !target.Enabled {
 		return "所选落地入站已停用"
 	}
+	if msg := a.inboundServerDisabledMsg(target, "所选落地入站所在机器已禁用"); msg != "" {
+		return msg
+	}
 	allowed := map[string]bool{"vless": true, "vmess": true, "trojan": true, "shadowsocks": true, "hysteria": true, "hysteria2": true, "tuic": true, "anytls": true}
 	if !allowed[target.Type] {
 		return "该落地协议暂不支持由线路机拨号"
@@ -191,8 +216,22 @@ func (a *API) validateNodeRoute(n *store.Node) string {
 		if !cur.Enabled {
 			return "固定落地的后续链路包含已停用入站"
 		}
+		if msg := a.inboundServerDisabledMsg(cur, "固定落地的后续链路包含已禁用的机器"); msg != "" {
+			return msg
+		}
 	}
 	n.RouteUpstreamBroken = false
+	return ""
+}
+
+func (a *API) inboundServerDisabledMsg(ib *store.SbInbound, msg string) string {
+	if ib == nil || ib.ServerID == 0 {
+		return ""
+	}
+	sv, err := a.st.GetServer(ib.ServerID)
+	if err == nil && sv != nil && !sv.Enabled {
+		return msg
+	}
 	return ""
 }
 
