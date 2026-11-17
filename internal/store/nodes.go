@@ -22,18 +22,37 @@ type Node struct {
 	ShareLink              string   `json:"share_link"`
 	SourceID               int64    `json:"source_id"`
 	Enabled                bool     `json:"enabled"`
-	SortOrder              int64    `json:"sort_order"`
-	CreatedAt              int64    `json:"created_at"`
-	GroupIDs               []int64  `json:"group_ids,omitempty"`
+	// OutputV4 / OutputV6 control which address-family entries a self-built
+	// node publishes. Enabled=false still hides both. Both off is also a
+	// hide. Existing rows and historical CreateNode{} callers default both on.
+	OutputV4  bool    `json:"output_v4"`
+	OutputV6  bool    `json:"output_v6"`
+	outputSet bool    `json:"-"`
+	SortOrder int64   `json:"sort_order"`
+	CreatedAt int64   `json:"created_at"`
+	GroupIDs  []int64 `json:"group_ids,omitempty"`
 }
 
-const nodeCols = `id, type, name, remark, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, sort_order, created_at`
+// SetOutputFamilies records an explicit IPv4/IPv6 publication choice so
+// CreateNode does not treat a both-off value as "use the historical default".
+func (n *Node) SetOutputFamilies(v4, v6 bool) {
+	n.OutputV4, n.OutputV6, n.outputSet = v4, v6, true
+}
+
+func (n Node) outputFamilies() (v4, v6 bool) {
+	if n.outputSet || n.OutputV4 || n.OutputV6 {
+		return n.OutputV4, n.OutputV6
+	}
+	return true, true
+}
+
+const nodeCols = `id, type, name, remark, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, output_v4, output_v6, sort_order, created_at`
 
 func scanNode(sc scanner) (*Node, error) {
 	var n Node
-	var routeBroken int
+	var routeBroken, outputV4, outputV6 int
 	err := sc.Scan(&n.ID, &n.Type, &n.Name, &n.Remark, &n.Protocol, &n.InboundTag,
-		&n.RouteUpstreamInboundID, &routeBroken, &n.ShareLink, &n.SourceID, &n.Enabled, &n.SortOrder, &n.CreatedAt)
+		&n.RouteUpstreamInboundID, &routeBroken, &n.ShareLink, &n.SourceID, &n.Enabled, &outputV4, &outputV6, &n.SortOrder, &n.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -41,6 +60,9 @@ func scanNode(sc scanner) (*Node, error) {
 		return nil, err
 	}
 	n.RouteUpstreamBroken = routeBroken == 1
+	n.OutputV4 = outputV4 == 1
+	n.OutputV6 = outputV6 == 1
+	n.outputSet = true
 	return &n, nil
 }
 
@@ -121,11 +143,12 @@ func (s *Store) CreateNode(n Node) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	outV4, outV6 := n.outputFamilies()
 	res, err := tx.Exec(`INSERT INTO nodes
-		(type, name, remark, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, sort_order, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(type, name, remark, protocol, inbound_tag, route_upstream_inbound_id, route_upstream_broken, share_link, source_id, enabled, output_v4, output_v6, sort_order, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.Type, n.Name, n.Remark, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, n.SourceID,
-		boolToInt(n.Enabled), n.SortOrder, time.Now().Unix())
+		boolToInt(n.Enabled), boolToInt(outV4), boolToInt(outV6), n.SortOrder, time.Now().Unix())
 	if err != nil {
 		return 0, err
 	}
@@ -148,8 +171,8 @@ func (s *Store) UpdateNode(n Node) error {
 	}
 	defer tx.Rollback()
 	_, err = tx.Exec(`UPDATE nodes SET
-		type=?, name=?, remark=?, protocol=?, inbound_tag=?, route_upstream_inbound_id=?, route_upstream_broken=?, share_link=?, enabled=?, sort_order=? WHERE id=?`,
-		n.Type, n.Name, n.Remark, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, boolToInt(n.Enabled), n.SortOrder, n.ID)
+		type=?, name=?, remark=?, protocol=?, inbound_tag=?, route_upstream_inbound_id=?, route_upstream_broken=?, share_link=?, enabled=?, output_v4=?, output_v6=?, sort_order=? WHERE id=?`,
+		n.Type, n.Name, n.Remark, n.Protocol, n.InboundTag, n.RouteUpstreamInboundID, boolToInt(n.RouteUpstreamBroken), n.ShareLink, boolToInt(n.Enabled), boolToInt(n.OutputV4), boolToInt(n.OutputV6), n.SortOrder, n.ID)
 	if err != nil {
 		return err
 	}
@@ -421,12 +444,15 @@ func (s *Store) NodesInGroupsTagged(groupIDs []int64) ([]GroupedNode, error) {
 		var n Node
 		var gid int64
 		var isAI bool
-		var routeBroken int
+		var routeBroken, outputV4, outputV6 int
 		if err := rows.Scan(&n.ID, &n.Type, &n.Name, &n.Remark, &n.Protocol, &n.InboundTag, &n.RouteUpstreamInboundID, &routeBroken, &n.ShareLink,
-			&n.SourceID, &n.Enabled, &n.SortOrder, &n.CreatedAt, &gid, &isAI); err != nil {
+			&n.SourceID, &n.Enabled, &outputV4, &outputV6, &n.SortOrder, &n.CreatedAt, &gid, &isAI); err != nil {
 			return nil, err
 		}
 		n.RouteUpstreamBroken = routeBroken == 1
+		n.OutputV4 = outputV4 == 1
+		n.OutputV6 = outputV6 == 1
+		n.outputSet = true
 		nn := n
 		out = append(out, GroupedNode{Node: &nn, GroupID: gid, IsAI: isAI})
 	}

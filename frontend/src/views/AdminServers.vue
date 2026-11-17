@@ -67,13 +67,14 @@
 
     <n-spin :show="loading">
       <div v-if="servers.length" class="card-grid">
-        <div v-for="(s, idx) in servers" :key="s.id" class="list-card">
+        <div v-for="(s, idx) in servers" :key="s.id" class="list-card" :class="{ 'is-disabled': !s.enabled }">
           <div class="lc-head">
             <span class="lc-title"><i class="order-no">{{ idx + 1 }}</i>{{ s.name || '—' }}</span>
             <span class="lc-order">
               <n-button size="tiny" quaternary circle :disabled="idx === 0 || reordering" title="前移" @click="moveServer(idx, -1)">←</n-button>
               <n-button size="tiny" quaternary circle :disabled="idx === servers.length - 1 || reordering" title="后移" @click="moveServer(idx, 1)">→</n-button>
-              <n-tag :type="s.enabled ? 'success' : 'default'" size="small" :bordered="false">{{ s.enabled ? '启用' : '禁用' }}</n-tag>
+              <n-switch size="small" :value="!!s.enabled" :loading="togglingServer === s.id" @update:value="v => toggleServerEnabled(s, v)" />
+              <n-tag v-if="!s.enabled" type="warning" size="small" :bordered="false">已禁用</n-tag>
             </span>
           </div>
           <div class="lc-meta">
@@ -138,7 +139,12 @@
         <n-form-item label="systemd 单元"><n-input v-model:value="form.systemd_unit" placeholder="sing-box" /></n-form-item>
         <n-form-item label="sing-box 路径"><n-input v-model:value="form.sing_box_bin" placeholder="/usr/local/bin/sing-box" /></n-form-item>
         <n-form-item label="v2ray 监听"><n-input v-model:value="form.v2ray_listen" placeholder="127.0.0.1:18080" /></n-form-item>
-        <n-form-item label="启用"><n-switch v-model:value="form.enabled" /></n-form-item>
+        <n-form-item label="启用">
+          <div>
+            <n-switch v-model:value="form.enabled" />
+            <div class="form-tip">关闭后这台机器上的节点会从订阅中隐藏，机器上的 sing-box 不会被停止；重新打开即恢复。</div>
+          </div>
+        </n-form-item>
       </n-form>
       <n-space>
         <n-button type="primary" :loading="saving" @click="handleSave">保存</n-button>
@@ -261,6 +267,20 @@ function onSshUserInput(v:string){
   form.use_sudo = (v||'').trim() !== 'root' && (v||'').trim() !== ''
 }
 
+const togglingServer = ref<number | null>(null)
+async function toggleServerEnabled(s:any, enabled:boolean){
+  if(togglingServer.value) return
+  const prev = s.enabled
+  s.enabled = enabled
+  togglingServer.value = s.id
+  try{
+    await apiPut(`/api/admin/servers/${s.id}`, { enabled })
+    message.success(enabled ? '已启用' : '已禁用，该机器节点不再出现在订阅中（sing-box 保持运行）')
+  }catch(e:any){
+    s.enabled = prev
+    message.error(e.message || '更新失败')
+  }finally{ togglingServer.value = null }
+}
 async function handleSave(){
   saving.value = true
   try{
@@ -500,4 +520,6 @@ onUnmounted(() => trafficChart.value?.dispose())
 .source-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#6e9fbe,#75aa8f); }
 .source-main small { color:var(--text-3); font-size:10px; }
 @media(max-width:700px){ .traffic-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));} .traffic-chart{height:230px;} }
+.list-card.is-disabled { opacity: 0.72; }
+.form-tip { margin-top: 6px; font-size: 12px; color: var(--text-3); line-height: 1.5; }
 </style>

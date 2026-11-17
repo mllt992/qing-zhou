@@ -868,15 +868,16 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 	var out []SelfBuiltLink
 	legacyDone := map[string]bool{}
 	for _, n := range nodes {
-		if !n.Enabled || n.Type != "self_built" || n.RouteUpstreamBroken {
+		outV4, outV6 := n.outputFamilies()
+		if !n.Enabled || n.Type != "self_built" || n.RouteUpstreamBroken || (!outV4 && !outV6) {
 			continue
 		}
 		ib := inboundByTag[n.InboundTag]
-		if ib == nil || !ib.Enabled {
+		if ib == nil || !ib.Enabled || !s.serverEnabled(serverCache, ib.ServerID) {
 			continue
 		}
 		if n.RouteUpstreamInboundID != 0 {
-			if !inboundRouteHealthy(inbounds, n.RouteUpstreamInboundID) {
+			if !s.inboundRouteHealthy(inbounds, n.RouteUpstreamInboundID, serverCache) {
 				continue // fixed exits fail closed; never leak through the entry machine
 			}
 		}
@@ -1087,13 +1088,17 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 			if oldLink := singbox.LegacyShareLinkForNodeKey(legacy); oldLink != "" && oldLink != link {
 				legacyKeys = subconv.NodeKeys(oldLink)
 			}
-			out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link, LegacyKeys: legacyKeys})
+			if outV4 {
+				out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link, LegacyKeys: legacyKeys})
+			}
 			// 可选 IPv6 订阅地址：同一入站额外出一条「原名-v6」节点，原节点不变。
-			if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
-				p6 := p
-				p6.Host, p6.Tag = v6, remark+"-v6"
-				if link6 := singbox.BuildShareLink(p6); link6 != "" {
-					out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link6})
+			if outV6 {
+				if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
+					p6 := p
+					p6.Host, p6.Tag = v6, remark+"-v6"
+					if link6 := singbox.BuildShareLink(p6); link6 != "" {
+						out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link6})
+					}
 				}
 			}
 		}
@@ -1110,11 +1115,11 @@ func inboundByID(inbounds []*SbInbound, id int64) *SbInbound {
 	return nil
 }
 
-func inboundRouteHealthy(inbounds []*SbInbound, first int64) bool {
+func inboundRouteHealthy(inbounds []*SbInbound, first int64, serverOK func(*SbInbound) bool) bool {
 	seen := map[int64]bool{}
 	cur := inboundByID(inbounds, first)
 	for cur != nil && !seen[cur.ID] {
-		if !cur.Enabled {
+		if !cur.Enabled || (serverOK != nil && !serverOK(cur)) {
 			return false
 		}
 		seen[cur.ID] = true
@@ -1124,6 +1129,53 @@ func inboundRouteHealthy(inbounds []*SbInbound, first int64) bool {
 		cur = inboundByID(inbounds, cur.UpstreamInboundID)
 	}
 	return false // missing hop or cycle
+}
+
+// serverEnabled reports whether a node on this machine may be advertised.
+// server_id 0 is a panel-local inbound (no servers row). A missing or
+// disabled server fails closed so a relay never silently exits from the entry.
+func (s *Store) serverEnabled(cache map[int64]*Server, serverID int64) bool {
+	if serverID == 0 {
+		return true
+	}
+	if sv, ok := cache[serverID]; ok {
+		return sv == nil || sv.Enabled
+	}
+	sv, err := s.GetServer(serverID)
+	if err != nil {
+		sv = nil
+	}
+	cache[serverID] = sv
+	return sv == nil || sv.Enabled
+}
+
+func (s *Store) inboundRouteHealthy(inbounds []*SbInbound, first int64, cache map[int64]*Server) bool {
+	return inboundRouteHealthy(inbounds, first, func(ib *SbInbound) bool {
+		return s.serverEnabled(cache, ib.ServerID)
+	})
+}
+
+// nodeOutputForTag returns the IPv4/IPv6 publication flags of enabled
+// self-built nodes bound to tag. No bound node keeps the historical default
+// (both on), so mixed inbounds without a 节点 row still advertise both.
+func nodeOutputForTag(nodes []*Node, tag string) (v4, v6 bool) {
+	found := false
+	for _, n := range nodes {
+		if !n.Enabled || n.Type != "self_built" || n.InboundTag != tag {
+			continue
+		}
+		ov4, ov6 := n.outputFamilies()
+		if !found {
+			v4, v6, found = ov4, ov6, true
+			continue
+		}
+		v4 = v4 || ov4
+		v6 = v6 || ov6
+	}
+	if !found {
+		return true, true
+	}
+	return v4, v6
 }
 
 // UserProxy is one mixed (HTTP/SOCKS5) inbound's connection info for a user,
@@ -1198,9 +1250,14 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 	if acct.active(now) {
 		meterPlan = s.AccountMeterPlanName(u.ID)
 	}
+	nodes, _ := s.ListNodes()
 	var out []UserProxy
 	for _, ib := range inbounds {
-		if !ib.Enabled || ib.Type != "mixed" {
+		if !ib.Enabled || ib.Type != "mixed" || !s.serverEnabled(serverCache, ib.ServerID) {
+			continue
+		}
+		outV4, outV6 := nodeOutputForTag(nodes, ib.Tag)
+		if !outV4 && !outV6 {
 			continue
 		}
 		owner := owners[ib.Tag]
@@ -1256,11 +1313,15 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 			p.Custom, p.Account = true, true
 			p.MeterPlan = meterPlan
 		}
-		out = append(out, p)
-		if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
-			p6 := p
-			p6.Host, p6.Tag = v6, ib.Tag+"-v6"
-			out = append(out, p6)
+		if outV4 {
+			out = append(out, p)
+		}
+		if outV6 {
+			if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
+				p6 := p
+				p6.Host, p6.Tag = v6, ib.Tag+"-v6"
+				out = append(out, p6)
+			}
 		}
 	}
 	return out
@@ -1484,7 +1545,7 @@ func (s *Store) BuildUsersByTag(now int64) (map[string][]singbox.User, error) {
 			continue
 		}
 		ib := byTag[n.InboundTag]
-		if ib == nil || !ib.Enabled || !inboundRouteHealthy(inbounds, n.RouteUpstreamInboundID) {
+		if ib == nil || !ib.Enabled || !s.inboundRouteHealthy(inbounds, n.RouteUpstreamInboundID, map[int64]*Server{}) {
 			continue
 		}
 		for _, ord := range ordered {

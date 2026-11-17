@@ -148,16 +148,20 @@ func (s *Store) currentAudience(scope string, target int64, countsOnly bool) (Au
 	if err != nil {
 		return out, err
 	}
+	serverCache := map[int64]*Server{}
 	for rows.Next() {
 		var n audienceNode
 		if err = rows.Scan(&n.id, &n.group, &n.server, &n.external, &n.upstream); err != nil {
 			rows.Close()
 			return out, err
 		}
+		if !n.external && !s.serverEnabled(serverCache, n.server) {
+			continue
+		}
 		if !n.external && n.upstream != 0 {
 			good, checked := healthy[n.upstream]
 			if !checked {
-				good = inboundRouteHealthy(inbounds, n.upstream)
+				good = s.inboundRouteHealthy(inbounds, n.upstream, serverCache)
 				healthy[n.upstream] = good
 			}
 			if !good {

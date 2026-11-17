@@ -40,6 +40,12 @@ func (s *Store) migrations() []migration {
 		{12, "server_host_v6", func(tx *sql.Tx) error {
 			return execLegacyStatement(tx, `ALTER TABLE servers ADD COLUMN host_v6 TEXT NOT NULL DEFAULT ''`)
 		}},
+		{13, "node_output_families", func(tx *sql.Tx) error {
+			if err := execLegacyStatement(tx, `ALTER TABLE nodes ADD COLUMN output_v4 INTEGER NOT NULL DEFAULT 1`); err != nil {
+				return err
+			}
+			return execLegacyStatement(tx, `ALTER TABLE nodes ADD COLUMN output_v6 INTEGER NOT NULL DEFAULT 1`)
+		}},
 	}
 }
 

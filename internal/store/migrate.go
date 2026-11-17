@@ -167,6 +167,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   share_link      TEXT    NOT NULL DEFAULT '', -- external: raw share URI
   source_id       INTEGER NOT NULL DEFAULT 0,
   enabled         INTEGER NOT NULL DEFAULT 1,
+  output_v4       INTEGER NOT NULL DEFAULT 1, -- publish the IPv4 (or hostname) subscription entry
+  output_v6       INTEGER NOT NULL DEFAULT 1, -- publish the optional 「原名-v6」 entry when the server has host_v6
   sort_order      INTEGER NOT NULL DEFAULT 0,
   -- Optional subscription display remark; preferred over name in #fragment.
   remark          TEXT    NOT NULL DEFAULT '',

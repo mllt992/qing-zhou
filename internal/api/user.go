@@ -1214,6 +1214,15 @@ func (a *API) invalidateLinks(userID int64) {
 	a.linkMu.Unlock()
 }
 
+func (a *API) invalidateAllLinks() {
+	if a.linkCache == nil {
+		return
+	}
+	a.linkMu.Lock()
+	a.linkCache = make(map[int64]linkCacheEntry)
+	a.linkMu.Unlock()
+}
+
 // nodeEntry is a share link plus the accessible group it was served from.
 type nodeEntry struct {
 	Link       string

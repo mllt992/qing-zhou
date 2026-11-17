@@ -121,11 +121,12 @@
                 </div>
               </template>
               <div v-if="g.items.length" class="card-grid">
-                <div v-for="(r, idx) in g.items" :key="r.id" class="list-card">
+                <div v-for="(r, idx) in g.items" :key="r.id" class="list-card" :class="{ 'is-disabled': !r.enabled }">
                   <div class="lc-head">
                     <n-checkbox :checked="checkedIds.has(r.id)" @update:checked="toggleCheck(r.id)" style="margin-right:6px;" />
                     <span class="lc-title wrap" :title="r.tag || ''">{{ r.tag || '—' }}</span>
-                    <n-tag :type="r.enabled ? 'success' : 'error'" size="tiny" :bordered="false" style="cursor:pointer;" @click="toggleInbound(r)">{{ r.enabled ? '启用' : '停用' }}</n-tag>
+                    <n-switch size="small" :value="!!r.enabled" @update:value="() => toggleInbound(r)" />
+                    <n-tag v-if="!r.enabled" type="warning" size="tiny" :bordered="false">已禁用</n-tag>
                   </div>
                   <div class="lc-meta">
                     <span class="kv"><n-tag size="tiny" :bordered="false">{{ (r.type || '').toUpperCase() }}</n-tag></span>
@@ -1972,4 +1973,5 @@ async function load() {
   .machine-host { display: none; }
   .machine-extra { gap: 4px; }
 }
+.list-card.is-disabled { opacity: 0.72; }
 </style>

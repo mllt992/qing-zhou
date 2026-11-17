@@ -174,6 +174,10 @@ func (a *API) handleAdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "更新服务器失败")
 		return
 	}
+	// Disabling a machine hides its nodes from subscriptions immediately but
+	// does not stop sing-box (the apply loop skips disabled servers). Re-enabling
+	// schedules a push of the latest config.
+	a.sbRebuildLog()
 	// Point the row at a different host and the pinned key stops being about the
 	// machine we are dialling: it belongs to the old one, so every later connect
 	// fails as "host key mismatch (possible MITM)" for what is really just a
