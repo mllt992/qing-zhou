@@ -99,6 +99,10 @@
         <n-form-item label="主机"><n-input v-model:value="form.host" placeholder="IP 或域名" /></n-form-item>
         <n-form-item label="IPv6 订阅地址（可选）"><n-input v-model:value="form.host_v6" placeholder="IPv6 地址或 AAAA 域名，留空则不生成" /></n-form-item>
         <div style="margin:-12px 0 12px;font-size:12px;color:var(--text-3)">填写后订阅会为本机每个节点额外生成一条「原名-v6」节点，原节点不变；SSH 仍使用上面的主机。</div>
+        <n-form-item label="出站 IPv4/IPv6 偏好">
+          <n-select v-model:value="form.egress_ip_strategy" :options="egressIPOptions" />
+        </n-form-item>
+        <div style="margin:-12px 0 12px;font-size:12px;color:var(--text-3)">决定网站看到的出站 IP 地址族。默认不设置，沿用 sing-box 的双栈探测。选「优先 IPv6」或「仅 IPv6」时，这台服务器本身需要有可用的 IPv6。</div>
         <n-form-item label="SSH 端口"><n-input-number v-model:value="form.port" :min="1" :max="65535" style="width:100%;" /></n-form-item>
         <n-form-item label="SSH 用户"><n-input v-model:value="form.ssh_user" placeholder="root" @update:value="onSshUserInput" /></n-form-item>
         <n-form-item label="sudo 提权">
@@ -228,8 +232,16 @@ const servers = ref<any[]>([])
 const loading = ref(false); const saving = ref(false); const testing = ref(false)
 const reordering = ref(false)
 const showForm = ref(false); const editing = ref<any>(null)
-const mk = () => ({ name:'', host:'', host_v6:'', port:22, ssh_user:'root', ssh_password:'', ssh_key:'', ssh_key_pass:'', use_sudo:false, sudo_password:'', ssh_key_path:'', config_path:'/etc/sing-box/config.json', systemd_unit:'sing-box', sing_box_bin:'/usr/local/bin/sing-box', v2ray_listen:'127.0.0.1:18080', enabled:true })
+const mk = () => ({ name:'', host:'', host_v6:'', egress_ip_strategy:'', port:22, ssh_user:'root', ssh_password:'', ssh_key:'', ssh_key_pass:'', use_sudo:false, sudo_password:'', ssh_key_path:'', config_path:'/etc/sing-box/config.json', systemd_unit:'sing-box', sing_box_bin:'/usr/local/bin/sing-box', v2ray_listen:'127.0.0.1:18080', enabled:true })
 const form = reactive(mk())
+const egressIPOptions = [
+  { label: '默认（不设置）', value: '' },
+  { label: '优先 IPv4', value: 'prefer_ipv4' },
+  { label: '优先 IPv6', value: 'prefer_ipv6' },
+  { label: '仅 IPv4', value: 'ipv4_only' },
+  { label: '仅 IPv6', value: 'ipv6_only' },
+]
+
 
 // 私钥来源二选一。粘贴走 ssh_key（加密入库），选文件走 ssh_key_path（只存文件名，
 // 内容始终留在面板机器上）。后端以文件优先。
@@ -253,7 +265,7 @@ async function loadKeys(){
 }
 function openForm(s?:any){
   editing.value = s||null
-  if(s){ Object.assign(form,{ name:s.name, host:s.host, host_v6:s.host_v6||'', port:s.port||22, ssh_user:s.ssh_user||'root', ssh_password:'', ssh_key:'', ssh_key_pass:s.ssh_key_pass||'', use_sudo:s.use_sudo??false, sudo_password:s.sudo_password||'', ssh_key_path:s.ssh_key_path||'', config_path:s.config_path||'/etc/sing-box/config.json', systemd_unit:s.systemd_unit||'sing-box', sing_box_bin:s.sing_box_bin||'/usr/local/bin/sing-box', v2ray_listen:s.v2ray_listen||'127.0.0.1:18080', enabled:s.enabled??true }) }
+  if(s){ Object.assign(form,{ name:s.name, host:s.host, host_v6:s.host_v6||'', egress_ip_strategy:s.egress_ip_strategy||'', port:s.port||22, ssh_user:s.ssh_user||'root', ssh_password:'', ssh_key:'', ssh_key_pass:s.ssh_key_pass||'', use_sudo:s.use_sudo??false, sudo_password:s.sudo_password||'', ssh_key_path:s.ssh_key_path||'', config_path:s.config_path||'/etc/sing-box/config.json', systemd_unit:s.systemd_unit||'sing-box', sing_box_bin:s.sing_box_bin||'/usr/local/bin/sing-box', v2ray_listen:s.v2ray_listen||'127.0.0.1:18080', enabled:s.enabled??true }) }
   else { Object.assign(form, mk()) }
   keyMode.value = form.ssh_key_path ? 'file' : 'paste'
   showForm.value = true

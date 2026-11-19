@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"qingzhou/internal/singbox"
 )
 
 // hashProbeToken returns the hex SHA-256 of a probe token, used as the lookup
@@ -27,21 +29,26 @@ type Server struct {
 	Host      string `json:"host"`
 	// HostV6 是可选的 IPv6 订阅地址（IPv6 字面量或 AAAA 域名）。非空时订阅为该
 	// 服务器的每个入站额外输出一条「原名-v6」节点；SSH 始终走 Host。
-	HostV6      string `json:"host_v6"`
-	Port        int    `json:"port"`
-	SSHUser     string `json:"ssh_user"`
-	SSHKey      string `json:"ssh_key"`
-	SSHKeyPass  string `json:"ssh_key_pass"`
-	SSHPassword string `json:"ssh_password"`
-	ConfigPath  string `json:"config_path"`
-	SystemdUnit string `json:"systemd_unit"`
-	SingBoxBin  string `json:"sing_box_bin"`
-	V2rayListen string `json:"v2ray_listen"`
-	Enabled     bool   `json:"enabled"`
-	Status      string `json:"status"`
-	LastSeen    int64  `json:"last_seen"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	HostV6 string `json:"host_v6"`
+	// EgressIPStrategy is the IPv4/IPv6 preference of this machine's direct
+	// outbound (empty = unset / current happy-eyeballs; prefer_ipv4,
+	// prefer_ipv6, ipv4_only, ipv6_only). Applied via domain_resolver, never
+	// the deprecated domain_strategy field.
+	EgressIPStrategy string `json:"egress_ip_strategy"`
+	Port             int    `json:"port"`
+	SSHUser          string `json:"ssh_user"`
+	SSHKey           string `json:"ssh_key"`
+	SSHKeyPass       string `json:"ssh_key_pass"`
+	SSHPassword      string `json:"ssh_password"`
+	ConfigPath       string `json:"config_path"`
+	SystemdUnit      string `json:"systemd_unit"`
+	SingBoxBin       string `json:"sing_box_bin"`
+	V2rayListen      string `json:"v2ray_listen"`
+	Enabled          bool   `json:"enabled"`
+	Status           string `json:"status"`
+	LastSeen         int64  `json:"last_seen"`
+	CreatedAt        int64  `json:"created_at"`
+	UpdatedAt        int64  `json:"updated_at"`
 	// Monitor probe fields
 	ProbeEnabled bool   `json:"probe_enabled"`
 	ProbeToken   string `json:"probe_token"`
@@ -91,7 +98,7 @@ type Server struct {
 	SSHKeyPath string `json:"ssh_key_path"`
 }
 
-const serverCols = `id, sort_order, name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, traffic_accounting_mode, provider, location, spec, price, notes, host_key, public_visible, public_show_traffic, public_show_price, use_sudo, sudo_password, ssh_key_path, host_v6`
+const serverCols = `id, sort_order, name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, traffic_accounting_mode, provider, location, spec, price, notes, host_key, public_visible, public_show_traffic, public_show_price, use_sudo, sudo_password, ssh_key_path, host_v6, egress_ip_strategy`
 
 func (s *Store) ListServers() ([]*Server, error) {
 	rows, err := s.db.Query(`SELECT ` + serverCols + ` FROM servers ORDER BY sort_order, id`)
@@ -142,14 +149,17 @@ func (s *Store) CreateServer(sv Server) (int64, error) {
 		sv.Status = "unknown"
 	}
 	applyServerMonitorDefaults(&sv)
+	if err := normalizeServerEgressIPStrategy(&sv); err != nil {
+		return 0, err
+	}
 	// Public display flags are deliberately not listed: their column defaults
 	// (1) apply,
 	// so a newly added machine shows on the status page exactly as every server
 	// did before the flag existed. Hiding one is an explicit act, done through
 	// UpdateServer — and a bool field cannot tell "caller wants it hidden" from
 	// "caller never filled this in", which is the whole reason it isn't here.
-	res, err := s.db.Exec(`INSERT INTO servers (name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, probe_token_hash, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, provider, location, spec, price, notes, use_sudo, sudo_password, ssh_key_path, host_v6, sort_order)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM servers))`,
+	res, err := s.db.Exec(`INSERT INTO servers (name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, probe_token_hash, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, provider, location, spec, price, notes, use_sudo, sudo_password, ssh_key_path, host_v6, egress_ip_strategy, sort_order)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM servers))`,
 		sv.Name, sv.Host, sv.Port, sv.SSHUser, s.encrypt(sv.SSHKey), s.encrypt(sv.SSHKeyPass), s.encrypt(sv.SSHPassword),
 		sv.ConfigPath, sv.SystemdUnit, sv.SingBoxBin, sv.V2rayListen,
 		b2i(sv.Enabled), sv.Status, sv.LastSeen, now, now,
@@ -157,7 +167,7 @@ func (s *Store) CreateServer(sv Server) (int64, error) {
 		b2i(sv.ExpiryNotifyEnabled), sv.ExpiryNotifyDays, sv.ExpiryNotifyMode, sv.ExpiryNotifyCount,
 		sv.TrafficLimitBytes, sv.TrafficResetDay, sv.TrafficResetMinute, sv.TrafficAlertPercent,
 		sv.Provider, sv.Location, sv.Spec, sv.Price, sv.Notes,
-		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6))
+		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), strings.TrimSpace(sv.EgressIPStrategy))
 	if err != nil {
 		return 0, err
 	}
@@ -172,14 +182,17 @@ func (s *Store) UpdateServer(sv Server) error {
 	defer tx.Rollback()
 	now := time.Now().Unix()
 	applyServerMonitorDefaults(&sv)
-	_, err = tx.Exec(`UPDATE servers SET name=?, host=?, port=?, ssh_user=?, ssh_key=?, ssh_key_pass=?, ssh_password=?, config_path=?, systemd_unit=?, sing_box_bin=?, v2ray_listen=?, enabled=?, updated_at=?, probe_enabled=?, probe_token=?, probe_token_hash=?, expiry_date=?, expiry_notify_enabled=?, expiry_notify_days=?, expiry_notify_mode=?, expiry_notify_count=?, traffic_limit_bytes=?, traffic_reset_day=?, traffic_reset_minute=?, traffic_alert_percent=?, traffic_accounting_mode=?, provider=?, location=?, spec=?, price=?, notes=?, public_visible=?, public_show_traffic=?, public_show_price=?, use_sudo=?, sudo_password=?, ssh_key_path=?, host_v6=? WHERE id=?`,
+	if err := normalizeServerEgressIPStrategy(&sv); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE servers SET name=?, host=?, port=?, ssh_user=?, ssh_key=?, ssh_key_pass=?, ssh_password=?, config_path=?, systemd_unit=?, sing_box_bin=?, v2ray_listen=?, enabled=?, updated_at=?, probe_enabled=?, probe_token=?, probe_token_hash=?, expiry_date=?, expiry_notify_enabled=?, expiry_notify_days=?, expiry_notify_mode=?, expiry_notify_count=?, traffic_limit_bytes=?, traffic_reset_day=?, traffic_reset_minute=?, traffic_alert_percent=?, traffic_accounting_mode=?, provider=?, location=?, spec=?, price=?, notes=?, public_visible=?, public_show_traffic=?, public_show_price=?, use_sudo=?, sudo_password=?, ssh_key_path=?, host_v6=?, egress_ip_strategy=? WHERE id=?`,
 		sv.Name, sv.Host, sv.Port, sv.SSHUser, s.encrypt(sv.SSHKey), s.encrypt(sv.SSHKeyPass), s.encrypt(sv.SSHPassword),
 		sv.ConfigPath, sv.SystemdUnit, sv.SingBoxBin, sv.V2rayListen,
 		b2i(sv.Enabled), now, b2i(sv.ProbeEnabled), s.encrypt(sv.ProbeToken), hashProbeToken(sv.ProbeToken), sv.ExpiryDate,
 		b2i(sv.ExpiryNotifyEnabled), sv.ExpiryNotifyDays, sv.ExpiryNotifyMode, sv.ExpiryNotifyCount,
 		sv.TrafficLimitBytes, sv.TrafficResetDay, sv.TrafficResetMinute, sv.TrafficAlertPercent, sv.TrafficAccountingMode,
 		sv.Provider, sv.Location, sv.Spec, sv.Price, sv.Notes, b2i(sv.PublicVisible), b2i(sv.PublicShowTraffic), b2i(sv.PublicShowPrice),
-		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), sv.ID)
+		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), strings.TrimSpace(sv.EgressIPStrategy), sv.ID)
 	if err != nil {
 		return err
 	}
@@ -323,7 +336,7 @@ func scanServer(sc scanner) (*Server, error) {
 		&probeEnabled, &sv.ProbeToken, &sv.ExpiryDate, &expiryNotifyEnabled, &sv.ExpiryNotifyDays, &sv.ExpiryNotifyMode, &sv.ExpiryNotifyCount,
 		&sv.TrafficLimitBytes, &sv.TrafficResetDay, &sv.TrafficResetMinute, &sv.TrafficAlertPercent, &sv.TrafficAccountingMode,
 		&sv.Provider, &sv.Location, &sv.Spec, &sv.Price, &sv.Notes, &sv.HostKey,
-		&publicVisible, &publicShowTraffic, &publicShowPrice, &useSudo, &sv.SudoPassword, &sv.SSHKeyPath, &sv.HostV6)
+		&publicVisible, &publicShowTraffic, &publicShowPrice, &useSudo, &sv.SudoPassword, &sv.SSHKeyPath, &sv.HostV6, &sv.EgressIPStrategy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -368,4 +381,13 @@ func (s *Store) decryptServer(sv *Server) {
 	// SSHKeyPath is deliberately NOT encrypted: it is a file name, not a secret,
 	// and encrypting it only means you cannot see which key a row points at when
 	// you are trying to work out why that row will not connect.
+}
+
+func normalizeServerEgressIPStrategy(sv *Server) error {
+	s, ok := singbox.NormalizeEgressIPStrategy(sv.EgressIPStrategy)
+	if !ok {
+		return fmt.Errorf("无效的出站 IPv4/IPv6 偏好")
+	}
+	sv.EgressIPStrategy = s
+	return nil
 }
