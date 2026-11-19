@@ -93,8 +93,9 @@ func TestServerEgressIPStrategyRoundTripAndRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestBuildSingboxConfigForServerAppliesEgressIPStrategy(t *testing.T) {
+func TestBuildSingboxConfigForServerFollowsSourceFamilyOnlyWithHostV6(t *testing.T) {
 	st := newRefundStore(t)
+	// A leftover manual preference on a server without host_v6 must be ignored.
 	sid, err := st.CreateServer(Server{Name: "s1", Host: "203.0.113.11", Port: 22, Enabled: true, EgressIPStrategy: "prefer_ipv4"})
 	if err != nil {
 		t.Fatal(err)
@@ -107,42 +108,51 @@ func TestBuildSingboxConfigForServerAppliesEgressIPStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	var direct map[string]interface{}
-	for _, it := range cfg["outbounds"].([]interface{}) {
-		m := it.(map[string]interface{})
-		if m["type"] == "direct" && m["tag"] == "direct" {
-			direct = m
-			break
-		}
-	}
-	if direct == nil {
-		t.Fatal("direct outbound missing")
-	}
-	res, _ := direct["domain_resolver"].(map[string]interface{})
-	if res["strategy"] != "prefer_ipv4" || res["server"] != "local" {
-		t.Fatalf("domain_resolver: %v", res)
-	}
-	if _, ok := direct["domain_strategy"]; ok || strings.Contains(string(raw), `"domain_strategy"`) {
-		t.Fatalf("legacy domain_strategy present: %s", raw)
+	if strings.Contains(string(raw), `"direct-v4pref"`) || strings.Contains(string(raw), `"domain_resolver"`) {
+		t.Fatalf("no host_v6 must keep default config, got: %s", raw)
 	}
 
-	// Changing nothing on a default server must keep current config shape.
-	sid2, err := st.CreateServer(Server{Name: "s2", Host: "203.0.113.12", Port: 22, Enabled: true})
+	sid2, err := st.CreateServer(Server{Name: "s2", Host: "203.0.113.12", HostV6: "2001:db8::1", Port: 22, Enabled: true, EgressIPStrategy: "ipv6_only"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SaveSbInbound(&SbInbound{ServerID: sid2, Type: "mixed", Tag: "mix2", Listen: "127.0.0.1", ListenPort: 17891, Options: "{}", Enabled: true}); err != nil {
+	if _, err := st.SaveSbInbound(&SbInbound{ServerID: sid2, Type: "mixed", Tag: "mix2", Listen: "::", ListenPort: 17891, Options: "{}", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	raw2, err := st.BuildSingboxConfigForServer(sid2, singbox.DefaultBaseConfig, "127.0.0.1:18080", map[string][]singbox.User{"mix2": {{Name: "tester", Password: "testpass"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw2), `"domain_resolver"`) {
-		t.Fatalf("empty strategy must not set domain_resolver: %s", raw2)
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(raw2, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	byTag := map[string]map[string]interface{}{}
+	for _, it := range cfg["outbounds"].([]interface{}) {
+		m := it.(map[string]interface{})
+		tag, _ := m["tag"].(string)
+		byTag[tag] = m
+	}
+	if _, ok := byTag["direct"]["domain_resolver"]; ok {
+		t.Fatalf("original direct must stay unstrategied: %v", byTag["direct"])
+	}
+	v4, ok := byTag["direct-v4pref"]
+	if !ok {
+		t.Fatal("direct-v4pref missing")
+	}
+	res, _ := v4["domain_resolver"].(map[string]interface{})
+	if res["strategy"] != "prefer_ipv4" || res["server"] != "local" {
+		t.Fatalf("v4pref resolver: %v — leftover ipv6_only must not be applied", res)
+	}
+	v6 := byTag["direct-v6pref"]
+	if v6 == nil {
+		t.Fatal("direct-v6pref missing")
+	}
+	res6, _ := v6["domain_resolver"].(map[string]interface{})
+	if res6["strategy"] != "prefer_ipv6" {
+		t.Fatalf("v6pref resolver: %v", res6)
+	}
+	if _, ok := v4["domain_strategy"]; ok || strings.Contains(string(raw2), `"domain_strategy"`) {
+		t.Fatalf("legacy domain_strategy present: %s", raw2)
 	}
 }

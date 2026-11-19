@@ -182,11 +182,13 @@ type Options struct {
 	// BlockPrivate rejects user traffic destined for non-public addresses.
 	// See injectPrivateBlock for why this is not merely hardening.
 	BlockPrivate bool
-	// EgressIPStrategy is a sing-box ≥1.12 domain_resolver.strategy applied
-	// only to type=direct outbounds (prefer_ipv4 / prefer_ipv6 / ipv4_only /
-	// ipv6_only). Empty keeps current happy-eyeballs behaviour and writes
-	// nothing. Never set the pre-1.12 domain_strategy field.
-	EgressIPStrategy string
+	// FollowSourceFamilyEgress, when the server has an IPv6 subscription
+	// address (host_v6), steers locally-direct egress by the address family
+	// the client used to connect: IPv4 (and 4-in-6 mapped) sources go to a
+	// prefer_ipv4 direct outbound, other sources to prefer_ipv6. Relay and
+	// third-party egress steering is left untouched and must stay ahead of
+	// these rules. Off keeps pre-#110 default happy-eyeballs behaviour.
+	FollowSourceFamilyEgress bool
 }
 
 // GenerateConfigWithOptions is the full assembly entry point.
@@ -255,11 +257,14 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 	cfg["inbounds"] = ibList
 	sort.Strings(names)
 
+	// Scopes are computed once so the private-block resolve and the
+	// source-family egress rules name the same direct-exit inbounds.
+	directTags, excludeAuth := directResolveScopes(emittedTags, relays)
+
 	// Must run before the relay rules are appended so the reject sits ahead of
 	// every steering rule, including a relay's.
 	if opt.BlockPrivate {
-		direct, exclude := directResolveScopes(emittedTags, relays)
-		injectPrivateBlock(cfg, direct, exclude)
+		injectPrivateBlock(cfg, directTags, excludeAuth, opt.FollowSourceFamilyEgress)
 	}
 
 	// Relay wiring: append each landing outbound and a route rule steering the
@@ -326,7 +331,9 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 	}
 
 	stripLegacyDomainStrategy(cfg)
-	applyDirectOutboundIPStrategy(cfg, opt.EgressIPStrategy)
+	if opt.FollowSourceFamilyEgress {
+		applySourceFamilyEgress(cfg, directTags, excludeAuth)
+	}
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
@@ -487,7 +494,7 @@ func directResolveScopes(emittedTags []string, relays []Relay) ([]string, map[st
 //
 // Rules are prepended because route rules are first-match: behind any existing
 // steering rule they would never be consulted.
-func injectPrivateBlock(cfg map[string]interface{}, directTags []string, excludeAuth map[string][]string) {
+func injectPrivateBlock(cfg map[string]interface{}, directTags []string, excludeAuth map[string][]string, followSourceFamily bool) {
 	route, _ := cfg["route"].(map[string]interface{})
 	if route == nil {
 		route = map[string]interface{}{}
@@ -514,22 +521,26 @@ func injectPrivateBlock(cfg map[string]interface{}, directTags []string, exclude
 			route["default_domain_resolver"] = resolver
 		}
 		head = []interface{}{}
-		if len(directTags) > 0 {
-			head = append(head, map[string]interface{}{"inbound": directTags, "action": "resolve"})
-		}
-		var tags []string
-		for tag := range excludeAuth {
-			tags = append(tags, tag)
-		}
-		sort.Strings(tags)
-		for _, tag := range tags {
-			head = append(head, map[string]interface{}{
-				"type": "logical", "mode": "and", "action": "resolve",
-				"rules": []interface{}{
-					map[string]interface{}{"inbound": []string{tag}},
-					map[string]interface{}{"auth_user": excludeAuth[tag], "invert": true},
-				},
-			})
+		if followSourceFamily {
+			head = append(head, sourceFamilyResolveRules(directTags, excludeAuth)...)
+		} else {
+			if len(directTags) > 0 {
+				head = append(head, map[string]interface{}{"inbound": directTags, "action": "resolve"})
+			}
+			var tags []string
+			for tag := range excludeAuth {
+				tags = append(tags, tag)
+			}
+			sort.Strings(tags)
+			for _, tag := range tags {
+				head = append(head, map[string]interface{}{
+					"type": "logical", "mode": "and", "action": "resolve",
+					"rules": []interface{}{
+						map[string]interface{}{"inbound": []string{tag}},
+						map[string]interface{}{"auth_user": excludeAuth[tag], "invert": true},
+					},
+				})
+			}
 		}
 		head = append(head, privateBlockRule())
 	}
@@ -618,33 +629,188 @@ func NormalizeEgressIPStrategy(s string) (string, bool) {
 	return "", false
 }
 
-// applyDirectOutboundIPStrategy sets domain_resolver.strategy on every
-// type=direct outbound. Other outbound types are left alone. Empty strategy
-// is a no-op so upgrades change nothing. The DNS server tag is taken from
-// route.default_domain_resolver when present, otherwise dnsResolverTag, else
-// "local". The deprecated domain_strategy field is never written.
-func applyDirectOutboundIPStrategy(cfg map[string]interface{}, strategy string) {
-	strategy, ok := NormalizeEgressIPStrategy(strategy)
-	if !ok || strategy == "" {
-		return
+// Source-family egress uses two dedicated direct outbounds so the original
+// "direct" tag (route.final, custom rules, leftover stored preference) stays
+// unstrategied. IPv4-mapped IPv6 sources (::ffff:x.x.x.x) must be listed
+// explicitly: sing-box 1.14 source_ip_cidr does not unmap 4-in-6 addresses,
+// which is how Hysteria2/TUIC clients appear when the inbound listens on ::.
+const (
+	directIPv4PrefTag = "direct-v4pref"
+	directIPv6PrefTag = "direct-v6pref"
+)
+
+var sourceIPv4CIDRs = []string{"0.0.0.0/0", "::ffff:0:0/96"}
+
+// applySourceFamilyEgress appends prefer_ipv4 / prefer_ipv6 direct outbounds
+// and routes locally-direct traffic by the client's source address family.
+// Relay and third-party egress steering must already be in route.rules so
+// those connections are not stolen. The existing "direct" outbound and any
+// non-direct outbound are left alone. Stored servers.egress_ip_strategy is
+// ignored: this is the only path that writes domain_resolver.strategy.
+func applySourceFamilyEgress(cfg map[string]interface{}, directTags []string, excludeAuth map[string][]string) {
+	addSourceFamilyDirectOutbounds(cfg)
+	route, _ := cfg["route"].(map[string]interface{})
+	if route == nil {
+		route = map[string]interface{}{}
+		cfg["route"] = route
 	}
+	rules, _ := route["rules"].([]interface{})
+	if !hasSourceFamilyResolve(rules) {
+		if resolver := dnsResolverTag(cfg); resolver != "" && (len(directTags) > 0 || len(excludeAuth) > 0) {
+			if _, set := route["default_domain_resolver"]; !set {
+				route["default_domain_resolver"] = resolver
+			}
+			rules = append(sourceFamilyResolveRules(directTags, excludeAuth), rules...)
+		}
+	}
+	rules = append(rules, sourceFamilyRouteRules(directTags, excludeAuth)...)
+	route["rules"] = rules
+}
+
+func addSourceFamilyDirectOutbounds(cfg map[string]interface{}) {
 	server := egressResolverServer(cfg)
 	list, _ := cfg["outbounds"].([]interface{})
+	have := map[string]bool{}
 	for _, it := range list {
 		m, ok := it.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		typ, _ := m["type"].(string)
-		if typ != "direct" {
-			continue
-		}
-		delete(m, "domain_strategy")
-		m["domain_resolver"] = map[string]interface{}{
-			"server":   server,
-			"strategy": strategy,
+		if tag, _ := m["tag"].(string); tag != "" {
+			have[tag] = true
 		}
 	}
+	for _, item := range []struct{ tag, strategy string }{
+		{directIPv4PrefTag, "prefer_ipv4"},
+		{directIPv6PrefTag, "prefer_ipv6"},
+	} {
+		if have[item.tag] {
+			continue
+		}
+		list = append(list, map[string]interface{}{
+			"type": "direct",
+			"tag":  item.tag,
+			"domain_resolver": map[string]interface{}{
+				"server":   server,
+				"strategy": item.strategy,
+			},
+		})
+	}
+	cfg["outbounds"] = list
+}
+
+func hasSourceFamilyResolve(rules []interface{}) bool {
+	for _, it := range rules {
+		m, ok := it.(map[string]interface{})
+		if !ok || m["action"] != "resolve" {
+			continue
+		}
+		if m["strategy"] == "prefer_ipv4" || m["strategy"] == "prefer_ipv6" {
+			return true
+		}
+	}
+	return false
+}
+
+// sourceFamilyResolveRules splits the private-block resolve so IPv4 (and
+// 4-in-6) sources use prefer_ipv4 and other sources use prefer_ipv6.
+// resolve is a non-final action, so the IPv6 rule must not also match IPv4
+// sources or it would overwrite the first lookup.
+func sourceFamilyResolveRules(directTags []string, excludeAuth map[string][]string) []interface{} {
+	var rules []interface{}
+	if len(directTags) > 0 {
+		rules = append(rules,
+			map[string]interface{}{
+				"inbound":        directTags,
+				"source_ip_cidr": sourceIPv4CIDRs,
+				"action":         "resolve",
+				"strategy":       "prefer_ipv4",
+			},
+			map[string]interface{}{
+				"type": "logical", "mode": "and",
+				"action": "resolve", "strategy": "prefer_ipv6",
+				"rules": []interface{}{
+					map[string]interface{}{"inbound": directTags},
+					map[string]interface{}{"source_ip_cidr": sourceIPv4CIDRs, "invert": true},
+				},
+			},
+		)
+	}
+	var tags []string
+	for tag := range excludeAuth {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	for _, tag := range tags {
+		users := excludeAuth[tag]
+		rules = append(rules,
+			map[string]interface{}{
+				"type": "logical", "mode": "and",
+				"action": "resolve", "strategy": "prefer_ipv4",
+				"rules": []interface{}{
+					map[string]interface{}{"inbound": []string{tag}},
+					map[string]interface{}{"auth_user": users, "invert": true},
+					map[string]interface{}{"source_ip_cidr": sourceIPv4CIDRs},
+				},
+			},
+			map[string]interface{}{
+				"type": "logical", "mode": "and",
+				"action": "resolve", "strategy": "prefer_ipv6",
+				"rules": []interface{}{
+					map[string]interface{}{"inbound": []string{tag}},
+					map[string]interface{}{"auth_user": users, "invert": true},
+					map[string]interface{}{"source_ip_cidr": sourceIPv4CIDRs, "invert": true},
+				},
+			},
+		)
+	}
+	return rules
+}
+
+// sourceFamilyRouteRules send remaining locally-direct traffic (after relay
+// and third-party egress steering) to the matching prefer outbound. They are
+// scoped to direct-exit inbounds so a fully-relayed inbound is not stolen.
+func sourceFamilyRouteRules(directTags []string, excludeAuth map[string][]string) []interface{} {
+	var rules []interface{}
+	if len(directTags) > 0 {
+		rules = append(rules,
+			map[string]interface{}{
+				"inbound":        directTags,
+				"source_ip_cidr": sourceIPv4CIDRs,
+				"outbound":       directIPv4PrefTag,
+			},
+			map[string]interface{}{
+				"inbound":  directTags,
+				"outbound": directIPv6PrefTag,
+			},
+		)
+	}
+	var tags []string
+	for tag := range excludeAuth {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	for _, tag := range tags {
+		users := excludeAuth[tag]
+		rules = append(rules,
+			map[string]interface{}{
+				"type": "logical", "mode": "and", "outbound": directIPv4PrefTag,
+				"rules": []interface{}{
+					map[string]interface{}{"inbound": []string{tag}},
+					map[string]interface{}{"auth_user": users, "invert": true},
+					map[string]interface{}{"source_ip_cidr": sourceIPv4CIDRs},
+				},
+			},
+			map[string]interface{}{
+				"type": "logical", "mode": "and", "outbound": directIPv6PrefTag,
+				"rules": []interface{}{
+					map[string]interface{}{"inbound": []string{tag}},
+					map[string]interface{}{"auth_user": users, "invert": true},
+				},
+			},
+		)
+	}
+	return rules
 }
 
 func egressResolverServer(cfg map[string]interface{}) string {
