@@ -187,7 +187,7 @@ func validateRelayTransportCapabilitiesWith(db txLike, now int64) error {
 			if id == LocalNodeID {
 				name = LocalNodeName
 			}
-			return fmt.Errorf("逐用户机器观测无法启用：%s 的 WebSocket/HTTPUpgrade 缓冲修复能力未确认；请先安装并运行轻舟修复内核 %s（含 with_v2ray_api），再重新检测。旧 Vision 专用修复、官方版本、未知/过期或检测失败的结果不能启用此 P1 路径", name, sbver.TransportReadBufferFixVersion)
+			return fmt.Errorf("逐用户机器观测无法启用：%s 的 WebSocket/HTTPUpgrade 缓冲修复能力未确认；请先安装并运行轻舟修复内核 %s（含 with_v2ray_api），再重新检测。旧 Vision 专用修复、官方版本、未知/过期或检测失败的结果不能启用此 P1 路径", name, sbver.CurrentReleaseVersion)
 		}
 	}
 	return validateRelayTrojanCapabilitiesWith(db, now)

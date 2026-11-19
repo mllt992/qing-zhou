@@ -60,16 +60,16 @@ bash -n install.sh
 
 真实内核必须带`with_v2ray_api`。当前CI和Release共用`scripts/build-singbox.sh`，不再把旧v0.2.86发布中的普通1.14.2夹具作为Vision修复候选。固定来源为：
 
-- sing-box tag：`v1.14.2`
-- sing-box commit：`af6e64c3b69e6132ebaee0e1a3d24e93903f6709`
-- 官方sing-vmess commit：`9b95ab8c9478f8e8ebe5758d325ec8cda8197c5c`
-- sing-vmess伪版本：`v0.2.9-0.20260929152519-9b95ab8c9478`
-- 模块checksum：`h1:q2eQn4nq8oWGxRm9zXesXSlPr9GEgPrOGzf4iPtzG9A=`
+- sing-box tag：`v1.14.4`
+- sing-box commit：`c005f35300ce76427dc285481ec5695f5b179cd2`
+- 官方sing-vmess commit：`a0c58542bd9d99b00ea0c3cfacce6f03cf8a4017`（已由官方 1.14.4 的 go.mod 引入，构建不再改写 require）
+- sing-vmess伪版本：`v0.2.9-0.20261019223527-a0c58542bd9d`
+- 模块checksum：`h1:K93710Sq6/TFl3GVs+NclQ3I+KPXFLluSsUFC0Sm0N8=`
 - go.mod checksum：`h1:P11scgTxMxVVQ8dlM27yNm3Cro40mD0+gHbnqrNGDuY=`
-- 完整核心版本：`1.14.2+qz-vmess.9b95ab8c9478`
+- 完整核心版本：`1.14.4+qz-trojan.b85be9da`
 - 固定Go工具链：`go1.25.14`
 
-此来源组合不是新发布的上游稳定tag。构建脚本只修改基础go.mod中sing-vmess的require版本，以readonly方式构建并核对build info，避免无关依赖升级。普通版本排序忽略后缀，不可用“1.14.2或更新”推断Vision修复能力；当前能力标记必须精确匹配，且由实际运行的相关节点核心探测确认。
+官方 v1.14.4 已包含 Vision 与 transport 修复；轻舟只再打 Trojan 维护补丁。构建以 readonly 方式核对 go.mod 中的 sing-vmess 版本与 checksum，避免无关依赖升级。普通版本排序忽略后缀，不可用“1.14.4或更新”推断已审定能力；当前与历史审定标记必须精确匹配，且由实际运行的相关节点核心探测确认。
 
 在隔离Linux amd64环境构建并记录来源：
 

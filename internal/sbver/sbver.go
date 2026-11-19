@@ -21,31 +21,42 @@ import (
 // to it, because an invalid config is never swapped in.
 const MinSupported = "1.12.0"
 
-// VisionFramingFixVersion is the reviewed build with sing-vmess commit
-// 9b95ab8c9478. Stock 1.14.2 still embeds the affected dependency. Version
-// ordering cannot establish this capability, including for future releases.
+// Historical 1.14.2 reviewed markers remain valid so already-installed nodes
+// keep their capabilities until they are upgraded. Version ordering still
+// cannot establish a capability: a higher official semver is not enough.
 const VisionFramingFixVersion = "1.14.2+qz-vmess.9b95ab8c9478"
-
-// TransportReadBufferFixVersion additionally contains the reviewed upstream
-// transport buffering fix 07512b10. Older Vision-only builds do not prove it.
 const TransportReadBufferFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10"
 
-// TrojanHandshakeFixVersion is the current release core. It additionally
-// carries the qing-zhou Trojan handshake maintenance patch (issue #87, patch
-// sha256 b85be9da…; not an upstream fix). Vision-only and transport-only markers
-// do not prove it, and neither does any higher or suffixed version.
-const TrojanHandshakeFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da"
+// LegacyTrojanHandshakeFixVersion is the 1.14.2 release core that first
+// carried the qing-zhou Trojan handshake maintenance patch (#87).
+const LegacyTrojanHandshakeFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da"
+
+// CurrentReleaseVersion / TrojanHandshakeFixVersion is the current release
+// core: official sing-box 1.14.4 (which already includes the Vision and
+// WS/HTTPUpgrade fixes) plus the same Trojan maintenance patch.
+const CurrentReleaseVersion = "1.14.4+qz-trojan.b85be9da"
+const TrojanHandshakeFixVersion = CurrentReleaseVersion
 
 func HasVisionFramingFix(version string) bool {
-	return version == VisionFramingFixVersion || version == TransportReadBufferFixVersion || version == TrojanHandshakeFixVersion
+	switch version {
+	case VisionFramingFixVersion, TransportReadBufferFixVersion, LegacyTrojanHandshakeFixVersion, CurrentReleaseVersion:
+		return true
+	default:
+		return false
+	}
 }
 
 func HasTransportReadBufferFix(version string) bool {
-	return version == TransportReadBufferFixVersion || version == TrojanHandshakeFixVersion
+	switch version {
+	case TransportReadBufferFixVersion, LegacyTrojanHandshakeFixVersion, CurrentReleaseVersion:
+		return true
+	default:
+		return false
+	}
 }
 
 func HasTrojanHandshakeFix(version string) bool {
-	return version == TrojanHandshakeFixVersion
+	return version == LegacyTrojanHandshakeFixVersion || version == CurrentReleaseVersion
 }
 
 // Info is what the panel knows about one node's sing-box.
