@@ -19,6 +19,10 @@ func TestTransportReadBufferFixRequiresExactReviewedBuild(t *testing.T) {
 	if !old.HasVisionFramingFix || old.HasTransportReadBufferFix {
 		t.Fatal("Vision-only build was weakened or promoted")
 	}
+	current := Parse("sing-box version " + CurrentReleaseVersion + "\nTags: with_v2ray_api")
+	if current.Version != CurrentReleaseVersion || !current.HasTransportReadBufferFix || !current.HasVisionFramingFix || !current.HasTrojanHandshakeFix {
+		t.Fatalf("current 1.14.4 core must prove Vision, transport and Trojan fixes: %+v", current)
+	}
 	if Compare(TransportReadBufferFixVersion, "1.14.2") != 0 {
 		t.Fatal("capability changed minimum-version ordering")
 	}

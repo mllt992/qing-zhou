@@ -2,18 +2,19 @@
 
 ## 性质与来源
 
-**这是轻舟项目维护补丁，不是上游官方修复。** 截至编写时，上游 sing-box `testing`/`main` 的 `transport/trojan/service.go` 仍是单次 `conn.Read(key[:])`，没有可回补的官方提交。
+**这是轻舟项目维护补丁，不是上游官方修复。** 截至 v1.14.4 与 1.15.0-alpha.13，上游 sing-box 的 `transport/trojan/service.go` 仍是单次 `conn.Read(key[:])`，文件 hash 与 v1.14.2 相同，没有可回补的官方提交。
 
-- 基线：官方 sing-box v1.14.2（`af6e64c3b69e6132ebaee0e1a3d24e93903f6709`），保留官方 sing-vmess `9b95ab8c9478` Vision 修复和已审的 07512b10 WS/HTTPUpgrade 三文件回补（见 [CORE_TRANSPORT_BUFFER_FIX.md](CORE_TRANSPORT_BUFFER_FIX.md)）。不升级 sing-box、alpha 或其他依赖。
-- 补丁：`scripts/trojan-handshake/qz-trojan-handshake.patch`，只改 `transport/trojan/service.go`，与 transport 回补文件不重叠，在其后应用。
+- 当前基线：官方 sing-box v1.14.4（`c005f35300ce76427dc285481ec5695f5b179cd2`）。Vision 与 WS/HTTPUpgrade 修复已在上游，构建不再回补 transport 三文件，只在干净官方树上应用本补丁（见 [CORE_TRANSPORT_BUFFER_FIX.md](CORE_TRANSPORT_BUFFER_FIX.md)）。不切换 1.15 alpha。
+- 补丁：`scripts/trojan-handshake/qz-trojan-handshake.patch`，只改 `transport/trojan/service.go`。
 - 补丁 SHA-256：`b85be9dae59431e59e431cdff004629ea43c869983f136e6fccf64cec50d48a7`
 - 文件摘要（`scripts/trojan-handshake/manifest.json`）：
   - 应用前 `6ffe5d2408d4b391b2e625de0777debecbd02c1a01c1b079f46c18fcac114edf`
   - 应用后 `8fe277d78faccec858f9460ca24793ca9ee132bdcb43738eb27147095d7d5bb3`
-- 完整构建标记：`1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da`（`scripts/singbox-pins.sh` 的 `CORE_VERSION`）
+- 当前完整构建标记：`1.14.4+qz-trojan.b85be9da`（`scripts/singbox-pins.sh` 的 `CORE_VERSION`）
+- 历史完整标记：`1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da`（已安装节点仍然视为具备本能力）
 - 来源说明：补丁由本仓库针对 #87 编写；manifest 中 `kind=qing-zhou maintenance patch`、`upstream_fix=false`，`apply-trojan-handshake-patch.sh` 会拒绝任何把它标为上游修复的 manifest。
 
-`apply-trojan-handshake-patch.sh` 校验基线 commit、补丁 hash、唯一文件集合及应用前后文件 hash，异常即中止。CI 与 Release 都调用同一个 `build-singbox.sh`，产物 `sing-box-provenance.json` 升到 schema 3，新增 `trojan_handshake_patch`（完整 manifest），并保留基础源码、Vision 模块、transport 补丁、工具链与 amd64/arm64 二进制 hash。
+`apply-trojan-handshake-patch.sh` 校验基线 commit、补丁 hash、唯一文件集合及应用前后文件 hash，异常即中止。CI 与 Release 都调用同一个 `build-singbox.sh`，产物 `sing-box-provenance.json` 为 schema 4：`trojan_handshake_patch` 仍附完整 manifest；`transport_buffer_patch` 记为 `included_in_upstream`。另含基础源码、官方已纳入的 sing-vmess 版本、工具链与 amd64/arm64 二进制 hash。
 
 ## 根因
 
@@ -42,7 +43,7 @@
 `scripts/test-trojan-handshake.sh`（要求 Go 1.25.14；CI 与 Release 现有的 `test-transport-buffer.sh --check-baseline` 步骤末尾会串联执行它，参数相同）：
 
 - `--check-baseline`：只复制仅用公开 API 的 `fragment_test.go.txt` 到**未打补丁**的基线，必须看到 36 个分段/预读负控实际运行并失败（1 字节逐字节、首段 1/10/55 字节、7 字节分片；预读 1/4/11/55 字节；TCP/UDP × fallback 开/关），20 个完整首密钥正对照和 fallback 兼容组必须通过。编译失败、`no tests to run` 不算复现。
-- 打上 transport + Trojan 补丁后，以 `-race`、`with_grpc,with_quic` 运行全部 13 组（默认 20 轮），不允许 skip 或部分通过：
+- 在已含上游 transport 修复的 v1.14.4 树上只打 Trojan 补丁后，以 `-race`、`with_grpc,with_quic` 运行全部 13 组（默认 20 轮），不允许 skip 或部分通过：
   - 分段、预读缓冲、TCP/UDP、fallback 开/关；fallback 对 HTTP、TLS 类、长文本、错误认证、十六进制前缀+EOF 的完整唯一回放
   - EOF、未知命令、截断地址、无进度、预先取消、更早连接期限、更早 ctx 期限、无首包、慢速输入（按字节持续到达仍在预算处结束）、预算内慢速成功
   - 握手预算后正常长连接持续收发，handler 无迟到中断
@@ -53,7 +54,7 @@
 ## 实流与能力门禁
 
 - 实流步骤中每条 Trojan 路径按 `QZ_TROJAN_STRESS_BATCHES`（未设置时沿用 CI/Release 已设的 `QZ_VISION_STRESS_BATCHES=100`）执行：100 批 × 8 个独立并发请求，每批收集并报告全部失败，不重试。原 49 协议 + 3 WS 矩阵、跨协议三跳、逐机器 raw=报表、入口单次扣费、Vision 100 批、8 组 100/1000 用户诊断均不缩减。
-- 新的独立能力 `has_trojan_handshake_fix` 只认精确标记 `…-trojan.b85be9da`。旧 Vision / transport 标记、带后缀版本、更高 semver、伪造的布尔标志都不满足。新标记同时满足 Vision 与 transport 能力。
+- 新的独立能力 `has_trojan_handshake_fix` 只认精确标记：当前 `1.14.4+qz-trojan.b85be9da` 或历史 `1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da`。旧 Vision / transport 标记、带后缀版本、更高官方 semver、伪造的布尔标志都不满足。当前标记同时满足 Vision 与 transport 能力。
 - P1 逐用户机器观测中，凡**终结 Trojan 入站**的机器（任何传输）需要此能力；只运行 Trojan 客户端出站的上游不需要。预检、启用校验、下发前后实际运行核心校验及流量归属就绪（`trojan_core_unverified`）都按此独立判断。
 - `http-tls` 传输在并发压力下有一个既有的 x/net HTTP/2 少计竞态，vless/vmess 同样存在，不属于本补丁。测试只做有界、按日志对证的放宽，见 [TRAFFIC_PROTOCOL_MATRIX.md](TRAFFIC_PROTOCOL_MATRIX.md) 的“已知限制”。
 - 计量默认关闭不变；不轮换原账户凭据；历史未知流量不猜分；不修改生产数据库，不自动部署或重启生产节点。合并不等于发布。

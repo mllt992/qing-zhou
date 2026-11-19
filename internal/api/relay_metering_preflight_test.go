@@ -149,7 +149,7 @@ func TestRelayMeteringPreflightRequiresTransportMarkerBeforeOptIn(t *testing.T) 
 					t.Fatalf("old Vision build passed transport preflight: %+v", node)
 				}
 				reasons := strings.Join(node.Reasons, ";")
-				if !strings.Contains(reasons, "WebSocket/HTTPUpgrade 缓冲修复") || !strings.Contains(reasons, sbver.TransportReadBufferFixVersion) {
+				if !strings.Contains(reasons, "WebSocket/HTTPUpgrade 缓冲修复") || !strings.Contains(reasons, sbver.CurrentReleaseVersion) {
 					t.Fatalf("missing exact required fix: %s", reasons)
 				}
 			}

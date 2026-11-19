@@ -34,6 +34,6 @@
 ## 独立的传输修复能力
 
 - `has_vision_framing_fix` 与 `has_transport_read_buffer_fix` 分别展示检测到的已安装版本标记，不能用其中一个推断另一个
-- 旧 `1.14.2+qz-vmess.9b95ab8c9478` 只证明 Vision 修复；WebSocket/HTTPUpgrade 缓冲修复要求完整版本 `1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`，版本号更大也不自动视为支持
+- 旧 `1.14.2+qz-vmess.9b95ab8c9478` 只证明 Vision 修复；WebSocket/HTTPUpgrade 缓冲修复可由历史标记 `1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`（及旧/当前 Trojan 完整标记）证明。当前发布核心为 `1.14.4+qz-trojan.b85be9da`。官方版本号更大也不自动视为支持
 - 只读预检使用 `PreviewRelayUserCoreRequirements()`，逐机返回 `vision_required` 与 `transport_required`。旧版本、缺统计插件、过期和探测失败分别提示，未能读取拓扑时不猜测要求
 - 版本页与预检都只展示安装检测记录；实际运行内核仍由下发前后独立核验。业务来源收到 `transport_core_unverified` 时明确说明 WebSocket/HTTPUpgrade 运行能力未确认，不误称 Vision 失败或已观测流量丢失

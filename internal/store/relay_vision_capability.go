@@ -192,7 +192,7 @@ func validateRelayVisionCapabilitiesWith(db txLike, now int64) error {
 			if id == LocalNodeID {
 				name = LocalNodeName
 			}
-			return fmt.Errorf("逐用户机器观测无法启用：%s 的 Vision 分片修复能力未确认；请先安装并运行轻舟修复内核 %s（含 with_v2ray_api），再到服务器页重新检测。官方 1.14.2、未知/过期或检测失败的结果不能启用 P1 Vision", name, sbver.VisionFramingFixVersion)
+			return fmt.Errorf("逐用户机器观测无法启用：%s 的 Vision 分片修复能力未确认；请先安装并运行轻舟修复内核 %s（含 with_v2ray_api），再到服务器页重新检测。官方版本、未知/过期或检测失败的结果不能启用 P1 Vision", name, sbver.CurrentReleaseVersion)
 		}
 	}
 	return validateRelayTransportCapabilitiesWith(db, now)
