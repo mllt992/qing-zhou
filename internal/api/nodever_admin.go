@@ -90,6 +90,7 @@ func (a *API) handleAdminNodeVersions(w http.ResponseWriter, r *http.Request) {
 		"vision_fixed_version":    sbver.VisionFramingFixVersion,
 		"transport_fixed_version": sbver.TransportReadBufferFixVersion,
 		"trojan_fixed_version":    sbver.TrojanHandshakeFixVersion,
+		"current_release_version": sbver.CurrentReleaseVersion,
 	})
 }
 

@@ -137,6 +137,10 @@ func TestVisionFramingFixRequiresExactReviewedMarker(t *testing.T) {
 			t.Errorf("fixed marker not preserved: %+v", got)
 		}
 	}
+	current := Parse("sing-box version " + CurrentReleaseVersion + "\nTags: with_v2ray_api")
+	if !current.HasVisionFramingFix || current.Version != CurrentReleaseVersion {
+		t.Fatalf("current release marker must prove Vision framing: %+v", current)
+	}
 	if Compare(VisionFramingFixVersion, "1.14.2") != 0 {
 		t.Fatal("capability marker must not change the general minimum-version comparison")
 	}

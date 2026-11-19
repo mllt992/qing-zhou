@@ -73,7 +73,7 @@ print('Unpatched pinned core: %d fragmented/read-ahead negative controls failed;
 PY
   git checkout --quiet -- . && git clean -fdq
 fi
-bash "$root/apply-transport-buffer-patch.sh" "$PWD"
+# Official 1.14.4 already includes the transport-buffer fix; only the Trojan maintenance patch is applied.
 bash "$root/apply-trojan-handshake-patch.sh" "$PWD"
 cp "$tests/fragment_test.go.txt" transport/trojan/qz_trojan_fragment_test.go
 cp "$tests/handshake_test.go.txt" transport/trojan/qz_trojan_handshake_test.go

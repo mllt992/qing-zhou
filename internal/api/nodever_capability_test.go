@@ -46,6 +46,8 @@ func TestNodeVersionsIncludeSeparatePublishedFixVersions(t *testing.T) {
 		Data struct {
 			Vision    string `json:"vision_fixed_version"`
 			Transport string `json:"transport_fixed_version"`
+			Trojan    string `json:"trojan_fixed_version"`
+			Current   string `json:"current_release_version"`
 		}
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
@@ -53,5 +55,8 @@ func TestNodeVersionsIncludeSeparatePublishedFixVersions(t *testing.T) {
 	}
 	if response.Data.Vision != sbver.VisionFramingFixVersion || response.Data.Transport != sbver.TransportReadBufferFixVersion || response.Data.Vision == response.Data.Transport {
 		t.Fatalf("missing independent fix versions: %+v", response.Data)
+	}
+	if response.Data.Trojan != sbver.TrojanHandshakeFixVersion || response.Data.Current != sbver.CurrentReleaseVersion || response.Data.Current != response.Data.Trojan {
+		t.Fatalf("current release version missing or drifted: %+v", response.Data)
 	}
 }

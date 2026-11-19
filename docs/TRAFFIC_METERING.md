@@ -69,9 +69,7 @@ P1逐用户链路覆盖与P0相同的原生落地协议：VLESS、VMess、Trojan
 
 ## Vision修复内核与启用前检查
 
-P1使用Vision的线路必须另行确认核心修复能力。候选核心仍以sing-box **v1.14.2**、提交`af6e64c3b69e6132ebaee0e1a3d24e93903f6709`为基础，仅固定采用官方sing-vmess提交`9b95ab8c9478f8e8ebe5758d325ec8cda8197c5c`，Go模块伪版本为`v0.2.9-0.20260929152519-9b95ab8c9478`。这是基于官方修复提交的轻舟构建，不是一个新的上游sing-box稳定tag。
-
-该构建的完整版本标记严格为`1.14.2+qz-vmess.9b95ab8c9478`。旧的普通`1.14.2`仍不能视为已修复。通用版本比较会忽略后缀，所以必须单独检查`has_vision_framing_fix`能力；版本看起来相同或更大、磁盘上出现新文件，都不能代替相关节点**实际运行核心**的成功能力探测。
+P1使用Vision的线路必须另行确认核心修复能力。当前候选核心以官方sing-box **v1.14.4**、提交`c005f35300ce76427dc285481ec5695f5b179cd2`为基线；该上游版本已包含官方sing-vmess `a0c58542bd9d`（覆盖此前的 Vision 修复 `9b95ab8c9478`）以及 WS/HTTPUpgrade 缓冲修复。轻舟在此之上只加 Trojan 分段握手维护补丁，完整标记严格为`1.14.4+qz-trojan.b85be9da`。历史审定标记`1.14.2+qz-vmess.9b95ab8c9478`（及更完整的 1.14.2 transport/Trojan 标记）仍然有效。官方裸版本（含 1.14.4）不含`with_v2ray_api`，不能视为已审定。通用版本比较会忽略后缀，所以必须单独检查`has_vision_framing_fix`能力；版本看起来相同或更大、磁盘上出现新文件，都不能代替相关节点**实际运行核心**的成功能力探测。
 
 CI和Release共用`scripts/build-singbox.sh`，校验固定源码提交及模块checksum；发布附带`sing-box-provenance.json`，用于核对源码、模块、架构及对应二进制SHA256。具体构建、协议回归与完整核心测试的区别见[验收说明](TRAFFIC_METERING_VALIDATION.md)。协议级修复验证通过本身不证明候选完整核心的TCP/UDP中转已经通过。
 
@@ -87,7 +85,7 @@ Docker镜像只包含面板及监控probe，不包含sing-box核心；更新Dock
 
 ## WS/HTTPUpgrade缓冲修复核心
 
-逐用户WS/HTTPUpgrade路径另需[固定核心缓冲修复](CORE_TRANSPORT_BUFFER_FIX.md)。新完整标记为`1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`，包含旧Vision修复及官方07512b10选定三文件回补；旧Vision标记不证明transport能力。两类能力分别显示并核对实际运行进程，不能按semver或仅磁盘文件放行。
+逐用户WS/HTTPUpgrade路径另需[固定核心缓冲修复](CORE_TRANSPORT_BUFFER_FIX.md)。当前发布标记`1.14.4+qz-trojan.b85be9da`已包含上游该修复；历史标记`1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`（及旧 1.14.2 Trojan 完整标记）同样证明该能力。仅有旧 Vision 标记、或仅有更高官方 semver，均不能证明 transport 能力。两类能力分别显示并核对实际运行进程，不能按semver或仅磁盘文件放行。
 
 ## 分阶段下发与连接影响
 

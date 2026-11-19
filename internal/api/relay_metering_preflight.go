@@ -156,11 +156,11 @@ func (a *API) relayMeteringPreflightNodes(links, perUser bool) ([]relayMeteringP
 				}
 				if node.VisionRequired && !observation.HasVisionFramingFix {
 					node.RequiresReinstall = true
-					node.Reasons = append(node.Reasons, fmt.Sprintf("该路径需要 Vision 分片修复，请安装 %s 并运行后重新检测", sbver.VisionFramingFixVersion))
+					node.Reasons = append(node.Reasons, fmt.Sprintf("该路径需要 Vision 分片修复，请安装 %s 并运行后重新检测", sbver.CurrentReleaseVersion))
 				}
 				if node.TransportRequired && !observation.HasTransportReadBufferFix {
 					node.RequiresReinstall = true
-					node.Reasons = append(node.Reasons, fmt.Sprintf("该路径需要 WebSocket/HTTPUpgrade 缓冲修复，请安装 %s 并运行后重新检测；旧 Vision 专用修复内核不包含这项修复", sbver.TransportReadBufferFixVersion))
+					node.Reasons = append(node.Reasons, fmt.Sprintf("该路径需要 WebSocket/HTTPUpgrade 缓冲修复，请安装 %s 并运行后重新检测；旧 Vision 专用修复内核不包含这项修复", sbver.CurrentReleaseVersion))
 				}
 				if node.TrojanRequired && !observation.HasTrojanHandshakeFix {
 					node.RequiresReinstall = true

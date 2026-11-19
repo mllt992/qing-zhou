@@ -42,22 +42,24 @@ func TestSingboxInstallerVisionCapabilityUsesExactMarker(t *testing.T) {
 	script := InstallScript()
 	pin := "QZ_SB_VISION_FIXED_VERSION=" + sbver.VisionFramingFixVersion + "\n" +
 		"QZ_SB_TRANSPORT_FIXED_VERSION=" + sbver.TransportReadBufferFixVersion + "\n" +
+		"QZ_SB_LEGACY_TROJAN_FIXED_VERSION=" + sbver.LegacyTrojanHandshakeFixVersion + "\n" +
 		"QZ_SB_TROJAN_FIXED_VERSION=" + sbver.TrojanHandshakeFixVersion + "\n"
 	if !strings.Contains(script, pin) {
 		t.Fatal("installer capability marker must match the parser's reviewed version")
 	}
-	start := strings.Index(script, "report_vision_capability() {")
-	if start < 0 {
+	start := strings.Index(script, "qz_marker_is() {")
+	report := strings.Index(script, "report_vision_capability() {")
+	if start < 0 || report < 0 || report < start {
 		t.Fatal("missing capability reporter")
 	}
-	end := strings.Index(script[start:], "\n}\n")
+	end := strings.Index(script[report:], "\n}\n")
 	if end < 0 {
 		t.Fatal("unterminated capability reporter")
 	}
-	function := script[start : start+end+3]
+	function := script[start : report+end+3]
 	// Execute only the pure reporter with a temporary fake binary. Never run
 	// main, root checks, network downloads, tuning, install or systemd commands.
-	for _, version := range []string{"", "1.14.2", "1.14.3", sbver.VisionFramingFixVersion, sbver.VisionFramingFixVersion + "-extra", sbver.TransportReadBufferFixVersion, sbver.TransportReadBufferFixVersion + "-extra", sbver.TrojanHandshakeFixVersion, sbver.TrojanHandshakeFixVersion + "-extra"} {
+	for _, version := range []string{"", "1.14.2", "1.14.3", "1.14.4", sbver.VisionFramingFixVersion, sbver.VisionFramingFixVersion + "-extra", sbver.TransportReadBufferFixVersion, sbver.TransportReadBufferFixVersion + "-extra", sbver.LegacyTrojanHandshakeFixVersion, sbver.LegacyTrojanHandshakeFixVersion + "-extra", sbver.TrojanHandshakeFixVersion, sbver.TrojanHandshakeFixVersion + "-extra"} {
 		t.Run(version, func(t *testing.T) {
 			bin := filepath.Join(t.TempDir(), "sing-box")
 			if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' 'sing-box version "+version+"' 'Tags: with_v2ray_api'\n"), 0700); err != nil {

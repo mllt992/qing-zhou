@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Build the metering-enabled core from one reviewed upstream source pair plus
-# the frozen transport backport and Trojan maintenance patch.
+# Build the metering-enabled core from one reviewed upstream source plus the
+# Trojan handshake maintenance patch. Official 1.14.4 already includes the
+# previously backported Vision (sing-vmess) and WS/HTTPUpgrade buffer fixes, so
+# those patches are not re-applied.
 # No nodes are contacted. --source-dir reads a local Git repository's pinned
 # commit only; its worktree is never edited and uncommitted changes are ignored.
 set -euo pipefail
@@ -46,31 +48,30 @@ cd "$work/source"
 [[ $(git rev-parse HEAD) == "$SB_COMMIT" ]] || { echo 'Unreviewed sing-box base commit' >&2; exit 1; }
 [[ -z $(git status --porcelain) ]] || { echo 'Base checkout is not clean' >&2; exit 1; }
 cp go.mod "$work/base.go.mod"
-# Avoid `go get`: it can select unrelated dependency upgrades. A readonly build
-# below must accept exactly this one require-line change.
-"$GO" mod edit -require="github.com/sagernet/sing-vmess@$VMESS_VERSION"
-python3 - "$work/base.go.mod" go.mod "$VMESS_VERSION" <<'PY'
+# Official 1.14.4 already requires the reviewed sing-vmess. Do not `go get` or
+# `go mod edit`: either can select unrelated upgrades. A readonly build must
+# accept the unmodified official go.mod.
+python3 - "$work/base.go.mod" "$VMESS_VERSION" <<'MODCHK'
 import pathlib, sys
-before, after = (pathlib.Path(p).read_text() for p in sys.argv[1:3])
-old = 'github.com/sagernet/sing-vmess v0.2.8'
-assert before.count(old) == 1, 'unexpected base sing-vmess requirement'
-assert after == before.replace(old, 'github.com/sagernet/sing-vmess ' + sys.argv[3]), 'unrelated go.mod change'
-PY
+mod = pathlib.Path(sys.argv[1]).read_text()
+want = 'github.com/sagernet/sing-vmess ' + sys.argv[2]
+assert mod.count(want) == 1, 'official base does not already require the reviewed sing-vmess'
+MODCHK
 "$GO" mod download -json "github.com/sagernet/sing-vmess@$VMESS_VERSION" > "$work/vmess.json"
-python3 - "$work/vmess.json" "$VMESS_VERSION" "$VMESS_COMMIT" "$VMESS_SUM" "$VMESS_MOD_SUM" <<'PY'
+python3 - "$work/vmess.json" "$VMESS_VERSION" "$VMESS_COMMIT" "$VMESS_SUM" "$VMESS_MOD_SUM" <<'VMESSCHK'
 import json, sys
 info = json.load(open(sys.argv[1]))
-assert info.get('Path') == 'github.com/sagernet/sing-vmess'
-assert info.get('Version') == sys.argv[2]
-assert info.get('Sum') == sys.argv[4], 'sing-vmess module sum mismatch'
-assert info.get('GoModSum') == sys.argv[5], 'sing-vmess go.mod sum mismatch'
-origin = info.get('Origin')
+assert info.get("Path") == "github.com/sagernet/sing-vmess"
+assert info.get("Version") == sys.argv[2]
+assert info.get("Sum") == sys.argv[4], "sing-vmess module sum mismatch"
+assert info.get("GoModSum") == sys.argv[5], "sing-vmess go.mod sum mismatch"
+origin = info.get("Origin")
 # Older Go proxies can omit Origin; the full module and go.mod hashes remain
 # mandatory. When origin evidence exists, never accept a different commit.
 if origin:
-    assert origin.get('Hash') == sys.argv[3], 'sing-vmess origin commit mismatch'
-PY
-bash "$script_root/apply-transport-buffer-patch.sh" "$PWD"
+    assert origin.get("Hash") == sys.argv[3], "sing-vmess origin commit mismatch"
+VMESSCHK
+# Transport buffer fix shipped in official 1.14.3+; do not re-apply the 1.14.2 backport.
 bash "$script_root/apply-trojan-handshake-patch.sh" "$PWD"
 cp go.mod "$work/expected.go.mod"
 printf 'Verified sing-box %s (%s), sing-vmess %s (%s)\n' "$SB_TAG" "$SB_COMMIT" "$VMESS_VERSION" "$VMESS_SUM"
@@ -100,12 +101,12 @@ PY
   fi
   (cd "$output_dir" && sha256sum "sing-box-linux-$arch")
 done
-python3 - "$output_dir" "$SB_TAG" "$SB_COMMIT" "$VMESS_VERSION" "$VMESS_COMMIT" "$VMESS_SUM" "$VMESS_MOD_SUM" "$CORE_VERSION" "$architectures" "$TAGS" "$work" "$script_root/transport-buffer/manifest.json" "$script_root/trojan-handshake/manifest.json" <<'PY'
+python3 - "$output_dir" "$SB_TAG" "$SB_COMMIT" "$VMESS_VERSION" "$VMESS_COMMIT" "$VMESS_SUM" "$VMESS_MOD_SUM" "$CORE_VERSION" "$architectures" "$TAGS" "$work" "$script_root/trojan-handshake/manifest.json" <<'PROV'
 import hashlib, json, pathlib, sys
 directory = pathlib.Path(sys.argv[1])
 work = pathlib.Path(sys.argv[11])
 data = {
-    'schema_version': 3,
+    'schema_version': 4,
     'sing_box_tag': sys.argv[2],
     'sing_box_commit': sys.argv[3],
     'sing_vmess_version': sys.argv[4],
@@ -113,9 +114,14 @@ data = {
     'sing_vmess_module_sum': sys.argv[6],
     'sing_vmess_go_mod_sum': sys.argv[7],
     'core_version': sys.argv[8],
-    'transport_buffer_patch': json.load(open(sys.argv[12])),
+    'transport_buffer_patch': {
+        'status': 'included_in_upstream',
+        'first_released_in': 'v1.14.3',
+        'upstream_commit': '52f9bad034d291fc16869a396bf812508d50ecd6',
+        'historical_backport_commit': '07512b1093aa38626fca00dbba07bc5d77375861',
+    },
     # Project maintenance patch (qing-zhou #87), not an upstream fix.
-    'trojan_handshake_patch': json.load(open(sys.argv[13])),
+    'trojan_handshake_patch': json.load(open(sys.argv[12])),
     'go_version': 'go1.25.14',
     'build_tags': sys.argv[10].split(','),
     'binaries': [],
@@ -134,4 +140,4 @@ for arch in dict.fromkeys(sys.argv[9].split(',')):
         'version_output': version_path.read_text() if version_path.exists() else None})
 (directory / 'sing-box-provenance.json').write_text(json.dumps(data, indent=2) + '\n')
 print('Wrote sing-box-provenance.json for ' + data['core_version'])
-PY
+PROV

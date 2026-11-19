@@ -143,3 +143,107 @@ func TestDumpGeneratedServerConfig(t *testing.T) {
 	}
 	t.Logf("wrote %s", dst)
 }
+
+// protocolCheckFixtures builds one representative inbound per protocol the
+// panel can emit, plus common transports on vless/trojan. Ports are unique
+// and bound to loopback so `sing-box check` does not need a real NIC.
+func protocolCheckFixtures(t *testing.T) []Inbound {
+	t.Helper()
+	certPEM, keyPEM, err := GenerateSelfSignedCert("check.example.test", 365)
+	if err != nil {
+		t.Fatalf("self-signed cert: %v", err)
+	}
+	tls := map[string]interface{}{
+		"enabled":     true,
+		"server_name": "check.example.test",
+		"certificate": certPEM,
+		"key":         keyPEM,
+	}
+	user := User{Name: "tester", UUID: "11111111-2222-4333-8444-555555555555", Password: "testpass-32bytes-xxxxxxxx"}
+	listen := func(typ, tag string, port int, extra map[string]interface{}) Inbound {
+		base := map[string]interface{}{
+			"type": typ, "tag": tag, "listen": "127.0.0.1", "listen_port": port,
+		}
+		for k, v := range extra {
+			base[k] = v
+		}
+		return Inbound{Type: typ, Users: []User{user}, Base: base}
+	}
+	ssServerKey := DeriveSSKey("ss-server-psk", "2022-blake3-aes-128-gcm")
+	return []Inbound{
+		listen("mixed", "in-mixed", 19001, nil),
+		listen("vless", "in-vless-vision", 19002, map[string]interface{}{"tls": tls, "flow": "vision"}),
+		listen("vless", "in-vless-ws", 19003, map[string]interface{}{
+			"tls":       tls,
+			"transport": map[string]interface{}{"type": "ws", "path": "/ws", "headers": map[string]interface{}{"Host": "check.example.test"}},
+		}),
+		listen("vless", "in-vless-grpc", 19004, map[string]interface{}{
+			"tls":       tls,
+			"transport": map[string]interface{}{"type": "grpc", "service_name": "qz"},
+		}),
+		listen("vless", "in-vless-httpupgrade", 19005, map[string]interface{}{
+			"tls":       tls,
+			"transport": map[string]interface{}{"type": "httpupgrade", "path": "/upg", "host": "check.example.test"},
+		}),
+		listen("vmess", "in-vmess", 19006, map[string]interface{}{"tls": tls}),
+		listen("trojan", "in-trojan", 19007, map[string]interface{}{"tls": tls}),
+		listen("trojan", "in-trojan-ws", 19008, map[string]interface{}{
+			"tls":       tls,
+			"transport": map[string]interface{}{"type": "ws", "path": "/tr", "headers": map[string]interface{}{"Host": "check.example.test"}},
+		}),
+		listen("tuic", "in-tuic", 19009, map[string]interface{}{
+			"tls": tls, "congestion_control": "bbr", "zero_rtt_handshake": false,
+		}),
+		listen("hysteria2", "in-hysteria2", 19010, map[string]interface{}{"tls": tls}),
+		listen("hysteria", "in-hysteria", 19011, map[string]interface{}{
+			"tls": tls, "up_mbps": 100, "down_mbps": 100,
+		}),
+		listen("shadowsocks", "in-ss2022", 19012, map[string]interface{}{
+			"method": "2022-blake3-aes-128-gcm", "password": ssServerKey,
+		}),
+		listen("anytls", "in-anytls", 19013, map[string]interface{}{"tls": tls}),
+	}
+}
+
+func TestGeneratedProtocolConfigsPassSingboxCheck(t *testing.T) {
+	bin := os.Getenv("QZ_SINGBOX_TEST_BIN")
+	if bin == "" {
+		t.Skip("set QZ_SINGBOX_TEST_BIN to a sing-box binary to run this")
+	}
+	ibs := protocolCheckFixtures(t)
+	raw, err := GenerateConfigWithOptions(json.RawMessage(DefaultBaseConfig), ibs,
+		Options{BlockPrivate: true, V2RayListen: "127.0.0.1:18081"})
+	if err != nil {
+		t.Fatalf("generate all protocols: %v", err)
+	}
+	checkWith := func(t *testing.T, name string, cfg []byte) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name+".json")
+		if err := os.WriteFile(path, cfg, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(bin, "check", "-c", path).CombinedOutput()
+		if err != nil {
+			t.Fatalf("sing-box check %s failed:\n%s\nconfig:\n%s", name, out, cfg)
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "deprecated") {
+				t.Logf("%s deprecation: %s", name, strings.TrimSpace(line))
+			}
+		}
+	}
+	checkWith(t, "all-protocols", raw)
+	// Also check each protocol (and transport variant) in isolation so a
+	// failure can be attributed without a combined config.
+	for _, ib := range ibs {
+		ib := ib
+		t.Run(ib.Base["tag"].(string), func(t *testing.T) {
+			one, err := GenerateConfigWithOptions(json.RawMessage(DefaultBaseConfig), []Inbound{ib},
+				Options{BlockPrivate: true, V2RayListen: "127.0.0.1:18081"})
+			if err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			checkWith(t, ib.Base["tag"].(string), one)
+		})
+	}
+}

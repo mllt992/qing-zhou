@@ -16,7 +16,14 @@ func TestTrojanHandshakeCapabilityUsesExactMarker(t *testing.T) {
 	if info.Version != TrojanHandshakeFixVersion || !info.HasTrojanHandshakeFix || !info.HasTransportReadBufferFix || !info.HasVisionFramingFix || !info.HasV2RayAPI {
 		t.Fatalf("current core marker must carry all reviewed fixes: %+v", info)
 	}
-	if Compare(TrojanHandshakeFixVersion, "1.14.2") != 0 {
-		t.Fatal("build marker must not be ordered as a newer upstream release")
+	legacy := Parse("sing-box version " + LegacyTrojanHandshakeFixVersion + "\nTags: with_v2ray_api")
+	if legacy.Version != LegacyTrojanHandshakeFixVersion || !legacy.HasTrojanHandshakeFix || !legacy.HasTransportReadBufferFix || !legacy.HasVisionFramingFix {
+		t.Fatalf("legacy 1.14.2 trojan marker must still prove all reviewed fixes: %+v", legacy)
+	}
+	if Compare(TrojanHandshakeFixVersion, "1.14.4") != 0 {
+		t.Fatal("current build marker must compare as 1.14.4, ignoring the +qz suffix")
+	}
+	if Compare(LegacyTrojanHandshakeFixVersion, "1.14.2") != 0 {
+		t.Fatal("legacy build marker must still compare as 1.14.2")
 	}
 }
