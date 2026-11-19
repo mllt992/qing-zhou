@@ -754,24 +754,27 @@ func (s *Store) BuildSingboxConfigForServer(serverID int64, base, v2rayListen st
 	// API, and so no remote traffic was ever metered. The caller now decides:
 	// it probes each node's build tags (sshctl.SupportsStatsAPI) and passes that
 	// node's own listen address only when the plugin is actually present.
-	strategy := ""
+	follow := false
 	if serverID != 0 {
 		sv, err := s.GetServer(serverID)
 		if err != nil {
 			return nil, err
 		}
-		if sv != nil {
-			strategy = sv.EgressIPStrategy
+		// host_v6 is the only signal that this machine has an IPv6
+		// subscription address. A leftover egress_ip_strategy value from
+		// the removed manual option is ignored.
+		if sv != nil && strings.TrimSpace(sv.HostV6) != "" {
+			follow = true
 		}
 	}
 	if err := s.validateMeteringRoutes(base, v2rayListen, relays); err != nil {
 		return nil, err
 	}
 	return singbox.GenerateConfigWithOptions([]byte(base), ibs, singbox.Options{
-		V2RayListen:      v2rayListen,
-		Relays:           relays,
-		BlockPrivate:     s.blockPrivateEgress(),
-		EgressIPStrategy: strategy,
+		V2RayListen:              v2rayListen,
+		Relays:                   relays,
+		BlockPrivate:             s.blockPrivateEgress(),
+		FollowSourceFamilyEgress: follow,
 	})
 }
 

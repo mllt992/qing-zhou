@@ -30,10 +30,9 @@ type Server struct {
 	// HostV6 是可选的 IPv6 订阅地址（IPv6 字面量或 AAAA 域名）。非空时订阅为该
 	// 服务器的每个入站额外输出一条「原名-v6」节点；SSH 始终走 Host。
 	HostV6 string `json:"host_v6"`
-	// EgressIPStrategy is the IPv4/IPv6 preference of this machine's direct
-	// outbound (empty = unset / current happy-eyeballs; prefer_ipv4,
-	// prefer_ipv6, ipv4_only, ipv6_only). Applied via domain_resolver, never
-	// the deprecated domain_strategy field.
+	// EgressIPStrategy is retained for compatibility (migration 000014) but
+	// is no longer applied when generating sing-box config. Locally-direct
+	// egress on a server with HostV6 follows the client's connect family.
 	EgressIPStrategy string `json:"egress_ip_strategy"`
 	Port             int    `json:"port"`
 	SSHUser          string `json:"ssh_user"`
