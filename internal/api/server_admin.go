@@ -13,6 +13,7 @@ import (
 
 	"qingzhou/internal/sbctl"
 	"qingzhou/internal/sbver"
+	"qingzhou/internal/singbox"
 	"qingzhou/internal/sshctl"
 	"qingzhou/internal/store"
 )
@@ -69,6 +70,12 @@ func (a *API) handleAdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	sv.Name = strings.TrimSpace(sv.Name)
 	sv.Host = strings.TrimSpace(sv.Host)
 	sv.HostV6 = strings.Trim(strings.TrimSpace(sv.HostV6), "[]")
+	strategy, valid := singbox.NormalizeEgressIPStrategy(sv.EgressIPStrategy)
+	if !valid {
+		fail(w, http.StatusBadRequest, "无效的出站 IPv4/IPv6 偏好")
+		return
+	}
+	sv.EgressIPStrategy = strategy
 	if sv.Name == "" || sv.Host == "" {
 		fail(w, http.StatusBadRequest, "名称和主机不能为空")
 		return
@@ -134,6 +141,12 @@ func (a *API) handleAdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	sv.Name = strings.TrimSpace(sv.Name)
 	sv.Host = strings.TrimSpace(sv.Host)
 	sv.HostV6 = strings.Trim(strings.TrimSpace(sv.HostV6), "[]")
+	strategy, valid := singbox.NormalizeEgressIPStrategy(sv.EgressIPStrategy)
+	if !valid {
+		fail(w, http.StatusBadRequest, "无效的出站 IPv4/IPv6 偏好")
+		return
+	}
+	sv.EgressIPStrategy = strategy
 	if sv.Name == "" || sv.Host == "" {
 		fail(w, http.StatusBadRequest, "名称和主机不能为空")
 		return

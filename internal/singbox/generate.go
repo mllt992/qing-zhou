@@ -182,6 +182,11 @@ type Options struct {
 	// BlockPrivate rejects user traffic destined for non-public addresses.
 	// See injectPrivateBlock for why this is not merely hardening.
 	BlockPrivate bool
+	// EgressIPStrategy is a sing-box ≥1.12 domain_resolver.strategy applied
+	// only to type=direct outbounds (prefer_ipv4 / prefer_ipv6 / ipv4_only /
+	// ipv6_only). Empty keeps current happy-eyeballs behaviour and writes
+	// nothing. Never set the pre-1.12 domain_strategy field.
+	EgressIPStrategy string
 }
 
 // GenerateConfigWithOptions is the full assembly entry point.
@@ -321,6 +326,7 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 	}
 
 	stripLegacyDomainStrategy(cfg)
+	applyDirectOutboundIPStrategy(cfg, opt.EgressIPStrategy)
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
@@ -590,6 +596,74 @@ func stripLegacyDomainStrategy(cfg map[string]interface{}) {
 			}
 		}
 	}
+}
+
+// ValidEgressIPStrategies are the sing-box domain_resolver.strategy values the
+// panel will write. The empty string is also valid and means "leave unset".
+var ValidEgressIPStrategies = map[string]bool{
+	"":            true,
+	"prefer_ipv4": true,
+	"prefer_ipv6": true,
+	"ipv4_only":   true,
+	"ipv6_only":   true,
+}
+
+// NormalizeEgressIPStrategy trims a form/API value. ok is false when the
+// value is not one of the allowed strategies (including empty).
+func NormalizeEgressIPStrategy(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if ValidEgressIPStrategies[s] {
+		return s, true
+	}
+	return "", false
+}
+
+// applyDirectOutboundIPStrategy sets domain_resolver.strategy on every
+// type=direct outbound. Other outbound types are left alone. Empty strategy
+// is a no-op so upgrades change nothing. The DNS server tag is taken from
+// route.default_domain_resolver when present, otherwise dnsResolverTag, else
+// "local". The deprecated domain_strategy field is never written.
+func applyDirectOutboundIPStrategy(cfg map[string]interface{}, strategy string) {
+	strategy, ok := NormalizeEgressIPStrategy(strategy)
+	if !ok || strategy == "" {
+		return
+	}
+	server := egressResolverServer(cfg)
+	list, _ := cfg["outbounds"].([]interface{})
+	for _, it := range list {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		typ, _ := m["type"].(string)
+		if typ != "direct" {
+			continue
+		}
+		delete(m, "domain_strategy")
+		m["domain_resolver"] = map[string]interface{}{
+			"server":   server,
+			"strategy": strategy,
+		}
+	}
+}
+
+func egressResolverServer(cfg map[string]interface{}) string {
+	if route, ok := cfg["route"].(map[string]interface{}); ok {
+		switch v := route["default_domain_resolver"].(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return v
+			}
+		case map[string]interface{}:
+			if s, _ := v["server"].(string); strings.TrimSpace(s) != "" {
+				return s
+			}
+		}
+	}
+	if tag := dnsResolverTag(cfg); tag != "" {
+		return tag
+	}
+	return "local"
 }
 
 // Outbound observations are a second view of a link, not extra billable bytes.

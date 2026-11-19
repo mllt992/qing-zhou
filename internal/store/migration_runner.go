@@ -46,6 +46,9 @@ func (s *Store) migrations() []migration {
 			}
 			return execLegacyStatement(tx, `ALTER TABLE nodes ADD COLUMN output_v6 INTEGER NOT NULL DEFAULT 1`)
 		}},
+		{14, "server_egress_ip_strategy", func(tx *sql.Tx) error {
+			return execLegacyStatement(tx, `ALTER TABLE servers ADD COLUMN egress_ip_strategy TEXT NOT NULL DEFAULT ''`)
+		}},
 	}
 }
 
