@@ -687,6 +687,16 @@ func sbApplyTuning(o map[string]any, t tuning, suppressMux bool) {
 	}
 }
 
+// sbUTLSSupported reports whether a sing-box outbound of this protocol can
+// carry tls.utls. QUIC-based protocols cannot.
+func sbUTLSSupported(protocol string) bool {
+	switch protocol {
+	case "tuic", "hysteria", "hysteria2":
+		return false
+	}
+	return true
+}
+
 func sbTLS(p *Proxy, sec string) map[string]any {
 	if sec != "tls" && sec != "reality" {
 		return map[string]any{"enabled": false}
@@ -700,7 +710,12 @@ func sbTLS(p *Proxy, sec string) map[string]any {
 	if alpn := p.tlsParam("alpn"); alpn != "" {
 		tls["alpn"] = strings.Split(alpn, ",")
 	}
-	if fp := p.tlsParam("fp"); fp != "" {
+	// uTLS is a TCP-only ClientHello parrot. QUIC protocols get their TLS from
+	// quic-go, and sing-box refuses the dial with "unsupported usage for uTLS"
+	// when a tuic/hysteria/hysteria2 outbound carries it (#108). The share link
+	// keeps its fp= (Clash/v2ray outputs are unaffected); only this sing-box
+	// rendering drops it for QUIC.
+	if fp := p.tlsParam("fp"); fp != "" && sbUTLSSupported(p.Protocol) {
 		tls["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
 	}
 	if sec == "reality" {
