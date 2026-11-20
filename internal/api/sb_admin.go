@@ -1467,6 +1467,24 @@ func (a *API) handleAdminSbResync(w http.ResponseWriter, r *http.Request) {
 	ok(w, J{"queued": *req.ServerID})
 }
 
+// inboundCredentialStats reports how many login credentials an inbound will
+// emit, and how many distinct panel accounts those credentials belong to.
+// OwnerID is the panel user id set by BuildUsersByTag; credentials missing it
+// are each counted as their own account so the total never drops below the
+// number of unattributed identities.
+func inboundCredentialStats(users []singbox.User) (credentials, accounts int) {
+	seen := make(map[int64]struct{}, len(users))
+	unattributed := 0
+	for _, u := range users {
+		if u.OwnerID > 0 {
+			seen[u.OwnerID] = struct{}{}
+			continue
+		}
+		unattributed++
+	}
+	return len(users), len(seen) + unattributed
+}
+
 // ---- sb_inbounds ----
 
 func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) {
@@ -1475,10 +1493,16 @@ func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) 
 		fail(w, http.StatusInternalServerError, "读取失败")
 		return
 	}
-	// 为每个入站附带当前用户数（按 tag 统计有权限的用户）
+	// Attach per-inbound credential stats. credential_count is the number of
+	// login credentials issued on that inbound (what used to be labeled
+	// "用户 N"). account_count is the number of distinct panel accounts those
+	// credentials belong to. The two diverge on logical-route inbounds, where
+	// one account is issued a derived credential per route. user_count is kept
+	// as an alias of credential_count so older clients keep working.
 	usersByTag, _ := a.st.BuildUsersByTag(time.Now().Unix())
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, n := range list {
+		credentials, accounts := inboundCredentialStats(usersByTag[n.Tag])
 		m := map[string]interface{}{
 			"id":          n.ID,
 			"server_id":   n.ServerID,
@@ -1494,7 +1518,9 @@ func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) 
 			"egress_id":           n.EgressID,
 			"created_at":          n.CreatedAt,
 			"updated_at":          n.UpdatedAt,
-			"user_count":          len(usersByTag[n.Tag]),
+			"credential_count":    credentials,
+			"account_count":       accounts,
+			"user_count":          credentials,
 		}
 		out = append(out, m)
 	}
