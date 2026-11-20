@@ -131,7 +131,12 @@
                   <div class="lc-meta">
                     <span class="kv"><n-tag size="tiny" :bordered="false">{{ (r.type || '').toUpperCase() }}</n-tag></span>
                     <span class="kv">端口 <b>{{ r.listen_port }}</b></span>
-                    <span class="kv">用户 <b>{{ r.user_count ?? 0 }}</b></span>
+                    <n-tooltip placement="top">
+                      <template #trigger>
+                        <span class="kv inbound-cred">账号 <b>{{ r.account_count ?? 0 }}</b> · 凭据 <b>{{ r.credential_count ?? r.user_count ?? 0 }}</b></span>
+                      </template>
+                      账号为该入站下发凭据所属的独立用户数，与「用户管理」口径一致。凭据为实际下发的登录凭据条数；逻辑路由下会随线路数放大，不是用户人数。
+                    </n-tooltip>
                     <span class="kv">TLS <b :title="tlsName(r.tls_id)">{{ tlsName(r.tls_id) }}</b></span>
                     <span v-if="r.egress_id" class="kv">出口 <b :title="egressName(r.egress_id)">{{ egressName(r.egress_id) }}</b></span>
                   </div>
@@ -711,7 +716,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import {
   NTabs, NTabPane, NDrawer, NDrawerContent, NButton, NForm, NFormItem, NInput, NInputNumber, NInputGroup,
   NSelect, NSwitch, NRadioGroup, NRadio, NTag, NSpin, NEmpty, NCode, NCheckbox, NCollapse, NCollapseItem,
-  NAlert, NPopselect, useMessage, useDialog
+  NAlert, NPopselect, NTooltip, useMessage, useDialog
 } from 'naive-ui'
 import { apiList, apiGet, apiGetRaw, apiPost, apiPut, apiDelete } from '@/api'
 import { applyInboundToggle, type BatchToggleFailure } from '@/utils/inboundBatch'
@@ -1974,4 +1979,5 @@ async function load() {
   .machine-extra { gap: 4px; }
 }
 .list-card.is-disabled { opacity: 0.72; }
+.inbound-cred { cursor: help; border-bottom: 1px dotted currentColor; }
 </style>
