@@ -631,7 +631,7 @@
           <n-form-item v-if="ie.type === 'mixed' && !ie.tls_id" label=" ">
             <div style="width:100%;">
               <n-button size="small" :loading="quickCertLoading" @click="quickBindCert">🔒 一键生成自签证书并绑定（→ HTTPS 代理）</n-button>
-              <div class="form-tip">用该服务器地址自动签一张证书并绑定，公网使用更安全。客户端需勾选「跳过证书验证」；要浏览器/系统信任则改用 ACME 证书。</div>
+              <div class="form-tip">按该服务器的地址（IPv4 与 IPv6 订阅地址）自动签一张证书并绑定，公网使用更安全。客户端需勾选「跳过证书验证」或固定证书指纹；要浏览器/系统信任则改用 ACME 证书。</div>
             </div>
           </n-form-item>
           <n-form-item v-if="ie.type === 'mixed' && ie.tls_id" label=" ">
