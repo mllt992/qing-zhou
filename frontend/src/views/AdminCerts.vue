@@ -111,8 +111,9 @@
     <n-modal v-model:show="showPaste" preset="card" title="粘贴已有证书" style="max-width:560px;">
       <n-form label-placement="left" label-width="90">
         <n-form-item label="名称"><n-input v-model:value="paste.name" /></n-form-item>
-        <n-form-item label="域名"><n-input v-model:value="paste.domain" placeholder="留空则自动取证书 CN" /></n-form-item>
+        <n-form-item label="域名"><n-input v-model:value="paste.domain" placeholder="留空则自动取证书覆盖的名称（SAN）" /></n-form-item>
         <n-form-item label="证书 PEM"><n-input v-model:value="paste.certificate" type="textarea" :rows="4" placeholder="-----BEGIN CERTIFICATE-----（含完整链 fullchain）" /></n-form-item>
+        <n-alert type="info" :show-icon="false" style="margin-bottom:8px;font-size:12px;">证书必须包含 SAN（subjectAltName）且覆盖所填域名；只有 CN 的旧式证书会被现代客户端拒绝，导入时会直接报错。</n-alert>
         <n-form-item label="私钥 PEM"><n-input v-model:value="paste.key" type="textarea" :rows="4" placeholder="-----BEGIN PRIVATE KEY-----" /></n-form-item>
       </n-form>
       <template #footer>
@@ -161,7 +162,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { NCard, NButton, NTag, NSpin, NEmpty, NModal, NForm, NFormItem, NInput, NInputNumber, NSelect, NSwitch, NSpace, useMessage, useDialog } from 'naive-ui'
+import { NCard, NButton, NTag, NSpin, NEmpty, NModal, NForm, NFormItem, NInput, NInputNumber, NSelect, NSwitch, NSpace, NAlert, useMessage, useDialog } from 'naive-ui'
 import { apiList, apiGet, apiPost, apiPut, apiDelete } from '@/api'
 import { fmtDateTime } from '@/utils/format'
 import { copyText } from '@/utils/clipboard'

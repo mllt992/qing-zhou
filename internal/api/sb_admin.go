@@ -735,9 +735,14 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusBadRequest, "引用的证书不存在")
 			return
 		}
+		// SNI must match the cert: keep the admin's name when the certificate
+		// covers it (e.g. a concrete host under a wildcard), else the cert's
+		// domain wins (#119). Same rule the config builder applies.
 		sni := req.ServerName
-		if cert.Domain != "" {
-			sni = cert.Domain // SNI must match the cert; the cert's domain wins
+		if cert.Domain != "" && !cert.DecryptFailed {
+			sni = singbox.EffectiveServerName(req.ServerName, cert.Domain, cert.CertPEM)
+		} else if cert.Domain != "" {
+			sni = cert.Domain
 		}
 		server := map[string]interface{}{"enabled": true, "server_name": sni}
 		if len(req.ALPN) > 0 {
@@ -776,6 +781,14 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// On edit, keep existing cert/key when the form leaves them blank.
+	storedCert := ""
+	if id != 0 {
+		if cur, _ := a.st.GetSbTls(id); cur != nil {
+			var cs map[string]interface{}
+			_ = json.Unmarshal([]byte(cur.ServerJSON), &cs)
+			storedCert, _ = cs["certificate"].(string)
+		}
+	}
 	if id != 0 && (req.Certificate == "" || req.Key == "") {
 		if cur, _ := a.st.GetSbTls(id); cur != nil {
 			var s map[string]interface{}
@@ -797,6 +810,21 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 	if err := validateCertKeyPair(req.Certificate, req.Key); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// A newly supplied certificate must carry SANs and cover the SNI (#119).
+	// One kept unchanged from the stored profile is not re-judged, so editing
+	// e.g. the ALPN of an existing legacy profile keeps working.
+	// With insecure the client skips name verification anyway, so only the
+	// SAN presence is enforced there.
+	if storedCert == "" || req.Certificate != storedCert {
+		mustCover := req.ServerName
+		if req.Insecure {
+			mustCover = ""
+		}
+		if err := singbox.ValidateCertForName(req.Certificate, mustCover); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	server := map[string]interface{}{
 		"enabled":     true,

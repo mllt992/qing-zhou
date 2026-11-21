@@ -426,7 +426,7 @@
                 </n-collapse-item>
               </n-collapse>
             </n-form-item>
-            <n-form-item label="证书 PEM"><n-input v-model:value="te.certificate" type="textarea" :rows="3" placeholder="-----BEGIN CERTIFICATE-----" /></n-form-item>
+            <n-form-item label="证书 PEM" feedback="证书需含 SAN 并覆盖上方 SNI（开启跳过校验时仅要求含 SAN）"><n-input v-model:value="te.certificate" type="textarea" :rows="3" placeholder="-----BEGIN CERTIFICATE-----" /></n-form-item>
             <n-form-item label="私钥 PEM"><n-input v-model:value="te.key" type="textarea" :rows="3" placeholder="-----BEGIN PRIVATE KEY-----" /></n-form-item>
             </template>
             <n-form-item label="ALPN">
