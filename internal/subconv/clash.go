@@ -586,6 +586,7 @@ func clashProxy(p *Proxy, opt ClashOptions) map[string]any {
 	default:
 		return nil
 	}
+	applyClashCertPin(p, m)
 	// TCP/multiplex dial tuning (vless/vmess/trojan). smux is incompatible with
 	// vless xtls-rprx-vision, so drop it when a flow is set.
 	switch p.Protocol {

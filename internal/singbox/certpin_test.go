@@ -109,8 +109,8 @@ func TestCertHelpersRejectGarbage(t *testing.T) {
 	}
 }
 
-// A self-signed cert must reach the client link as pinSHA256, and only there —
-// the Clash and sing-box renderers cannot express this hash.
+// A self-signed cert must reach hysteria links as the standard pinSHA256 (other
+// protocols carry it as qz-pin; see TestPinReachesEveryTLSProtocol).
 func TestSelfSignedPinReachesHysteriaLinks(t *testing.T) {
 	certPEM, _, err := GenerateSelfSignedCert("node.example.com", 30)
 	if err != nil {
