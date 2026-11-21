@@ -1522,6 +1522,20 @@ func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) 
 			"account_count":       accounts,
 			"user_count":          credentials,
 		}
+		if n.Type == "mixed" && n.TlsID != 0 {
+			hosts := []string{}
+			if n.ServerID == 0 {
+				hosts = append(hosts, a.nodeHost())
+			} else if sv, _ := a.st.GetServer(n.ServerID); sv != nil {
+				hosts = append(hosts, sv.Host, sv.HostV6)
+			}
+			if info := a.st.InboundTLSInfo(n); info != nil {
+				m["tls_info"] = info
+				if warn := httpsProxyHostWarning(info, hosts); warn != "" {
+					m["tls_warning"] = warn
+				}
+			}
+		}
 		out = append(out, m)
 	}
 	ok(w, out)
@@ -2028,4 +2042,34 @@ func failRelayTopology(w http.ResponseWriter, err error) bool {
 	}
 	fail(w, http.StatusBadRequest, err.Error())
 	return true
+}
+
+// httpsProxyHostWarning explains, for an HTTPS (mixed+TLS) proxy, which of the
+// addresses users are handed the certificate does not cover. A proxy client has
+// no SNI field: it verifies the certificate against the very host it dials, so
+// a certificate shared across nodes (e.g. one domain) fails on every node IP
+// with "doesn't contain any IP SANs" (#115). Empty when everything matches or
+// the certificate could not be inspected — never warn on a guess.
+func httpsProxyHostWarning(info *store.InboundTLSInfo, hosts []string) string {
+	if info == nil || !info.Known {
+		return ""
+	}
+	var bad []string
+	for _, h := range hosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		if covered, known := info.CoversHost(h); known && !covered {
+			bad = append(bad, h)
+		}
+	}
+	if len(bad) == 0 {
+		return ""
+	}
+	names := strings.Join(info.CertNames, "、")
+	if names == "" {
+		names = "无 SAN（仅 CN " + info.CertDomain + "）"
+	}
+	return fmt.Sprintf("证书只签给 %s，不包含用户连接用的地址 %s：HTTPS 代理客户端只能按地址校验证书，会报「doesn't contain any IP SANs」或主机名不匹配。请改用覆盖该地址的证书（如按节点地址一键自签，或给节点配域名并签对应证书），或告知用户跳过校验。", names, strings.Join(bad, "、"))
 }
