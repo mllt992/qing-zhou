@@ -218,10 +218,19 @@
         <!-- 默认账号是个待办事项，不该只在展开后才看得见。看的是这个节点实际递出去
              的那一套：用通用账号时它一定是自设过的，只有回落到套餐账号才需要催。 -->
         <div v-if="!p.custom" class="px-hint">系统默认账号，建议点「详情 → 编辑账号」自设</div>
+        <!-- HTTPS 代理的证书提示（#115）：代理 URL 里写不了 SNI/指纹，客户端只按地址
+             校验证书，证书对不上地址或是自签时必须当面说清楚，否则用户只看到一句
+             「doesn't contain any IP SANs」。 -->
+        <div v-for="(hint, i) in httpsProxyHints(p)" :key="'tlsh' + i" class="px-tls-hint" :class="hint.level">{{ hint.text }}</div>
         <div v-if="expandedProxies.includes(p.tag)" class="px-detail">
           <div class="pxrow"><span class="pxk">类型</span><span style="font-size:13px;">{{ p.tls ? 'HTTPS' : 'HTTP / SOCKS5' }}</span></div>
           <div class="pxrow"><span class="pxk">地址</span><div class="pxv"><n-input-group><n-input :value="p.host" readonly size="small" /><n-button size="small" @click="copy(p.host)">复制</n-button></n-input-group></div></div>
           <div class="pxrow"><span class="pxk">端口</span><div class="pxv"><n-input-group><n-input :value="String(p.port)" readonly size="small" /><n-button size="small" @click="copy(String(p.port))">复制</n-button></n-input-group></div></div>
+          <template v-if="p.tls">
+            <div v-if="p.sni" class="pxrow"><span class="pxk">TLS 服务器名</span><div class="pxv"><n-input-group><n-input :value="p.sni" readonly size="small" /><n-button size="small" @click="copy(p.sni)">复制</n-button></n-input-group></div></div>
+            <div v-if="p.cert_names && p.cert_names.length" class="pxrow"><span class="pxk">证书签发给</span><span class="pxsub">{{ p.cert_names.join('、') }}</span></div>
+            <div v-if="p.sha256" class="pxrow"><span class="pxk">证书指纹</span><div class="pxv"><n-input-group><n-input :value="formatFingerprint(p.sha256)" readonly size="small" /><n-button size="small" @click="copy(p.sha256)">复制</n-button></n-input-group></div></div>
+          </template>
           <!-- 两套账号在这个节点上都能登录，所以两套都列出来。通用账号只用一行指
                回上面——它每个节点都一样，逐个节点再抄一遍反而像「一节点一套」；套
                餐账号则必须逐项列全，它是这个节点独有的，不列就等于没有。 -->
@@ -361,6 +370,7 @@ import { useAuthStore } from '@/stores/auth'
 import { fmtBytes, fmtTotal, fmtDate, pct } from '@/utils/format'
 import { planStatusMeta, planTimeText, planSortKey, planUsageText } from '@/utils/plan'
 import { copyText } from '@/utils/clipboard'
+import { httpsProxyHints, formatFingerprint } from '@/utils/proxyTls'
 import QRCode from 'qrcode'
 
 const router = useRouter()
@@ -920,6 +930,9 @@ onMounted(async () => {
 /* margin-left:auto 把整组按钮推到右端；宽度不够时它整块换到下一行 */
 .px-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
 .px-hint { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+.px-tls-hint { font-size: 12px; margin-top: 6px; padding: 6px 8px; border-radius: 8px; line-height: 1.5; }
+.px-tls-hint.warning { color: var(--warn, #b45309); background: rgba(217, 119, 6, 0.08); }
+.px-tls-hint.info { color: var(--text-2); background: var(--bg-soft); }
 .px-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .pxrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .pxrow:last-child { margin-bottom: 0; }

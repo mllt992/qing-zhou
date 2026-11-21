@@ -137,3 +137,43 @@ func GenerateSelfSignedCert(serverName string, validityDays int) (certPEM, keyPE
 	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
 	return certPEM, keyPEM, nil
 }
+
+// ParseLeafCert is the exported form of leafCert: the first CERTIFICATE block
+// of a PEM bundle, or nil when it does not parse.
+func ParseLeafCert(certPEM string) *x509.Certificate {
+	return leafCert(certPEM)
+}
+
+// CertNames lists the names a leaf certificate is valid for, as a client
+// verifying it sees them: DNS SANs, then IP SANs. The subject CN is deliberately
+// absent — Go clients (mihomo, sing-box, Xray) have ignored it since Go 1.15, so
+// listing it would promise a match the client will refuse.
+func CertNames(certPEM string) []string {
+	c := leafCert(certPEM)
+	if c == nil {
+		return nil
+	}
+	out := make([]string, 0, len(c.DNSNames)+len(c.IPAddresses))
+	out = append(out, c.DNSNames...)
+	for _, ip := range c.IPAddresses {
+		out = append(out, ip.String())
+	}
+	return out
+}
+
+// CertCoversHost reports whether a client that verifies the certificate against
+// host (an IP literal, bracketed or not, or a DNS name) would accept it — the
+// check a plain HTTPS-proxy client makes, since it cannot send any other SNI.
+// known is false when the PEM does not parse or host is empty, so callers can
+// avoid warning about something they could not actually check.
+func CertCoversHost(certPEM, host string) (covered, known bool) {
+	host = strings.TrimSpace(host)
+	if len(host) > 1 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
+	}
+	c := leafCert(certPEM)
+	if c == nil || host == "" {
+		return false, false
+	}
+	return c.VerifyHostname(host) == nil, true
+}
