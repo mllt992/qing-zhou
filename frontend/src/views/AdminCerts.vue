@@ -128,9 +128,10 @@
       <n-form label-placement="left" label-width="90">
         <n-form-item label="名称"><n-input v-model:value="self.name" /></n-form-item>
         <n-form-item label="SNI / 域名"><n-input v-model:value="self.server_name" placeholder="如 www.icloud.com 或节点 IP" /></n-form-item>
+        <n-form-item label="附加 SAN"><n-input v-model:value="self.sans" placeholder="可选，逗号或空格分隔：节点 IPv4、IPv6、其它域名" /></n-form-item>
         <n-form-item label="有效天数"><n-input-number v-model:value="self.days" :min="1" :max="3650" style="width:160px;" /></n-form-item>
       </n-form>
-      <div style="font-size:12px;color:var(--text-3);">自签证书用于 TUIC / Hysteria2 等允许跳过校验的客户端；客户端需勾选「允许不安全」。</div>
+      <div style="font-size:12px;color:var(--text-3);">自签证书会写入上面所有名称作为 SAN。HTTPS 代理客户端只按连接地址校验证书，按 IP 连接的节点请把它的 IPv4 / IPv6 都填进来。客户端需信任该证书、固定指纹或勾选「允许不安全」。</div>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showSelf = false">取消</n-button>
@@ -225,17 +226,22 @@ async function submitPaste() {
 
 // 自签
 const showSelf = ref(false)
-const self = reactive({ name: '', server_name: '', days: 3650 })
-function openSelf() { self.name = ''; self.server_name = ''; self.days = 3650; showSelf.value = true }
+const self = reactive({ name: '', server_name: '', sans: '', days: 3650 })
+function openSelf() { self.name = ''; self.server_name = ''; self.sans = ''; self.days = 3650; showSelf.value = true }
 async function submitSelf() {
   if (!self.name.trim() || !self.server_name.trim()) { message.error('名称和 SNI 必填'); return }
   submitting.value = true
   try {
-    await apiPost('/api/admin/certs/self-signed', { ...self })
+    await apiPost('/api/admin/certs/self-signed', { name: self.name, server_name: self.server_name, days: self.days, sans: splitSans(self.sans) })
     message.success('已生成')
     showSelf.value = false
     await load()
   } catch (e: any) { message.error(e.message) } finally { submitting.value = false }
+}
+
+// 附加 SAN：逗号 / 空白 / 中文逗号分隔（#117）。
+function splitSans(v: string): string[] {
+  return (v || '').split(/[\s,，、]+/).map(x => x.trim()).filter(Boolean)
 }
 
 async function copyPin(v: string) {

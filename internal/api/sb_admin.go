@@ -49,8 +49,9 @@ func (a *API) handleAdminRealityKeypair(w http.ResponseWriter, r *http.Request) 
 // 证书 TLS drawer's one-click button; the operator still reviews and saves.
 func (a *API) handleAdminSelfSignedCert(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ServerName string `json:"server_name"`
-		Days       int    `json:"days"`
+		ServerName string   `json:"server_name"`
+		SANs       []string `json:"sans"` // optional extra names (IPs / domains), #117
+		Days       int      `json:"days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
@@ -60,7 +61,7 @@ func (a *API) handleAdminSelfSignedCert(w http.ResponseWriter, r *http.Request) 
 		fail(w, http.StatusBadRequest, "SNI 域名必填")
 		return
 	}
-	certPEM, keyPEM, err := singbox.GenerateSelfSignedCert(req.ServerName, req.Days)
+	certPEM, keyPEM, err := singbox.GenerateSelfSignedCertSANs(append([]string{req.ServerName}, req.SANs...), req.Days)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "生成自签证书失败："+err.Error())
 		return
@@ -70,36 +71,45 @@ func (a *API) handleAdminSelfSignedCert(w http.ResponseWriter, r *http.Request) 
 
 // handleAdminQuickSelfSignedTls generates a self-signed cert AND saves it as a
 // ready-to-bind TLS entry in one call — the "一键绑定证书" path for mixed
-// (HTTP/SOCKS5) inbounds that want to become HTTPS proxies without a domain. The
-// SNI defaults to the address clients dial for the inbound's server (its host,
-// else the panel's node host), so the cert's SAN matches; it also embeds an IP
-// SAN when that address is an IP. Returns the saved TLS entry (with its id).
+// (HTTP/SOCKS5) inbounds that want to become HTTPS proxies without a domain.
+// The certificate covers every address clients are handed for the server (#117):
+// the optional server_name override, the server's host and its host_v6 (or the
+// panel's node host for the local server), plus any extra `sans`. An HTTPS-proxy
+// client verifies against the address it dials, so the "-v6" entry needs the
+// IPv6 address in the SAN just as much as the main entry needs the IPv4 one.
+// The SNI is the first of those names. Returns the saved TLS entry (with its id).
 func (a *API) handleAdminQuickSelfSignedTls(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ServerID   int64  `json:"server_id"`
-		ServerName string `json:"server_name"` // optional override (domain or IP)
-		Name       string `json:"name"`        // optional TLS entry name
+		ServerID   int64    `json:"server_id"`
+		ServerName string   `json:"server_name"` // optional override (domain or IP)
+		SANs       []string `json:"sans"`        // optional extra names
+		Name       string   `json:"name"`        // optional TLS entry name
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	sni := strings.TrimSpace(req.ServerName)
-	if sni == "" {
-		if req.ServerID != 0 {
-			if sv, _ := a.st.GetServer(req.ServerID); sv != nil {
-				sni = strings.TrimSpace(sv.Host)
-			}
-		}
-		if sni == "" {
-			sni = strings.TrimSpace(a.nodeHost())
+	names := []string{strings.TrimSpace(req.ServerName)}
+	serverHost := ""
+	if req.ServerID != 0 {
+		if sv, _ := a.st.GetServer(req.ServerID); sv != nil {
+			serverHost = strings.TrimSpace(sv.Host)
+			names = append(names, sv.Host, sv.HostV6)
 		}
 	}
-	if sni == "" {
+	if serverHost == "" {
+		// Local server, or a remote one without a host: links advertise the
+		// panel's node host there (BuildUserProxies does the same).
+		names = append(names, a.nodeHost())
+	}
+	names = append(names, req.SANs...)
+	names = quickCertNames(names)
+	if len(names) == 0 {
 		fail(w, http.StatusBadRequest, "无法确定证书域名/IP：请在该服务器或「系统设置 → 面板访问地址」配置 host，或手动填写 SNI")
 		return
 	}
-	certPEM, keyPEM, err := singbox.GenerateSelfSignedCert(sni, 3650)
+	sni := names[0]
+	certPEM, keyPEM, err := singbox.GenerateSelfSignedCertSANs(names, 3650)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "生成自签证书失败："+err.Error())
 		return
@@ -2043,6 +2053,25 @@ func failRelayTopology(w http.ResponseWriter, err error) bool {
 	}
 	fail(w, http.StatusBadRequest, err.Error())
 	return true
+}
+
+// quickCertNames trims, unbrackets and de-duplicates candidate certificate
+// names, keeping their order (the first becomes the SNI/CN).
+func quickCertNames(in []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, n := range in {
+		n = strings.TrimSpace(n)
+		if len(n) > 1 && n[0] == '[' && n[len(n)-1] == ']' {
+			n = n[1 : len(n)-1]
+		}
+		if n == "" || seen[strings.ToLower(n)] {
+			continue
+		}
+		seen[strings.ToLower(n)] = true
+		out = append(out, n)
+	}
+	return out
 }
 
 // managedCertClientInsecure decides the client-side insecure flag for a TLS
