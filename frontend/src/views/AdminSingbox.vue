@@ -139,6 +139,12 @@
                     </n-tooltip>
                     <span class="kv">TLS <b :title="tlsName(r.tls_id)">{{ tlsName(r.tls_id) }}</b></span>
                     <span v-if="r.egress_id" class="kv">出口 <b :title="egressName(r.egress_id)">{{ egressName(r.egress_id) }}</b></span>
+                    <n-tooltip v-if="r.tls_warning" placement="top" style="max-width:360px;">
+                      <template #trigger>
+                        <n-tag size="tiny" type="warning" :bordered="false" class="inbound-tls-warning">证书不覆盖节点地址</n-tag>
+                      </template>
+                      {{ r.tls_warning }}
+                    </n-tooltip>
                   </div>
                   <div class="lc-foot">
                     <n-button size="tiny" @click="openInbound(r)">编辑</n-button>
@@ -621,6 +627,11 @@
           </n-form-item>
           <n-form-item v-if="ie.type === 'mixed' && ie.tls_id" label=" ">
             <n-tag type="success" size="small">已绑定 TLS，保存后即为 HTTPS 代理（1Panel 代理类型选 HTTPS）</n-tag>
+          </n-form-item>
+          <!-- 证书不覆盖节点地址（#115）：HTTPS 代理客户端只能按地址校验证书。警告来自
+               已保存的入站（列表接口 tls_warning），换了证书需保存后刷新才会更新。 -->
+          <n-form-item v-if="ie.type === 'mixed' && ie.tls_id && editingInboundWarning" label=" ">
+            <n-alert type="warning" :show-icon="false" style="width:100%;">{{ editingInboundWarning }}</n-alert>
           </n-form-item>
           <n-form-item v-if="['vless','vmess','trojan'].includes(ie.type) && !ie.tls_id && ie.type !== 'shadowsocks'" label=" ">
             <n-tag type="warning" size="small">未配置 TLS，建议为 VLESS/VMess/Trojan 绑定 TLS 或 Reality</n-tag>
@@ -1508,6 +1519,15 @@ const ie = reactive({
   ss_method: '2022-blake3-aes-128-gcm', flow: 'xtls-rprx-vision',
   anytls_idle_check: 0, anytls_idle_timeout: 0, anytls_min_idle: 0,
   mux: false, brutal: false, brutal_up: 0, brutal_down: 0, upstream_inbound_id: 0, egress_id: 0,
+})
+
+// 正在编辑的已保存 mixed 入站的证书地址警告（#115）。只在 TLS 选择未变时显示，
+// 换了证书的话旧警告不再适用，保存后列表会给出新的结果。
+const editingInboundWarning = computed(() => {
+  if (!ie.id) return ''
+  const saved = inbounds.value.find((n: any) => n.id === ie.id)
+  if (!saved || saved.tls_id !== ie.tls_id) return ''
+  return saved.tls_warning || ''
 })
 
 function resetIe() {
