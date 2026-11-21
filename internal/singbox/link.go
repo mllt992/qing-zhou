@@ -39,17 +39,27 @@ type LinkParams struct {
 	Flow        bool // vless reality vision
 
 	// PinSHA256 is the leaf certificate's SHA-256 fingerprint (uppercase hex),
-	// set only for self-signed certificates. It rides along on the hysteria-family
-	// links as the standard `pinSHA256` parameter, which lets a client verify the
-	// exact certificate instead of trusting whatever is presented.
+	// set only for self-signed certificates. The hysteria family carries it as
+	// the standard `pinSHA256` parameter; every other TLS protocol carries it as
+	// the Qingzhou extension `qz-pin` (vmess: a key in its JSON payload).
+	// 轻舟's own renderers turn it into mihomo's `fingerprint` (that field IS the
+	// leaf SHA-256: mihomo component/ca/fingerprint.go), so a Clash subscriber
+	// pins the exact certificate instead of skipping verification (#116, #85).
 	//
-	// It is additive, never a replacement for Insecure: clients that do not know
-	// the parameter ignore it and behave exactly as before, so advertising it
-	// cannot take a working node offline. It is deliberately absent from the
-	// Clash and sing-box renderers — pinning there needs sing-box ≥1.13's
-	// certificate_public_key_sha256 (a *different* hash, and an unknown field on
-	// the 1.12 clients the subscription still targets).
+	// It is additive, never a replacement for Insecure on the link itself:
+	// clients that do not know the parameter ignore it and behave exactly as
+	// before, so advertising it cannot take a working node offline.
 	PinSHA256 string
+
+	// PinCert is the self-signed leaf certificate itself (base64url DER, no
+	// padding), carried as the Qingzhou extension `qz-cert`. 轻舟's sing-box
+	// renderer embeds it as the outbound's `tls.certificate` trust anchor — the
+	// same technique relayClientTLS uses for managed hops, and a field every
+	// sing-box version understands — instead of `insecure`. The store only sets
+	// it when the certificate verifies for the link's server name and is not
+	// close to expiry, so embedding it can never turn a node that connected with
+	// `insecure` into one that fails verification.
+	PinCert string
 
 	// transport (vless/vmess/trojan): Network is ws|grpc|httpupgrade ("" or tcp = none)
 	Network     string
@@ -122,6 +132,20 @@ type LinkParams struct {
 	// hysteria/hysteria2/tuic proxies have none, and an unknown key there fails
 	// the whole config for every subscriber holding that node.
 	NoUDP bool
+}
+
+// pinQuery renders the certificate-pinning extension params for protocols
+// without a standard pin key. Both keys are NodeKey-volatile (see subconv), so
+// a certificate rotation never re-keys a user's blocklist entry.
+func (p LinkParams) pinQuery(esc func(string) string) []string {
+	var q []string
+	if p.PinSHA256 != "" {
+		q = append(q, "qz-pin="+esc(p.PinSHA256))
+	}
+	if p.PinCert != "" {
+		q = append(q, "qz-cert="+esc(p.PinCert))
+	}
+	return q
 }
 
 // noUDPParam is the query key/value advertising that a node cannot carry UDP.
@@ -281,6 +305,7 @@ func BuildShareLink(p LinkParams) string {
 			if p.Insecure {
 				q = append(q, "allowInsecure=1")
 			}
+			q = append(q, p.pinQuery(esc)...)
 		}
 		if p.ALPN != "" && !p.TLSDisabled {
 			q = append(q, "alpn="+esc(p.ALPN))
@@ -304,6 +329,7 @@ func BuildShareLink(p LinkParams) string {
 			if p.Insecure {
 				q = append(q, "allowInsecure=1")
 			}
+			q = append(q, p.pinQuery(esc)...)
 		}
 		if p.ALPN != "" && !p.TLSDisabled {
 			q = append(q, "alpn="+esc(p.ALPN))
@@ -335,6 +361,7 @@ func BuildShareLink(p LinkParams) string {
 		// Stating the value that is already everyone's default costs nothing and
 		// removes the ambiguity.
 		q = append(q, "udp_relay_mode="+tuicUDPRelayModeNative)
+		q = append(q, p.pinQuery(esc)...)
 		if p.NoUDP {
 			q = append(q, noUDPParam)
 		}
@@ -347,6 +374,9 @@ func BuildShareLink(p LinkParams) string {
 		q = append(q, "fp="+esc(fp), "sni="+esc(p.SNI), "fastopen=0")
 		if p.PinSHA256 != "" {
 			q = append(q, "pinSHA256="+esc(p.PinSHA256))
+		}
+		if p.PinCert != "" {
+			q = append(q, "qz-cert="+esc(p.PinCert))
 		}
 		// obfs must be advertised to clients, otherwise the handshake fails
 		// when the inbound has salamander obfs enabled.
@@ -426,6 +456,14 @@ func BuildShareLink(p LinkParams) string {
 				m["insecure"] = "1"
 				m["allowInsecure"] = "1"
 			}
+			// JSON twins of qz-pin / qz-cert. subconv's canonical vmess form
+			// drops exactly these keys, so they never re-key the node.
+			if p.PinSHA256 != "" {
+				m["qz-pin"] = p.PinSHA256
+			}
+			if p.PinCert != "" {
+				m["qz-cert"] = p.PinCert
+			}
 		} else {
 			m["tls"] = ""
 		}
@@ -470,6 +508,7 @@ func BuildShareLink(p LinkParams) string {
 		if p.Insecure {
 			q = append(q, "insecure=1")
 		}
+		q = append(q, p.pinQuery(esc)...)
 		if p.NoUDP {
 			q = append(q, noUDPParam)
 		}
@@ -490,6 +529,9 @@ func BuildShareLink(p LinkParams) string {
 		}
 		if p.PinSHA256 != "" {
 			q = append(q, "pinSHA256="+esc(p.PinSHA256))
+		}
+		if p.PinCert != "" {
+			q = append(q, "qz-cert="+esc(p.PinCert))
 		}
 		if p.NoUDP {
 			q = append(q, noUDPParam)

@@ -14,6 +14,12 @@ import (
 func LegacyShareLinkForNodeKey(p LinkParams) string {
 	p.WSHeaders = nil
 	p.TLSDisabled = false
+	// The certificate-pinning extensions postdate every legacy serializer.
+	// Hysteria links have always carried the standard pinSHA256.
+	p.PinCert = ""
+	if p.Type != "hysteria" && p.Type != "hysteria2" {
+		p.PinSHA256 = ""
+	}
 	if p.Type == "vless" || p.Type == "trojan" {
 		p.ALPN = ""
 	}
