@@ -396,7 +396,7 @@
               <n-select :value="te.cert_id" :options="certOpts" v-bind="longSelFor(certOpts.length)" @update:value="onCertPick" />
             </n-form-item>
             <n-form-item v-if="te.cert_id" label=" ">
-              <n-tag type="success" size="small" style="white-space:normal;height:auto;">已引用「证书管理」中的证书：SNI 自动取证书域名，真实证书自动关闭「允许不安全」；续期与管理请到证书管理页。</n-tag>
+              <n-tag type="success" size="small" style="white-space:normal;height:auto;">已引用「证书管理」中的证书：SNI 自动取证书域名（通配证书保留其覆盖的具体子域名，与订阅链接一致），真实证书自动关闭「允许不安全」；续期与管理请到证书管理页。</n-tag>
             </n-form-item>
             <template v-if="!te.cert_id">
             <n-form-item label=" ">
@@ -720,6 +720,7 @@ import {
 } from 'naive-ui'
 import { apiList, apiGet, apiGetRaw, apiPost, apiPut, apiDelete } from '@/api'
 import { applyInboundToggle, type BatchToggleFailure } from '@/utils/inboundBatch'
+import { sniForCert } from '@/utils/certSni'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -1162,7 +1163,7 @@ const certOpts = computed(() => [
 function onCertPick(id: number) {
   te.cert_id = id
   const c = certList.value.find(x => x.id === id)
-  if (c && c.domain) te.server_name = c.domain // SNI 必须与证书域名一致
+  if (c && c.domain) te.server_name = sniForCert(te.server_name, c.domain) // SNI 必须被证书覆盖（通配证书保留具体子域名）
   // 自签证书没有 CA 背书，URI 类客户端只能跳过校验；Clash/sing-box 订阅会另外按证书
   // 指纹固定（#116）。CA 证书则必须校验（后端也会强制关闭）。
   if (c) te.insecure = !!c.self_signed
