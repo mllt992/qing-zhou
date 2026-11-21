@@ -1224,16 +1224,27 @@ func nodeOutputForTag(nodes []*Node, tag string) (v4, v6 bool) {
 // the Clash/sing-box subscription (BuildShareLink returns "" for them), so this
 // is how a user retrieves them instead.
 type UserProxy struct {
-	Tag       string `json:"tag"`
-	BucketID  int64  `json:"bucket_id"` // owning bucket — target of a credential edit
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
-	Username  string `json:"username"`
-	Password  string `json:"password"`
-	TLS       bool   `json:"tls"`        // true → HTTPS proxy; false → plain HTTP/SOCKS5
-	ExpiresAt int64  `json:"expires_at"` // 0 = permanent
-	Expired   bool   `json:"expired"`    // credential past its expiry (won't authenticate)
-	Custom    bool   `json:"custom"`     // true → a dedicated proxy account, not the node identity
+	Tag      string `json:"tag"`
+	BucketID int64  `json:"bucket_id"` // owning bucket — target of a credential edit
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	TLS      bool   `json:"tls"` // true → HTTPS proxy; false → plain HTTP/SOCKS5
+	// TLS trust details for an HTTPS proxy (all empty for plain HTTP/SOCKS5).
+	// A proxy URL cannot carry an SNI or a pin — every HTTP client verifies the
+	// certificate against the host it dials — so the page has to say what the
+	// certificate is actually issued for and how to trust it (#115).
+	SNI          string   `json:"sni,omitempty"`
+	CertDomain   string   `json:"cert_domain,omitempty"`
+	CertNames    []string `json:"cert_names,omitempty"`
+	SelfSigned   bool     `json:"self_signed,omitempty"`
+	CertSHA256   string   `json:"sha256,omitempty"`
+	Insecure     bool     `json:"insecure,omitempty"`
+	HostMismatch bool     `json:"host_mismatch,omitempty"` // certificate does not cover Host
+	ExpiresAt    int64    `json:"expires_at"`              // 0 = permanent
+	Expired      bool     `json:"expired"`                 // credential past its expiry (won't authenticate)
+	Custom       bool     `json:"custom"`                  // true → a dedicated proxy account, not the node identity
 	// Account is true when this node authenticates with the user's account-level
 	// credential — the same login on every such node, edited in one place. False
 	// means the node still carries a bucket credential of its own (the free
@@ -1281,6 +1292,8 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 		return nil
 	}
 	serverCache := make(map[int64]*Server)
+	tlsCache := map[int64]*SbTls{}
+	certCache := map[int64]*Cert{}
 	now := time.Now().Unix()
 	owners, _ := s.UserOwnedInbounds(u.ID, now)
 	// The account-level credential, if usable, is what every non-free node shows.
@@ -1353,13 +1366,27 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 			p.Custom, p.Account = true, true
 			p.MeterPlan = meterPlan
 		}
+		var tlsInfo *InboundTLSInfo
+		if p.TLS {
+			if tlsInfo = s.inboundTLSInfo(ib, tlsCache, certCache); tlsInfo != nil {
+				p.SNI, p.CertDomain, p.Insecure = tlsInfo.SNI, tlsInfo.CertDomain, tlsInfo.Insecure
+				p.CertNames = tlsInfo.CertNames
+				p.SelfSigned, p.CertSHA256 = tlsInfo.SelfSigned, tlsInfo.SHA256
+			}
+		}
+		mismatch := func(host string) bool {
+			covered, known := tlsInfo.CoversHost(host)
+			return known && !covered
+		}
 		if outV4 {
+			p.HostMismatch = mismatch(p.Host)
 			out = append(out, p)
 		}
 		if outV6 {
 			if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
 				p6 := p
 				p6.Host, p6.Tag = v6, ib.Tag+"-v6"
+				p6.HostMismatch = mismatch(v6)
 				out = append(out, p6)
 			}
 		}
