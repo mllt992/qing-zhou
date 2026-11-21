@@ -12,3 +12,11 @@ test('HTTPS label and copy buttons are gated on p.tls only', () => {
   assert.match(src, /<template v-if="p\.tls">\s*<n-button[^>]*@click="copy\(proxyUrl\(p, 'https'\)\)"/)
   assert.doesNotMatch(src, /tls_id/)
 })
+
+const admin = readFileSync(new URL('../src/views/AdminSingbox.vue', import.meta.url), 'utf8')
+
+test('TLS 检测 button also covers inline options.tls inbounds', () => {
+  assert.match(admin, /v-if="\(r\.tls_id \|\| hasInlineTls\(r\)\) && !TLS_PROBE_QUIC\.includes\(r\.type\)"/)
+  assert.match(admin, /function hasInlineTls\(r: any\): boolean/)
+  assert.match(admin, /o\.tls\.enabled === true/)
+})

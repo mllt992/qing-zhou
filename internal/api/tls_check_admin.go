@@ -51,15 +51,17 @@ func (a *API) inboundTLSCheck(r *http.Request, ib *store.SbInbound, host, hostV6
 		h = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(h), "["), "]")
 		return net.JoinHostPort(h, port)
 	}
-	if ib.TlsID == 0 {
-		out.Results = append(out.Results, tlsprobe.Skipped(addrOf(host), "入站未绑定 TLS"))
+	// Inline options.tls counts as TLS exactly as on the subscription and the
+	// user page (#120); only an inbound with neither is "no TLS".
+	info := a.st.InboundTLSInfo(ib)
+	if ib.TlsID == 0 && info == nil {
+		out.Results = append(out.Results, tlsprobe.Skipped(addrOf(host), "入站未启用 TLS"))
 		return out
 	}
 	if tlsProbeQUIC[ib.Type] {
 		out.Results = append(out.Results, tlsprobe.Skipped(addrOf(host), "QUIC 协议（"+ib.Type+"）无法用 TCP 握手检测，已跳过"))
 		return out
 	}
-	info := a.st.InboundTLSInfo(ib)
 	if info == nil {
 		out.Results = append(out.Results, tlsprobe.Skipped(addrOf(host), "TLS 配置为 Reality 或已禁用，跳过证书检测"))
 		return out

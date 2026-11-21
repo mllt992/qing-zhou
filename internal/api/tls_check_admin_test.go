@@ -92,3 +92,29 @@ func TestInboundTLSCheck(t *testing.T) {
 		t.Fatalf("non-TLS must be skipped: %+v", res)
 	}
 }
+
+// #120 × #118: an inbound with inline options.tls is a TLS inbound for the
+// probe too (same rule as subscriptions and the user page); inline
+// enabled:false stays "no TLS".
+func TestInboundTLSCheckInlineTLS(t *testing.T) {
+	a, st := newUserEditAPI(t)
+	certPEM, keyPEM, _ := singbox.GenerateSelfSignedCert("127.0.0.1", 3650)
+	port := serveTestTLS(t, certPEM, keyPEM)
+	sid, err := st.CreateServer(store.Server{Name: "n", Host: "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := json.Marshal(map[string]any{"tls": map[string]any{"enabled": true, "certificate": certPEM, "key": keyPEM}})
+	id, err := st.SaveSbInbound(&store.SbInbound{ServerID: sid, Type: "mixed", Tag: "inl", Listen: "::", ListenPort: port, Options: string(opts), Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := runTLSCheck(t, a, id)
+	if res.Status != tlsprobe.StatusOK || len(res.Results) != 1 || !res.Results[0].Handshake {
+		t.Fatalf("inline TLS inbound must be probed: %+v", res)
+	}
+	off, _ := st.SaveSbInbound(&store.SbInbound{ServerID: sid, Type: "mixed", Tag: "off", Listen: "::", ListenPort: 7891, Options: `{"tls":{"enabled":false}}`, Enabled: true})
+	if res := runTLSCheck(t, a, off); res.Status != tlsprobe.StatusSkipped {
+		t.Fatalf("inline enabled:false must be skipped: %+v", res)
+	}
+}
