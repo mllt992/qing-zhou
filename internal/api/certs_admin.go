@@ -240,9 +240,10 @@ func (a *API) handleAdminCertPaste(w http.ResponseWriter, r *http.Request) {
 // POST /api/admin/certs/self-signed {name, server_name, days?}
 func (a *API) handleAdminCertSelfSigned(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name       string `json:"name"`
-		ServerName string `json:"server_name"`
-		Days       int    `json:"days"`
+		Name       string   `json:"name"`
+		ServerName string   `json:"server_name"`
+		SANs       []string `json:"sans"` // optional extra names (IPs / domains), #117
+		Days       int      `json:"days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
@@ -254,7 +255,7 @@ func (a *API) handleAdminCertSelfSigned(w http.ResponseWriter, r *http.Request) 
 		fail(w, http.StatusBadRequest, "名称和 SNI 必填")
 		return
 	}
-	certPEM, keyPEM, err := singbox.GenerateSelfSignedCert(sni, req.Days)
+	certPEM, keyPEM, err := singbox.GenerateSelfSignedCertSANs(append([]string{sni}, req.SANs...), req.Days)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "生成自签证书失败："+err.Error())
 		return

@@ -76,15 +76,53 @@ func IsSelfSignedCert(certPEM string) bool {
 
 // GenerateSelfSignedCert issues a self-signed ECDSA (P-256) certificate for the
 // given server name and returns the certificate and private key as PEM strings.
-//
-// It is intended for the "证书 TLS" mode with protocols whose clients accept a
-// self-signed cert (TUIC / Hysteria2 with insecure or certificate pinning). The
-// SAN is set from serverName: an IP literal becomes an IP SAN, otherwise a DNS
-// SAN (plus its bare apex when serverName is a wildcard). validityDays is
-// clamped to [1, 3650]; 0 means the default of 3650 (≈10 years).
+// It is GenerateSelfSignedCertSANs with a single name.
 func GenerateSelfSignedCert(serverName string, validityDays int) (certPEM, keyPEM string, err error) {
-	serverName = strings.TrimSpace(serverName)
-	if serverName == "" {
+	return GenerateSelfSignedCertSANs([]string{serverName}, validityDays)
+}
+
+// GenerateSelfSignedCertSANs issues a self-signed ECDSA (P-256) certificate
+// valid for every name given (#117): each IP literal (IPv4 or IPv6, bracketed
+// or not) becomes an IP SAN, anything else a DNS SAN (a wildcard also covers
+// its bare apex). Duplicates and blanks are dropped; the first name is the CN.
+// A node reached over both IPv4 and IPv6 — or by IP and by domain — needs all
+// of them, because a client with no SNI override (every HTTPS-proxy client)
+// verifies against the address it dials. validityDays is clamped to [1, 3650];
+// 0 means the default of 3650 (≈10 years).
+func GenerateSelfSignedCertSANs(names []string, validityDays int) (certPEM, keyPEM string, err error) {
+	var dns []string
+	var ips []net.IP
+	seen := map[string]bool{}
+	cn := ""
+	add := func(n string) {
+		key := strings.ToLower(n)
+		if n == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		if ip := net.ParseIP(n); ip != nil {
+			ips = append(ips, ip)
+		} else {
+			dns = append(dns, n)
+		}
+	}
+	for _, raw := range names {
+		n := strings.TrimSpace(raw)
+		if len(n) > 1 && n[0] == '[' && n[len(n)-1] == ']' {
+			n = n[1 : len(n)-1]
+		}
+		if n == "" {
+			continue
+		}
+		if cn == "" {
+			cn = n
+		}
+		add(n)
+		if strings.HasPrefix(n, "*.") {
+			add(strings.TrimPrefix(n, "*."))
+		}
+	}
+	if cn == "" {
 		return "", "", fmt.Errorf("server name is required")
 	}
 	if validityDays <= 0 {
@@ -108,21 +146,14 @@ func GenerateSelfSignedCert(serverName string, validityDays int) (certPEM, keyPE
 	notBefore := time.Now().Add(-1 * time.Hour) // tolerate minor clock skew
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: serverName},
+		Subject:               pkix.Name{CommonName: cn},
 		NotBefore:             notBefore,
 		NotAfter:              notBefore.Add(time.Duration(validityDays) * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-	}
-	if ip := net.ParseIP(serverName); ip != nil {
-		tmpl.IPAddresses = []net.IP{ip}
-	} else {
-		tmpl.DNSNames = []string{serverName}
-		// For a wildcard SNI, also cover the bare apex so both match.
-		if strings.HasPrefix(serverName, "*.") {
-			tmpl.DNSNames = append(tmpl.DNSNames, strings.TrimPrefix(serverName, "*."))
-		}
+		DNSNames:              dns,
+		IPAddresses:           ips,
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
