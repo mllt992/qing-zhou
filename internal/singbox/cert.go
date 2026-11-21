@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
@@ -136,6 +137,70 @@ func GenerateSelfSignedCert(serverName string, validityDays int) (certPEM, keyPE
 	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
 	return certPEM, keyPEM, nil
+}
+
+// trustAnchorMinValidity is how long a self-signed certificate must still be
+// valid for 轻舟 to hand it to clients as a trust anchor. A subscription is
+// cached client-side; embedding a certificate that expires while cached would
+// make sing-box reject a node that `insecure` used to accept.
+const trustAnchorMinValidity = 30 * 24 * time.Hour
+
+// SelfSignedTrustAnchor returns the self-signed leaf as base64url DER (no
+// padding) when a client that trusts exactly this certificate — sing-box's
+// `tls.certificate` — would accept it for serverName right now and for the next
+// 30 days. Empty otherwise (CA-issued, unparseable, SAN-less/CN-only, name not
+// covered, expired or expiring), in which case callers keep today's behavior.
+//
+// This is deliberately a real x509 verification rather than a set of field
+// checks: it is the same decision the client will make, so a certificate that
+// passes here cannot turn a working `insecure` node into a failing one.
+func SelfSignedTrustAnchor(certPEM, serverName string, now time.Time) string {
+	if !IsSelfSignedCert(certPEM) {
+		return ""
+	}
+	c := leafCert(certPEM)
+	serverName = strings.TrimSpace(serverName)
+	if len(serverName) > 1 && serverName[0] == '[' && serverName[len(serverName)-1] == ']' {
+		serverName = serverName[1 : len(serverName)-1]
+	}
+	if c == nil || serverName == "" {
+		return ""
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(c)
+	for _, at := range []time.Time{now, now.Add(trustAnchorMinValidity)} {
+		if _, err := c.Verify(x509.VerifyOptions{Roots: roots, DNSName: serverName, CurrentTime: at}); err != nil {
+			return ""
+		}
+	}
+	return base64.RawURLEncoding.EncodeToString(c.Raw)
+}
+
+// TrustAnchorPEM decodes a base64url DER certificate (the qz-cert link
+// extension) back to PEM. Empty when it is not a parseable certificate.
+func TrustAnchorPEM(b64 string) string {
+	der, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.TrimSpace(b64), "="))
+	if err != nil {
+		return ""
+	}
+	if _, err := x509.ParseCertificate(der); err != nil {
+		return ""
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+// NormalizeCertPin returns a SHA-256 certificate fingerprint as uppercase hex
+// without separators, or "" when it is not exactly 32 bytes of hex. mihomo
+// rejects the whole proxy (and so the whole config) on a malformed
+// `fingerprint`, so an unvalidated value from a third-party link must never
+// reach it.
+func NormalizeCertPin(v string) string {
+	v = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(v), ":", ""))
+	b, err := hex.DecodeString(v)
+	if err != nil || len(b) != sha256.Size {
+		return ""
+	}
+	return v
 }
 
 // ParseLeafCert is the exported form of leafCert: the first CERTIFICATE block

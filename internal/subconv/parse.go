@@ -340,6 +340,9 @@ var volatileParams = map[string]bool{
 	// that (or unbinding the egress) must not re-key the node and silently
 	// undo every user's blocklist entry for it.
 	"qz-udp": true,
+	// Certificate-pinning extensions (#116): they follow the certificate, and a
+	// rotation must not re-key the node.
+	"qz-pin": true, "qz-cert": true,
 }
 
 // NodeKey returns a stable per-node identifier derived from a share link,
@@ -412,7 +415,7 @@ func canonicalLink(link string) string {
 	s := stripFragment(link)
 	i := strings.IndexByte(s, '?')
 	if i < 0 {
-		return s
+		return canonicalVMessPins(s)
 	}
 	base, rawQuery := s[:i], s[i+1:]
 	parts := strings.Split(rawQuery, "&")
@@ -615,4 +618,36 @@ func (p *Proxy) tuning() tuning {
 		brutalUp:   atoi(val("brutal_up")),
 		brutalDown: atoi(val("brutal_down")),
 	}
+}
+
+// canonicalVMessPins drops 轻舟's certificate-pinning keys from a vmess JSON
+// payload before hashing, mirroring what volatileParams does for URL-style
+// links. Only a payload that actually carries one is touched: 轻舟 serialises
+// vmess with json.Marshal over a map (sorted keys, standard base64), so
+// re-marshalling without the keys reproduces byte-for-byte the link it emitted
+// before pinning existed — and every other vmess link hashes exactly as before.
+func canonicalVMessPins(s string) string {
+	if !strings.HasPrefix(s, "vmess://") {
+		return s
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, "vmess://"))
+	if err != nil {
+		return s
+	}
+	var obj map[string]interface{}
+	if json.Unmarshal(raw, &obj) != nil {
+		return s
+	}
+	_, hasPin := obj["qz-pin"]
+	_, hasCert := obj["qz-cert"]
+	if !hasPin && !hasCert {
+		return s
+	}
+	delete(obj, "qz-pin")
+	delete(obj, "qz-cert")
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return s
+	}
+	return "vmess://" + base64.StdEncoding.EncodeToString(out)
 }
