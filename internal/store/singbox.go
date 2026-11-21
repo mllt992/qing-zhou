@@ -260,7 +260,7 @@ func (s *Store) resolveTlsBlock(tlsID int64, tag string, tlsCache map[int64]*SbT
 		tj["certificate"] = cert.CertPEM
 		tj["key"] = cert.KeyPEM
 		if cert.Domain != "" {
-			tj["server_name"] = cert.Domain
+			tj["server_name"] = singbox.EffectiveServerName(mapStr(tj, "server_name"), cert.Domain, cert.CertPEM)
 		}
 	}
 	return tj, nil
