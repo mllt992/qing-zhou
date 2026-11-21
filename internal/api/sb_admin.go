@@ -749,12 +749,13 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		if v := tlsVersion(req.MaxVersion); v != "" {
 			server["max_version"] = v
 		}
-		// A real (verified) cert means the client must NOT skip verification;
-		// self-signed certs referenced here still honor the caller's insecure flag.
-		insecure := req.Insecure
-		if cert.Source == "acme" || cert.Source == "paste" {
-			insecure = false
-		}
+		// A CA-issued cert means the client must NOT skip verification; a
+		// self-signed one honors the caller's insecure flag. Ask the certificate,
+		// not the `source` label (#116): a pasted certificate is routinely a
+		// self-signed one shared across nodes, and forcing insecure=false on it
+		// left every URI client unable to connect. Subscriptions additionally pin
+		// self-signed certificates (fingerprint / embedded trust anchor).
+		insecure := managedCertClientInsecure(cert, req.Insecure)
 		client := map[string]interface{}{
 			"insecure": insecure,
 			"utls":     map[string]interface{}{"enabled": true, "fingerprint": fpOrDefault(req.Fingerprint)},
@@ -2042,6 +2043,17 @@ func failRelayTopology(w http.ResponseWriter, err error) bool {
 	}
 	fail(w, http.StatusBadRequest, err.Error())
 	return true
+}
+
+// managedCertClientInsecure decides the client-side insecure flag for a TLS
+// profile that references a managed certificate: never for a CA-issued (or
+// unreadable) certificate, the caller's choice for a self-signed one. Decided
+// from the certificate itself, not its `source` label (#116).
+func managedCertClientInsecure(cert *store.Cert, requested bool) bool {
+	if cert == nil || cert.DecryptFailed || !singbox.IsSelfSignedCert(cert.CertPEM) {
+		return false
+	}
+	return requested
 }
 
 // httpsProxyHostWarning explains, for an HTTPS (mixed+TLS) proxy, which of the

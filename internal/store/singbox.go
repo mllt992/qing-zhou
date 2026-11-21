@@ -825,6 +825,7 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 	// ACME renewal, and a subscription cached by the client across a renewal
 	// would then pin a certificate the server no longer presents.
 	pinCache := map[int64]string{}
+	pinPEM := map[int64]string{} // self-signed leaf PEM per profile, for the trust anchor
 	certPin := func(t *SbTls, server map[string]interface{}) string {
 		if t == nil || t.DecryptFailed {
 			return ""
@@ -843,9 +844,25 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		pin := ""
 		if pem != "" && singbox.IsSelfSignedCert(pem) {
 			pin = singbox.CertFingerprintSHA256(pem)
+			pinPEM[t.ID] = pem
 		}
 		pinCache[t.ID] = pin
 		return pin
+	}
+	// trustAnchor is the self-signed certificate a link may embed (qz-cert) for
+	// sing-box clients: only when it verifies for the name the client will check
+	// — the SNI, else the dialed host — so it never breaks a working node.
+	now16 := time.Now()
+	trustAnchor := func(tlsID int64, sni, host string) string {
+		pem := pinPEM[tlsID]
+		if pem == "" {
+			return ""
+		}
+		name := sni
+		if name == "" {
+			name = host
+		}
+		return singbox.SelfSignedTrustAnchor(pem, name, now16)
 	}
 	// Each self-built node is owned by one of the user's buckets; the link uses
 	// that bucket's credentials and shows its own remaining quota/expiry. A node
@@ -996,6 +1013,11 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		if sni := mapStr(client, "server_name"); sni != "" {
 			p.SNI = sni
 		}
+		if pin != "" && tlsEnabled {
+			p.PinCert = trustAnchor(ib.TlsID, p.SNI, p.Host)
+		} else {
+			p.PinSHA256 = ""
+		}
 		// Multiplex + Brutal (vless/vmess/trojan): both are opt-in on the client,
 		// so mirror the inbound's setting onto the link or Brutal does nothing.
 		if mx, ok := opts["multiplex"].(map[string]interface{}); ok && mapBool(mx, "enabled") {
@@ -1110,6 +1132,10 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 				if v6 := serverHostV6(serverCache, ib.ServerID); v6 != "" {
 					p6 := p
 					p6.Host, p6.Tag = v6, remark+"-v6"
+					if p6.PinSHA256 != "" && p6.SNI == "" {
+						// No SNI: the client verifies against the address it dials.
+						p6.PinCert = trustAnchor(ib.TlsID, "", v6)
+					}
 					if link6 := singbox.BuildShareLink(p6); link6 != "" {
 						out = append(out, SelfBuiltLink{NodeID: logicalID, Tag: ib.Tag, Link: link6})
 					}
