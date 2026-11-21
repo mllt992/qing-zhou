@@ -49,7 +49,7 @@ func (i *InboundTLSInfo) PEM() string {
 // does and summarises the presented certificate. nil when the inbound has no
 // TLS profile or it cannot be resolved. Caches are optional.
 func (s *Store) inboundTLSInfo(ib *SbInbound, tlsCache map[int64]*SbTls, certCache map[int64]*Cert) *InboundTLSInfo {
-	if ib == nil || ib.TlsID == 0 {
+	if ib == nil {
 		return nil
 	}
 	if tlsCache == nil {
@@ -58,9 +58,21 @@ func (s *Store) inboundTLSInfo(ib *SbInbound, tlsCache map[int64]*SbTls, certCac
 	if certCache == nil {
 		certCache = map[int64]*Cert{}
 	}
-	block, err := s.resolveTlsBlock(ib.TlsID, ib.Tag, tlsCache, certCache)
-	if err != nil || block == nil {
-		return nil
+	var block map[string]interface{}
+	if ib.TlsID != 0 {
+		b, err := s.resolveTlsBlock(ib.TlsID, ib.Tag, tlsCache, certCache)
+		if err != nil || b == nil {
+			return nil
+		}
+		block = b
+	} else {
+		// Inline "tls" in the inbound options is passed to sing-box verbatim
+		// (BuildSingboxConfig merges options into the inbound), so it is the
+		// block the node presents.
+		block = inlineTLSBlock(ib.Options)
+		if block == nil {
+			return nil
+		}
 	}
 	if v, ok := block["enabled"].(bool); ok && !v {
 		return nil
@@ -69,7 +81,10 @@ func (s *Store) inboundTLSInfo(ib *SbInbound, tlsCache map[int64]*SbTls, certCac
 		return nil
 	}
 	info := &InboundTLSInfo{SNI: mapStr(block, "server_name")}
-	t := tlsCache[ib.TlsID]
+	var t *SbTls
+	if ib.TlsID != 0 {
+		t = tlsCache[ib.TlsID]
+	}
 	if t != nil {
 		var client map[string]interface{}
 		if json.Unmarshal([]byte(t.ClientJSON), &client) == nil {
@@ -122,4 +137,21 @@ func (s *Store) inboundTLSInfo(ib *SbInbound, tlsCache map[int64]*SbTls, certCac
 // InboundTLSInfo is the exported, uncached form for API handlers.
 func (s *Store) InboundTLSInfo(ib *SbInbound) *InboundTLSInfo {
 	return s.inboundTLSInfo(ib, nil, nil)
+}
+
+// inlineTLSBlock returns the inbound options' inline "tls" object, or nil when
+// absent, not an object, or not explicitly enabled.
+func inlineTLSBlock(options string) map[string]interface{} {
+	if options == "" {
+		return nil
+	}
+	var opts map[string]interface{}
+	if json.Unmarshal([]byte(options), &opts) != nil {
+		return nil
+	}
+	block, _ := opts["tls"].(map[string]interface{})
+	if on, _ := block["enabled"].(bool); !on {
+		return nil // same rule as shareLinkTLSState: only enabled:true is TLS
+	}
+	return block
 }

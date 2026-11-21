@@ -1306,6 +1306,30 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 				serverCache[ib.ServerID] = nil // negative cache
 			}
 		}
+		// Same TLS decision as the subscription links (shareLinkTLSState): a
+		// disabled profile is plaintext, inline options.tls counts, and an
+		// unreadable inline block is never advertised at all — guessing could
+		// hand out a plaintext proxy URL for a TLS port or vice versa.
+		var tlsServer, tlsOpts map[string]interface{}
+		if ib.TlsID != 0 {
+			t, ok := tlsCache[ib.TlsID]
+			if !ok {
+				t, _ = s.GetSbTls(ib.TlsID)
+				tlsCache[ib.TlsID] = t
+			}
+			if t != nil {
+				_ = json.Unmarshal([]byte(t.ServerJSON), &tlsServer)
+			}
+		}
+		if ib.Options != "" {
+			if err := json.Unmarshal([]byte(ib.Options), &tlsOpts); err != nil {
+				continue
+			}
+		}
+		tlsEnabled, _, _, validTLS := shareLinkTLSState(ib.TlsID, tlsServer, tlsOpts)
+		if !validTLS {
+			continue
+		}
 		plan := &ProxyPlanCred{
 			BucketID:  owner.ID,
 			Name:      owner.Name,
@@ -1322,7 +1346,7 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 			Port:      ib.ListenPort,
 			Username:  plan.Username,
 			Password:  plan.Password,
-			TLS:       ib.TlsID != 0,
+			TLS:       tlsEnabled,
 			ExpiresAt: plan.ExpiresAt,
 			Expired:   plan.Expired,
 			Custom:    plan.Custom,
