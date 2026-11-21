@@ -259,8 +259,8 @@ func (s *Store) resolveTlsBlock(tlsID int64, tag string, tlsCache map[int64]*SbT
 		delete(tj, "key_path")
 		tj["certificate"] = cert.CertPEM
 		tj["key"] = cert.KeyPEM
-		if cert.Domain != "" {
-			tj["server_name"] = singbox.EffectiveServerName(mapStr(tj, "server_name"), cert.Domain, cert.CertPEM)
+		if sni := managedServerName(mapStr(tj, "server_name"), cert); sni != "" {
+			tj["server_name"] = sni
 		}
 	}
 	return tj, nil
@@ -825,6 +825,7 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 	// ACME renewal, and a subscription cached by the client across a renewal
 	// would then pin a certificate the server no longer presents.
 	pinCache := map[int64]string{}
+	linkCertCache := map[int64]*Cert{}
 	pinPEM := map[int64]string{} // self-signed leaf PEM per profile, for the trust anchor
 	certPin := func(t *SbTls, server map[string]interface{}) string {
 		if t == nil || t.DecryptFailed {
@@ -944,8 +945,10 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		}
 		var server, client, opts map[string]interface{}
 		pin := ""
+		var profile *SbTls
 		if ib.TlsID != 0 {
 			if t := getTls(ib.TlsID); t != nil {
+				profile = t
 				_ = json.Unmarshal([]byte(t.ServerJSON), &server)
 				_ = json.Unmarshal([]byte(t.ClientJSON), &client)
 				pin = certPin(t, server)
@@ -1009,6 +1012,11 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 			DownMbps:    mapInt(opts, "down_mbps"),
 			TCPFastOpen: mapBool(opts, "tcp_fast_open"),
 			MPTCP:       mapBool(opts, "tcp_multi_path"),
+		}
+		if profile != nil && ib.TlsID != 0 && !tlsDisabled {
+			// Same resolution as the node's inbound (resolveTlsBlock), not the
+			// stored copy, so the link's SNI matches the certificate served.
+			p.SNI = s.linkServerName(profile, server, linkCertCache)
 		}
 		if sni := mapStr(client, "server_name"); sni != "" {
 			p.SNI = sni
@@ -1416,6 +1424,39 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 		}
 	}
 	return out
+}
+
+// managedServerName is the one rule for the SNI a managed certificate implies:
+// the sing-box inbound (resolveTlsBlock), the relay target spec built from it,
+// and every subscription link all go through here so they cannot drift (#121).
+// Empty when the certificate carries no domain (the stored value stands).
+func managedServerName(stored string, cert *Cert) string {
+	if cert == nil || cert.Domain == "" {
+		return ""
+	}
+	return singbox.EffectiveServerName(stored, cert.Domain, cert.CertPEM)
+}
+
+// linkServerName is the server_name a share link advertises for a TLS profile:
+// the stored value, resolved against the managed certificate exactly as the
+// node's own config is (see managedServerName).
+func (s *Store) linkServerName(t *SbTls, server map[string]interface{}, certCache map[int64]*Cert) string {
+	stored := mapStr(server, "server_name")
+	if t == nil || t.CertID == 0 || t.DecryptFailed {
+		return stored
+	}
+	c, ok := certCache[t.CertID]
+	if !ok {
+		c, _ = s.GetCert(t.CertID)
+		certCache[t.CertID] = c
+	}
+	if c == nil || c.DecryptFailed {
+		return stored
+	}
+	if sni := managedServerName(stored, c); sni != "" {
+		return sni
+	}
+	return stored
 }
 
 func mapStr(m map[string]interface{}, k string) string {
