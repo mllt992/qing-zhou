@@ -350,6 +350,18 @@ func TestRetentionDeletesOldObjects(t *testing.T) {
 			time.Sleep(time.Second)
 		}
 	}
+	// Retention cleanup runs after the record is already saved as completed,
+	// so waitForRecord can return before it; poll instead of racing it.
+	var deleted []string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		fake.mu.Lock()
+		deleted = append([]string(nil), fake.deleted...)
+		fake.mu.Unlock()
+		if len(deleted) >= 1 {
+			break
+		}
+	}
+	time.Sleep(50 * time.Millisecond) // a second, wrong deletion would land here
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if len(fake.deleted) != 1 {
