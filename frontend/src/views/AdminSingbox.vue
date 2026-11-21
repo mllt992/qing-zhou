@@ -146,8 +146,17 @@
                       {{ r.tls_warning }}
                     </n-tooltip>
                   </div>
+                  <!-- TLS 检测（#118）：一次真实握手，单独给出「TLS」状态，不影响入站的可达/健康判定。 -->
+                  <div v-if="tlsCheck[r.id]" class="lc-tls-check" :class="tlsCheck[r.id].status">
+                    <b>TLS {{ tlsStatusText(tlsCheck[r.id].status) }}</b>
+                    <template v-for="(res, i) in tlsCheck[r.id].results || []" :key="i">
+                      <div v-for="(m, j) in [...(res.problems || []), ...(res.warnings || []), ...(res.notes || [])]" :key="j" class="lc-tls-line">{{ res.addr }}：{{ m }}</div>
+                      <div v-if="res.handshake && !(res.problems || []).length && !(res.warnings || []).length" class="lc-tls-line">{{ res.addr }}：握手正常 · {{ res.tls_version }} · 证书剩余 {{ res.days_left }} 天</div>
+                    </template>
+                  </div>
                   <div class="lc-foot">
                     <n-button size="tiny" @click="openInbound(r)">编辑</n-button>
+                    <n-button v-if="r.tls_id && !TLS_PROBE_QUIC.includes(r.type)" size="tiny" :loading="tlsChecking[r.id]" @click="runTlsCheck(r)">TLS 检测</n-button>
                     <n-button size="tiny" @click="cloneInbound(r)">克隆</n-button>
                     <n-button size="tiny" :loading="portChecking === r.id" @click="checkPort(r)">测端口</n-button>
                     <n-button size="tiny" type="error" @click="deleteInbound(r.id)">删除</n-button>
@@ -1529,6 +1538,20 @@ const editingInboundWarning = computed(() => {
   return saved.tls_warning || ''
 })
 
+// TLS 检测（#118）。QUIC 协议无法用 TCP 握手检测，不显示按钮。
+const TLS_PROBE_QUIC = ['tuic', 'hysteria', 'hysteria2']
+const tlsCheck = reactive<Record<number, any>>({})
+const tlsChecking = reactive<Record<number, boolean>>({})
+function tlsStatusText(s: string) {
+  return ({ ok: '正常', warning: '警告', error: '异常', skipped: '已跳过' } as Record<string, string>)[s] || s
+}
+async function runTlsCheck(r: any) {
+  tlsChecking[r.id] = true
+  try {
+    tlsCheck[r.id] = await apiPost('/api/admin/sb/inbounds/' + r.id + '/tls-check', {})
+  } catch (e: any) { message.error(e.message) } finally { tlsChecking[r.id] = false }
+}
+
 function resetIe() {
   Object.assign(ie, {
     id: 0, type: 'vless', tag: '', listen: '::', listen_port: 443, tls_id: 0, server_id: 0, enabled: true,
@@ -2004,4 +2027,9 @@ async function load() {
 }
 .list-card.is-disabled { opacity: 0.72; }
 .inbound-cred { cursor: help; border-bottom: 1px dotted currentColor; }
+.lc-tls-check { margin-top: 6px; padding: 6px 8px; border-radius: 8px; font-size: 12px; line-height: 1.5; background: var(--bg-soft); }
+.lc-tls-check.ok b { color: var(--success, #16a34a); }
+.lc-tls-check.warning b { color: var(--warn, #d97706); }
+.lc-tls-check.error b { color: var(--error, #dc2626); }
+.lc-tls-line { color: var(--text-2); word-break: break-all; }
 </style>
