@@ -429,6 +429,7 @@ func (a *API) Router() http.Handler {
 		ar.Put("/api/admin/sb/inbounds/{id}", a.handleAdminSaveSbInbound)
 		ar.Delete("/api/admin/sb/inbounds/{id}", a.handleAdminDeleteSbInbound)
 		ar.Post("/api/admin/sb/inbounds/{id}/ack-upstream", a.handleAdminAckUpstreamBroken)
+		ar.Post("/api/admin/sb/inbounds/{id}/tls-check", a.handleAdminInboundTLSCheck)
 		ar.Get("/api/admin/sb/preview", a.handleAdminSbPreview)
 		ar.Get("/api/admin/sb/check", a.handleAdminSbCheck)
 		ar.Post("/api/admin/compliance/check", a.handleAdminComplianceCheck)
