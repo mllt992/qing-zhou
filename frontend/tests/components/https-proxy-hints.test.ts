@@ -26,3 +26,8 @@ it('formats fingerprints byte by byte', () => {
   expect(formatFingerprint('abcd12')).toBe('AB:CD:12')
   expect(formatFingerprint(undefined)).toBe('')
 })
+
+it('trusts the backend tls flag: a disabled TLS profile yields no HTTPS hints (#120)', () => {
+  // 后端对 enabled:false 的 TLS 配置返回 tls:false；即使残留证书字段也不能提示 HTTPS。
+  expect(httpsProxyHints({ tls: false, host: '1.2.3.4', sni: 'a.example', self_signed: true, host_mismatch: true })).toEqual([])
+})
