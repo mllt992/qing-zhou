@@ -728,6 +728,16 @@ func sbTLS(p *Proxy, sec string) map[string]any {
 		}
 		tls["reality"] = re
 	}
+	// A self-signed node carries its own certificate (qz-cert): trust exactly
+	// that, as relayClientTLS does for managed hops, instead of disabling
+	// verification. `certificate` replaces the system roots in every sing-box
+	// version, so no client-version detection is needed (#116, #85).
+	if sec == "tls" {
+		if pem := p.pinnedCertPEM(); pem != "" {
+			tls["certificate"] = pem
+			return tls
+		}
+	}
 	if p.tlsInsecure() {
 		tls["insecure"] = true
 	}

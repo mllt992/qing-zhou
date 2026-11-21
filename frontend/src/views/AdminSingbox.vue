@@ -417,7 +417,7 @@
             <n-form-item label=" ">
               <div style="display:flex;flex-direction:column;gap:4px;width:100%;">
                 <n-button :loading="genCertLoading" @click="genSelfSigned">一键生成自签证书（按 SNI）</n-button>
-                <span style="font-size:11px;color:var(--text-3);">自签证书适用于 TUIC / Hysteria2 等允许 insecure 或证书指纹的客户端。需可信证书建议到「证书管理」页申请后在上方引用。</span>
+                <span style="font-size:11px;color:var(--text-3);">自签证书：订阅里的 Clash / sing-box 节点会按证书指纹固定，分享链接带「允许不安全」。需可信证书建议到「证书管理」页申请后在上方引用。</span>
               </div>
             </n-form-item>
             <n-form-item v-if="te.server_id === 0" label=" ">
@@ -1183,6 +1183,9 @@ function onCertPick(id: number) {
   te.cert_id = id
   const c = certList.value.find(x => x.id === id)
   if (c && c.domain) te.server_name = c.domain // SNI 必须与证书域名一致
+  // 自签证书没有 CA 背书，URI 类客户端只能跳过校验；Clash/sing-box 订阅会另外按证书
+  // 指纹固定（#116）。CA 证书则必须校验（后端也会强制关闭）。
+  if (c) te.insecure = !!c.self_signed
 }
 
 // --- SNI 延迟测试 ---
@@ -1250,6 +1253,7 @@ async function genSelfSigned() {
     const r = await apiPost<any>('/api/admin/sb/tls/self-signed', { server_name: host })
     te.certificate = r?.certificate || ''
     te.key = r?.key || ''
+    te.insecure = true // 自签证书：URI 客户端需跳过校验；订阅另按指纹固定（#116）
     message.success('自签证书已生成，请检查后保存')
   } catch (e: any) { message.error(e.message || '生成失败') } finally { genCertLoading.value = false }
 }
