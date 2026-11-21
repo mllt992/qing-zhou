@@ -87,6 +87,26 @@ func waitRemoteEntries(t *testing.T, rm *boundedRemote, n int) {
 	}
 }
 
+// waitRemoteDrained waits until in-flight mock SSH work has finished tearing
+// down. remoteStats can return after cancellation while wait() deferrals have
+// not yet decremented active; asserting immediately is a race.
+func waitRemoteDrained(t *testing.T, c *Controller, rm *boundedRemote) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if rm.active.Load() == 0 && len(c.remoteSlots) == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("SSH workers did not drain: active=%d slots=%d", rm.active.Load(), len(c.remoteSlots))
+		case <-tick.C:
+		}
+	}
+}
+
 func TestRebuildAndRemoteStatsShareSSHLimit(t *testing.T) {
 	c, rm := networkController(40)
 	rebuild := make(chan error, 1)
@@ -117,8 +137,9 @@ func TestRebuildAndRemoteStatsShareSSHLimit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("stats did not drain")
 	}
-	if rm.peak.Load() > remoteConcurrency || rm.active.Load() != 0 || rm.applies.Load() != 40 || rm.tunnels.Load() != 40 || len(c.remoteSlots) != 0 {
-		t.Fatalf("peak=%d active=%d applies=%d tunnels=%d slots=%d", rm.peak.Load(), rm.active.Load(), rm.applies.Load(), rm.tunnels.Load(), len(c.remoteSlots))
+	waitRemoteDrained(t, c, rm)
+	if rm.peak.Load() > remoteConcurrency || rm.applies.Load() != 40 || rm.tunnels.Load() != 40 {
+		t.Fatalf("peak=%d applies=%d tunnels=%d", rm.peak.Load(), rm.applies.Load(), rm.tunnels.Load())
 	}
 }
 
@@ -143,8 +164,9 @@ func TestRemoteStatsCancelsActiveAndQueuedWork(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("canceled stats retained SSH work")
 	}
-	if rm.tunnels.Load() != remoteConcurrency || rm.active.Load() != 0 || len(c.remoteSlots) != 0 {
-		t.Fatalf("tunnels=%d active=%d slots=%d", rm.tunnels.Load(), rm.active.Load(), len(c.remoteSlots))
+	waitRemoteDrained(t, c, rm)
+	if rm.tunnels.Load() != remoteConcurrency {
+		t.Fatalf("tunnels=%d want %d", rm.tunnels.Load(), remoteConcurrency)
 	}
 }
 
@@ -168,7 +190,8 @@ func TestRemoteCapabilityProbeInheritsCancellation(t *testing.T) {
 	if _, ok := c.statsCap[1]; ok {
 		t.Fatal("request cancellation poisoned capability cache")
 	}
-	if rm.tunnels.Load() != 0 || rm.active.Load() != 0 {
+	waitRemoteDrained(t, c, rm)
+	if rm.tunnels.Load() != 0 {
 		t.Fatal("SSH work continued after cancellation")
 	}
 }
