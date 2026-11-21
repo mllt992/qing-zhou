@@ -156,7 +156,7 @@
                   </div>
                   <div class="lc-foot">
                     <n-button size="tiny" @click="openInbound(r)">编辑</n-button>
-                    <n-button v-if="r.tls_id && !TLS_PROBE_QUIC.includes(r.type)" size="tiny" :loading="tlsChecking[r.id]" @click="runTlsCheck(r)">TLS 检测</n-button>
+                    <n-button v-if="(r.tls_id || hasInlineTls(r)) && !TLS_PROBE_QUIC.includes(r.type)" size="tiny" :loading="tlsChecking[r.id]" @click="runTlsCheck(r)">TLS 检测</n-button>
                     <n-button size="tiny" @click="cloneInbound(r)">克隆</n-button>
                     <n-button size="tiny" :loading="portChecking === r.id" @click="checkPort(r)">测端口</n-button>
                     <n-button size="tiny" type="error" @click="deleteInbound(r.id)">删除</n-button>
@@ -1541,6 +1541,13 @@ const editingInboundWarning = computed(() => {
 
 // TLS 检测（#118）。QUIC 协议无法用 TCP 握手检测，不显示按钮。
 const TLS_PROBE_QUIC = ['tuic', 'hysteria', 'hysteria2']
+// 入站 options 里内联的 tls（enabled:true）同样是 TLS 入站（#120），也可检测。
+function hasInlineTls(r: any): boolean {
+  try {
+    const o = typeof r.options === 'string' ? JSON.parse(r.options || '{}') : (r.options || {})
+    return !!(o && o.tls && o.tls.enabled === true)
+  } catch { return false }
+}
 const tlsCheck = reactive<Record<number, any>>({})
 const tlsChecking = reactive<Record<number, boolean>>({})
 function tlsStatusText(s: string) {

@@ -1561,7 +1561,7 @@ func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) 
 			"account_count":       accounts,
 			"user_count":          credentials,
 		}
-		if n.Type == "mixed" && n.TlsID != 0 {
+		if n.Type == "mixed" { // InboundTLSInfo is nil unless TLS is effectively on (profile or inline)
 			hosts := []string{}
 			if n.ServerID == 0 {
 				hosts = append(hosts, a.nodeHost())
