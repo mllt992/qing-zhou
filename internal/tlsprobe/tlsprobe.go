@@ -204,6 +204,10 @@ func Evaluate(r *Result, leaf *x509.Certificate, t Target, now time.Time) {
 		}
 	}
 
+	if t.MustCoverHost && r.SelfSigned {
+		r.Warnings = append(r.Warnings, "这是自签证书，不在系统受信任 CA 列表中：curl、Docker、1Panel、Git、浏览器等标准 HTTPS 代理客户端默认会直接拒连（self-signed certificate）。建议给服务器配置子域名并改用 ACME 真实证书（如泛域名证书）")
+	}
+
 	switch {
 	case now.After(leaf.NotAfter):
 		r.Problems = append(r.Problems, fmt.Sprintf("证书已于 %s 过期", leaf.NotAfter.Format("2006-01-02")))

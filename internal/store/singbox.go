@@ -763,7 +763,7 @@ func (s *Store) BuildSingboxConfigForServer(serverID int64, base, v2rayListen st
 		// host_v6 is the only signal that this machine has an IPv6
 		// subscription address. A leftover egress_ip_strategy value from
 		// the removed manual option is ignored.
-		if sv != nil && strings.TrimSpace(sv.HostV6) != "" {
+		if sv != nil && sv.ClientHostV6() != "" {
 			follow = true
 		}
 	}
@@ -931,13 +931,13 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		nodeHost := host
 		if ib.ServerID != 0 {
 			if sv, ok := serverCache[ib.ServerID]; ok {
-				if sv != nil && sv.Host != "" {
-					nodeHost = sv.Host
+				if ch := sv.ClientHost(); ch != "" {
+					nodeHost = ch
 				}
 			} else if sv, _ := s.GetServer(ib.ServerID); sv != nil {
 				serverCache[ib.ServerID] = sv
-				if sv.Host != "" {
-					nodeHost = sv.Host
+				if ch := sv.ClientHost(); ch != "" {
+					nodeHost = ch
 				}
 			} else {
 				serverCache[ib.ServerID] = nil // negative cache
@@ -1328,13 +1328,13 @@ func (s *Store) BuildUserProxies(u *User, host string) []UserProxy {
 		nodeHost := host
 		if ib.ServerID != 0 {
 			if sv, ok := serverCache[ib.ServerID]; ok {
-				if sv != nil && sv.Host != "" {
-					nodeHost = sv.Host
+				if ch := sv.ClientHost(); ch != "" {
+					nodeHost = ch
 				}
 			} else if sv, _ := s.GetServer(ib.ServerID); sv != nil {
 				serverCache[ib.ServerID] = sv
-				if sv.Host != "" {
-					nodeHost = sv.Host
+				if ch := sv.ClientHost(); ch != "" {
+					nodeHost = ch
 				}
 			} else {
 				serverCache[ib.ServerID] = nil // negative cache
@@ -1917,7 +1917,7 @@ func serverHostV6(cache map[int64]*Server, id int64) string {
 		return ""
 	}
 	if sv := cache[id]; sv != nil {
-		return strings.TrimSpace(sv.HostV6)
+		return sv.ClientHostV6()
 	}
 	return ""
 }

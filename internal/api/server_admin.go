@@ -70,6 +70,8 @@ func (a *API) handleAdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	sv.Name = strings.TrimSpace(sv.Name)
 	sv.Host = strings.TrimSpace(sv.Host)
 	sv.HostV6 = strings.Trim(strings.TrimSpace(sv.HostV6), "[]")
+	sv.Domain = normalizeDomainField(sv.Domain)
+	sv.DomainV6 = normalizeDomainField(sv.DomainV6)
 	strategy, valid := singbox.NormalizeEgressIPStrategy(sv.EgressIPStrategy)
 	if !valid {
 		fail(w, http.StatusBadRequest, "无效的出站 IPv4/IPv6 偏好")
@@ -141,6 +143,8 @@ func (a *API) handleAdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	sv.Name = strings.TrimSpace(sv.Name)
 	sv.Host = strings.TrimSpace(sv.Host)
 	sv.HostV6 = strings.Trim(strings.TrimSpace(sv.HostV6), "[]")
+	sv.Domain = normalizeDomainField(sv.Domain)
+	sv.DomainV6 = normalizeDomainField(sv.DomainV6)
 	strategy, valid := singbox.NormalizeEgressIPStrategy(sv.EgressIPStrategy)
 	if !valid {
 		fail(w, http.StatusBadRequest, "无效的出站 IPv4/IPv6 偏好")

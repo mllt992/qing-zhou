@@ -30,6 +30,10 @@ type Server struct {
 	// HostV6 是可选的 IPv6 订阅地址（IPv6 字面量或 AAAA 域名）。非空时订阅为该
 	// 服务器的每个入站额外输出一条「原名-v6」节点；SSH 始终走 Host。
 	HostV6 string `json:"host_v6"`
+	// Domain / DomainV6 是可选的客户端对外域名（如通过 Cloudflare DNS 配置的子域名）。
+	// 非空时订阅链接、HTTPS 代理地址与证书校验优先使用 Domain / DomainV6，而 SSH 始终走 Host。
+	Domain   string `json:"domain"`
+	DomainV6 string `json:"domain_v6"`
 	// EgressIPStrategy is retained for compatibility (migration 000014) but
 	// is no longer applied when generating sing-box config. Locally-direct
 	// egress on a server with HostV6 follows the client's connect family.
@@ -97,7 +101,31 @@ type Server struct {
 	SSHKeyPath string `json:"ssh_key_path"`
 }
 
-const serverCols = `id, sort_order, name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, traffic_accounting_mode, provider, location, spec, price, notes, host_key, public_visible, public_show_traffic, public_show_price, use_sudo, sudo_password, ssh_key_path, host_v6, egress_ip_strategy`
+// ClientHost returns the address advertised to clients for this server:
+// Domain when configured, otherwise Host. SSH connections always use Host.
+func (sv *Server) ClientHost() string {
+	if sv == nil {
+		return ""
+	}
+	if d := strings.TrimSpace(sv.Domain); d != "" {
+		return d
+	}
+	return strings.TrimSpace(sv.Host)
+}
+
+// ClientHostV6 returns the IPv6 address/domain advertised to clients:
+// DomainV6 when configured, otherwise HostV6.
+func (sv *Server) ClientHostV6() string {
+	if sv == nil {
+		return ""
+	}
+	if d := strings.TrimSpace(sv.DomainV6); d != "" {
+		return d
+	}
+	return strings.TrimSpace(sv.HostV6)
+}
+
+const serverCols = `id, sort_order, name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, traffic_accounting_mode, provider, location, spec, price, notes, host_key, public_visible, public_show_traffic, public_show_price, use_sudo, sudo_password, ssh_key_path, host_v6, egress_ip_strategy, domain, domain_v6`
 
 func (s *Store) ListServers() ([]*Server, error) {
 	rows, err := s.db.Query(`SELECT ` + serverCols + ` FROM servers ORDER BY sort_order, id`)
@@ -157,8 +185,8 @@ func (s *Store) CreateServer(sv Server) (int64, error) {
 	// did before the flag existed. Hiding one is an explicit act, done through
 	// UpdateServer — and a bool field cannot tell "caller wants it hidden" from
 	// "caller never filled this in", which is the whole reason it isn't here.
-	res, err := s.db.Exec(`INSERT INTO servers (name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, probe_token_hash, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, provider, location, spec, price, notes, use_sudo, sudo_password, ssh_key_path, host_v6, egress_ip_strategy, sort_order)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM servers))`,
+	res, err := s.db.Exec(`INSERT INTO servers (name, host, port, ssh_user, ssh_key, ssh_key_pass, ssh_password, config_path, systemd_unit, sing_box_bin, v2ray_listen, enabled, status, last_seen, created_at, updated_at, probe_enabled, probe_token, probe_token_hash, expiry_date, expiry_notify_enabled, expiry_notify_days, expiry_notify_mode, expiry_notify_count, traffic_limit_bytes, traffic_reset_day, traffic_reset_minute, traffic_alert_percent, provider, location, spec, price, notes, use_sudo, sudo_password, ssh_key_path, host_v6, egress_ip_strategy, domain, domain_v6, sort_order)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM servers))`,
 		sv.Name, sv.Host, sv.Port, sv.SSHUser, s.encrypt(sv.SSHKey), s.encrypt(sv.SSHKeyPass), s.encrypt(sv.SSHPassword),
 		sv.ConfigPath, sv.SystemdUnit, sv.SingBoxBin, sv.V2rayListen,
 		b2i(sv.Enabled), sv.Status, sv.LastSeen, now, now,
@@ -166,7 +194,8 @@ func (s *Store) CreateServer(sv Server) (int64, error) {
 		b2i(sv.ExpiryNotifyEnabled), sv.ExpiryNotifyDays, sv.ExpiryNotifyMode, sv.ExpiryNotifyCount,
 		sv.TrafficLimitBytes, sv.TrafficResetDay, sv.TrafficResetMinute, sv.TrafficAlertPercent,
 		sv.Provider, sv.Location, sv.Spec, sv.Price, sv.Notes,
-		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), strings.TrimSpace(sv.EgressIPStrategy))
+		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), strings.TrimSpace(sv.EgressIPStrategy),
+		strings.TrimSpace(sv.Domain), strings.TrimSpace(sv.DomainV6))
 	if err != nil {
 		return 0, err
 	}
@@ -184,14 +213,15 @@ func (s *Store) UpdateServer(sv Server) error {
 	if err := normalizeServerEgressIPStrategy(&sv); err != nil {
 		return err
 	}
-	_, err = tx.Exec(`UPDATE servers SET name=?, host=?, port=?, ssh_user=?, ssh_key=?, ssh_key_pass=?, ssh_password=?, config_path=?, systemd_unit=?, sing_box_bin=?, v2ray_listen=?, enabled=?, updated_at=?, probe_enabled=?, probe_token=?, probe_token_hash=?, expiry_date=?, expiry_notify_enabled=?, expiry_notify_days=?, expiry_notify_mode=?, expiry_notify_count=?, traffic_limit_bytes=?, traffic_reset_day=?, traffic_reset_minute=?, traffic_alert_percent=?, traffic_accounting_mode=?, provider=?, location=?, spec=?, price=?, notes=?, public_visible=?, public_show_traffic=?, public_show_price=?, use_sudo=?, sudo_password=?, ssh_key_path=?, host_v6=?, egress_ip_strategy=? WHERE id=?`,
+	_, err = tx.Exec(`UPDATE servers SET name=?, host=?, port=?, ssh_user=?, ssh_key=?, ssh_key_pass=?, ssh_password=?, config_path=?, systemd_unit=?, sing_box_bin=?, v2ray_listen=?, enabled=?, updated_at=?, probe_enabled=?, probe_token=?, probe_token_hash=?, expiry_date=?, expiry_notify_enabled=?, expiry_notify_days=?, expiry_notify_mode=?, expiry_notify_count=?, traffic_limit_bytes=?, traffic_reset_day=?, traffic_reset_minute=?, traffic_alert_percent=?, traffic_accounting_mode=?, provider=?, location=?, spec=?, price=?, notes=?, public_visible=?, public_show_traffic=?, public_show_price=?, use_sudo=?, sudo_password=?, ssh_key_path=?, host_v6=?, egress_ip_strategy=?, domain=?, domain_v6=? WHERE id=?`,
 		sv.Name, sv.Host, sv.Port, sv.SSHUser, s.encrypt(sv.SSHKey), s.encrypt(sv.SSHKeyPass), s.encrypt(sv.SSHPassword),
 		sv.ConfigPath, sv.SystemdUnit, sv.SingBoxBin, sv.V2rayListen,
 		b2i(sv.Enabled), now, b2i(sv.ProbeEnabled), s.encrypt(sv.ProbeToken), hashProbeToken(sv.ProbeToken), sv.ExpiryDate,
 		b2i(sv.ExpiryNotifyEnabled), sv.ExpiryNotifyDays, sv.ExpiryNotifyMode, sv.ExpiryNotifyCount,
 		sv.TrafficLimitBytes, sv.TrafficResetDay, sv.TrafficResetMinute, sv.TrafficAlertPercent, sv.TrafficAccountingMode,
 		sv.Provider, sv.Location, sv.Spec, sv.Price, sv.Notes, b2i(sv.PublicVisible), b2i(sv.PublicShowTraffic), b2i(sv.PublicShowPrice),
-		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), strings.TrimSpace(sv.EgressIPStrategy), sv.ID)
+		b2i(sv.UseSudo), s.encrypt(sv.SudoPassword), sv.SSHKeyPath, strings.TrimSpace(sv.HostV6), strings.TrimSpace(sv.EgressIPStrategy),
+		strings.TrimSpace(sv.Domain), strings.TrimSpace(sv.DomainV6), sv.ID)
 	if err != nil {
 		return err
 	}
@@ -312,6 +342,24 @@ func (s *Store) SetServerSingBoxBin(id int64, bin string) error {
 	return err
 }
 
+// UpdateServerDomains updates only the client-facing domain fields so DNS
+// automation never overwrites concurrent SSH/monitor edits.
+func (s *Store) UpdateServerDomains(id int64, domain, domainV6 string) error {
+	res, err := s.db.Exec(`UPDATE servers SET domain=?, domain_v6=?, updated_at=? WHERE id=?`,
+		strings.TrimSpace(domain), strings.TrimSpace(domainV6), time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SetServerHostKey pins (or updates) the SSH host key for a server. Called on
 // first successful connect (TOFU) so subsequent connects are verified against it.
 func (s *Store) SetServerHostKey(id int64, hostKey string) error {
@@ -335,7 +383,7 @@ func scanServer(sc scanner) (*Server, error) {
 		&probeEnabled, &sv.ProbeToken, &sv.ExpiryDate, &expiryNotifyEnabled, &sv.ExpiryNotifyDays, &sv.ExpiryNotifyMode, &sv.ExpiryNotifyCount,
 		&sv.TrafficLimitBytes, &sv.TrafficResetDay, &sv.TrafficResetMinute, &sv.TrafficAlertPercent, &sv.TrafficAccountingMode,
 		&sv.Provider, &sv.Location, &sv.Spec, &sv.Price, &sv.Notes, &sv.HostKey,
-		&publicVisible, &publicShowTraffic, &publicShowPrice, &useSudo, &sv.SudoPassword, &sv.SSHKeyPath, &sv.HostV6, &sv.EgressIPStrategy)
+		&publicVisible, &publicShowTraffic, &publicShowPrice, &useSudo, &sv.SudoPassword, &sv.SSHKeyPath, &sv.HostV6, &sv.EgressIPStrategy, &sv.Domain, &sv.DomainV6)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

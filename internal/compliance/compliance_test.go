@@ -1,6 +1,10 @@
 package compliance
 
-import "testing"
+import (
+	"context"
+	"net"
+	"testing"
+)
 
 func rules(fs []Finding) map[string]string {
 	m := map[string]string{}
@@ -126,5 +130,102 @@ WEB 8443 400 200`
 	// panel's own port on the panel host is reported by AnalyzePanel instead
 	if fs := AnalyzeListeners(ParseListeners(ns), nil, 8080); len(fs) != 0 {
 		t.Errorf("panel port double-reported: %v", fs)
+	}
+}
+
+func TestSourceFamilyEgressDoesNotBypassProxyRestriction(t *testing.T) {
+	// FollowSourceFamilyEgress emits source_ip_cidr:["0.0.0.0/0","::ffff:0:0/96"]
+	// for both resolve and direct-v4pref routing. That wildcard must NEVER fool
+	// restricted() into thinking a public mixed proxy has an IP allow-list.
+	cfg := `{
+	  "inbounds": [
+	    {"type":"mixed","tag":"m-open","listen":"::","listen_port":9582},
+	    {"type":"mixed","tag":"m-auth","listen":"::","listen_port":9583,"users":[{"username":"a","password":"b"}]}
+	  ],
+	  "route": {"rules": [
+	    {"inbound":["m-open","m-auth"],"source_ip_cidr":["0.0.0.0/0","::ffff:0:0/96"],"action":"resolve","strategy":"prefer_ipv4"},
+	    {"inbound":["m-open","m-auth"],"source_ip_cidr":["0.0.0.0/0","::ffff:0:0/96"],"outbound":"direct-v4pref"}
+	  ]}
+	}`
+	fs, _, err := AnalyzeConfig([]byte(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byTarget := map[string]map[string]string{}
+	for _, f := range fs {
+		if byTarget[f.Target] == nil {
+			byTarget[f.Target] = map[string]string{}
+		}
+		byTarget[f.Target][f.Rule] = f.Severity
+	}
+	if byTarget["m-open"]["proxy_open"] != High {
+		t.Fatalf("open mixed with wildcard source_ip_cidr must still be proxy_open High: %+v", byTarget["m-open"])
+	}
+	if byTarget["m-auth"]["proxy_no_ip_limit"] != Medium {
+		t.Fatalf("authed mixed with wildcard source_ip_cidr must still be proxy_no_ip_limit Medium: %+v", byTarget["m-auth"])
+	}
+}
+
+func TestRealityCDNAndFallbackCompliance(t *testing.T) {
+	cfg := `{
+	  "inbounds": [
+	    {
+	      "type":"vless","tag":"r-cf","listen":"::","listen_port":7056,
+	      "tls":{"enabled":true,"server_name":"www.cloudflare.com","reality":{"enabled":true,"handshake":{"server":"www.cloudflare.com","server_port":443},"short_id":[""]}}
+	    },
+	    {
+	      "type":"vless","tag":"r-ak","listen":"::","listen_port":7057,
+	      "tls":{"enabled":true,"server_name":"www.icloud.com","reality":{"enabled":true,"handshake":{"server":"www.icloud.com","server_port":443},"short_id":["aabbccdd"]}}
+	    },
+	    {
+	      "type":"vless","tag":"r-custom","listen":"::","listen_port":7058,
+	      "tls":{"enabled":true,"server_name":"blog.example.org","reality":{"enabled":true,"handshake":{"server":"blog.example.org","server_port":443},"short_id":["aabbccdd"]}}
+	    },
+	    {
+	      "type":"hysteria2","tag":"hy-ext","listen":"::","listen_port":10954,
+	      "masquerade":"https://www.cloudflare.com"
+	    },
+	    {
+	      "type":"trojan","tag":"tj-ext","listen":"::","listen_port":8888,
+	      "fallback":{"server":"www.cloudflare.com","server_port":443}
+	    }
+	  ]
+	}`
+	fs, _, err := AnalyzeConfig([]byte(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byTarget := map[string]map[string]string{}
+	for _, f := range fs {
+		if byTarget[f.Target] == nil {
+			byTarget[f.Target] = map[string]string{}
+		}
+		byTarget[f.Target][f.Rule] = f.Severity
+	}
+	if byTarget["r-cf"]["reality_cdn_fallback"] != High || byTarget["r-cf"]["reality_empty_short_id"] != Medium {
+		t.Fatalf("r-cf findings wrong: %+v", byTarget["r-cf"])
+	}
+	if byTarget["r-ak"]["reality_cdn_fallback"] != Medium {
+		t.Fatalf("r-ak findings wrong: %+v", byTarget["r-ak"])
+	}
+	if len(byTarget["r-custom"]) != 0 {
+		t.Fatalf("r-custom should not trigger static CDN rule: %+v", byTarget["r-custom"])
+	}
+	if byTarget["hy-ext"]["hysteria2_external_masquerade"] != High {
+		t.Fatalf("hy-ext findings wrong: %+v", byTarget["hy-ext"])
+	}
+	if byTarget["tj-ext"]["fallback_external"] != High {
+		t.Fatalf("tj-ext findings wrong: %+v", byTarget["tj-ext"])
+	}
+
+	// Live DNS check catches a custom domain proxied behind Cloudflare edge IPs.
+	dnsFindings := AnalyzeRealityDNS(context.Background(), []byte(cfg), func(_ context.Context, host string) ([]net.IP, error) {
+		if host == "blog.example.org" {
+			return []net.IP{net.ParseIP("104.21.10.20")}, nil
+		}
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	})
+	if len(dnsFindings) != 1 || dnsFindings[0].Target != "r-custom" || dnsFindings[0].Rule != "reality_cloudflare_ip" || dnsFindings[0].Severity != High {
+		t.Fatalf("AnalyzeRealityDNS got %+v", dnsFindings)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"qingzhou/frontend"
 	"qingzhou/internal/assets"
 	"qingzhou/internal/backup"
+	"qingzhou/internal/cfdns"
 	"qingzhou/internal/mailer"
 	"qingzhou/internal/sbctl"
 	"qingzhou/internal/store"
@@ -74,6 +75,7 @@ type API struct {
 	// Tests replace Telegram I/O; production leaves these nil.
 	tgSendFn   func(chatID int64, html string) error
 	tgClientFn func(token string) *telegram.Client
+	cfClientFn func(token string) *cfdns.Client
 	// Tests replace SMTP I/O for manual email broadcasts; production leaves this nil.
 	mailSendFn func(to []string, subject, html string) error
 
@@ -330,6 +332,8 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/settings/default-templates", a.handleGetDefaultTemplates)
 		ar.Post("/api/admin/settings/test-smtp", a.handleTestSMTP)
 		ar.Post("/api/admin/settings/test-telegram", a.handleTestTelegram)
+		ar.Post("/api/admin/settings/test-cf-token", a.handleTestCFToken)
+		ar.Get("/api/admin/cf/zones", a.handleAdminCFZones)
 		ar.Get("/api/admin/ops-recipients", a.handleListOpsRecipients)
 		ar.Put("/api/admin/ops-recipients/{id}", a.handleSetOpsRecipient)
 		ar.Post("/api/admin/ops-recipients/test", a.handleTestOpsAlert)
@@ -448,6 +452,8 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/servers/{id}/rebuild", a.handleAdminRebuildServer)
 		// Recover from a legitimately changed host key (reinstalled/replaced node).
 		ar.Post("/api/admin/servers/{id}/clear-host-key", a.handleAdminClearServerHostKey)
+		ar.Post("/api/admin/servers/{id}/dns", a.handleAdminServerCFDNS)
+		ar.Delete("/api/admin/servers/{id}/dns", a.handleAdminDeleteServerCFDNS)
 		ar.Get("/api/admin/ssh-keys", a.handleAdminListSSHKeys)
 		ar.Put("/api/admin/servers/{id}/monitor", a.handleUpdateServerMonitor)
 		ar.Put("/api/admin/servers/{id}/traffic-calibration", a.handleCalibrateServerTraffic)

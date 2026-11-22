@@ -31,7 +31,7 @@ func (a *API) handleAdminInboundTLSCheck(w http.ResponseWriter, r *http.Request)
 	if ib.ServerID == 0 {
 		host = a.nodeHost()
 	} else if sv, _ := a.st.GetServer(ib.ServerID); sv != nil {
-		host, hostV6 = strings.TrimSpace(sv.Host), strings.TrimSpace(sv.HostV6)
+		host, hostV6 = sv.ClientHost(), sv.ClientHostV6()
 		if host == "" {
 			host = a.nodeHost()
 		}

@@ -384,6 +384,11 @@
               </n-input-group>
             </n-form-item>
             <n-form-item label="握手端口"><n-input-number v-model:value="te.handshake_port" :min="1" :max="65535" style="width:100%;" /></n-form-item>
+            <n-form-item label=" ">
+              <n-alert type="warning" :show-icon="false" style="width:100%;font-size:12px;">
+                请勿选择托管在 <b>Cloudflare / Akamai / Fastly</b> 等大型共享 CDN 上的域名作为 Reality 握手目标：未认证流量会被透明回落到对应 CDN 边缘，可能被扫描器/僵尸网络利用并触发机房（如 DMIT）C2 代理滥用封禁。优先选择独立源站或本机静态站，或改用自有证书的 VLESS+TLS / Hysteria2。
+              </n-alert>
+            </n-form-item>
             <n-form-item v-if="hsResult" label=" ">
               <div class="sni-result" :class="hsResult.status">
                 <span v-if="hsResult.status === 'ok'" class="ok"><b>连通</b> · 平均 {{ hsResult.avg_ms.toFixed(0) }}ms ({{ hsResult.ok }}/{{ hsResult.total }})</span>
@@ -635,7 +640,11 @@
             </div>
           </n-form-item>
           <n-form-item v-if="ie.type === 'mixed' && ie.tls_id" label=" ">
-            <n-tag type="success" size="small">已绑定 TLS，保存后即为 HTTPS 代理（1Panel 代理类型选 HTTPS）</n-tag>
+            <n-alert v-if="editingMixedTlsSelfSigned" type="warning" :show-icon="false" style="width:100%;">
+              当前绑定的是<b>自签证书</b>：1Panel、Docker、curl、Git、浏览器等标准 HTTPS 代理客户端默认会因 <code>self-signed certificate</code> 直接拒连（仅支持跳过校验的客户端可用）。
+              推荐到「服务器管理」给节点配置 Cloudflare 子域名，并在「证书管理」申请一张泛域名真实证书（如 <code>*.example.com</code>）绑定此处。
+            </n-alert>
+            <n-tag v-else type="success" size="small">已绑定 CA 证书，保存后即为受系统信任的 HTTPS 代理（1Panel 代理类型选 HTTPS）</n-tag>
           </n-form-item>
           <!-- 证书不覆盖节点地址（#115）：HTTPS 代理客户端只能按地址校验证书。警告来自
                已保存的入站（列表接口 tls_warning），换了证书需保存后刷新才会更新。 -->
@@ -1070,9 +1079,12 @@ const listenOpts = [
   { label: '0.0.0.0（仅 IPv4）', value: '0.0.0.0' },
   { label: '127.0.0.1（仅本机）', value: '127.0.0.1' },
 ]
+// Avoid multi-tenant CDN domains (Cloudflare / Akamai / Fastly) as Reality
+// presets: unauthenticated traffic falls back to the shared CDN edge and can
+// trigger hosting-provider C2-proxy abuse notices.
 const sniPresets = [
-  'www.microsoft.com', 'www.tesla.com', 'www.apple.com', 'www.icloud.com',
-  'www.akamai.com', 'www.cloudflare.com', 'www.amazon.com', 'gateway.icloud.com',
+  'www.microsoft.com', 'www.amazon.com', 'www.bing.com', 'www.yahoo.com',
+  'www.sony.com', 'www.nvidia.com', 'www.oracle.com',
 ].map(v => ({ label: v, value: v }))
 const presetOpts = [
   { label: 'VLESS + Reality + Vision', value: 'vless-reality' },
@@ -1537,6 +1549,24 @@ const editingInboundWarning = computed(() => {
   const saved = inbounds.value.find((n: any) => n.id === ie.id)
   if (!saved || saved.tls_id !== ie.tls_id) return ''
   return saved.tls_warning || ''
+})
+
+// 判断当前选中的 mixed 入站 TLS 配置是否为自签证书，用于在抽屉里给出准确提示。
+const editingMixedTlsSelfSigned = computed(() => {
+  if (ie.type !== 'mixed' || !ie.tls_id) return false
+  const t = tlsList.value.find((x: any) => x.id === ie.tls_id)
+  if (!t) return false
+  if (t.cert_id) {
+    const c = certList.value.find((x: any) => x.id === t.cert_id)
+    if (c) return !!c.self_signed
+  }
+  const client = jp(t.client_json)
+  if (client?.insecure) return true
+  if (ie.id) {
+    const saved = inbounds.value.find((n: any) => n.id === ie.id)
+    if (saved && saved.tls_id === ie.tls_id && saved.tls_info) return !!saved.tls_info.self_signed
+  }
+  return false
 })
 
 // TLS 检测（#118）。QUIC 协议无法用 TCP 握手检测，不显示按钮。

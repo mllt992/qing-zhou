@@ -97,6 +97,9 @@ func (a *API) checkCompliance(ctx context.Context, t *complianceServer, run func
 		t.ConfigNote = "配置无法解析，配置项未检查"
 	} else {
 		t.Findings, owned = append(t.Findings, fs...), o
+		dnsCtx, cancelDNS := context.WithTimeout(ctx, 3*time.Second)
+		t.Findings = append(t.Findings, compliance.AnalyzeRealityDNS(dnsCtx, cfg, nil)...)
+		cancelDNS()
 	}
 	pport := 0
 	if t.ServerID == 0 {

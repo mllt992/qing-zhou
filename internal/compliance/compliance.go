@@ -10,9 +10,11 @@
 package compliance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,16 +78,30 @@ func IsPublicBind(addr string) bool {
 	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
 }
 
+type inboundTLS struct {
+	Enabled    bool   `json:"enabled"`
+	ServerName string `json:"server_name"`
+	Reality    *struct {
+		Enabled   bool `json:"enabled"`
+		Handshake struct {
+			Server     string `json:"server"`
+			ServerPort int    `json:"server_port"`
+		} `json:"handshake"`
+		ShortID json.RawMessage `json:"short_id"`
+	} `json:"reality"`
+}
+
 type inbound struct {
-	Type       string                  `json:"type"`
-	Tag        string                  `json:"tag"`
-	Listen     string                  `json:"listen"`
-	ListenPort int                     `json:"listen_port"`
-	Users      []json.RawMessage       `json:"users"`
-	TLS        *struct{ Enabled bool } `json:"tls"`
-	Transport  map[string]interface{}  `json:"transport"`
-	Fallback   map[string]interface{}  `json:"fallback"`
-	FallbackFA map[string]interface{}  `json:"fallback_for_alpn"`
+	Type       string                 `json:"type"`
+	Tag        string                 `json:"tag"`
+	Listen     string                 `json:"listen"`
+	ListenPort int                    `json:"listen_port"`
+	Users      []json.RawMessage      `json:"users"`
+	TLS        *inboundTLS            `json:"tls"`
+	Transport  map[string]interface{} `json:"transport"`
+	Fallback   map[string]interface{} `json:"fallback"`
+	FallbackFA map[string]interface{} `json:"fallback_for_alpn"`
+	Masquerade json.RawMessage        `json:"masquerade"`
 }
 
 type config struct {
@@ -108,17 +124,63 @@ var proxyTypes = map[string]string{"http": "HTTP", "socks": "SOCKS", "mixed": "H
 
 // restricted reports whether a route rule limits who may use this inbound by
 // source address (an allow-list), which is what providers mean by 设限制.
+// Non-filtering resolve rules and wildcard CIDRs (0.0.0.0/0, ::/0, ::ffff:0:0/96
+// emitted by FollowSourceFamilyEgress) never count as a source restriction.
 func restricted(rules []map[string]interface{}, tag string) bool {
 	for _, r := range rules {
 		if !mentions(r["inbound"], tag) {
 			continue
 		}
-		if _, ok := r["source_ip_cidr"]; ok {
+		if act, _ := r["action"].(string); act == "resolve" || act == "sniff" || act == "hijack-dns" {
+			continue
+		}
+		if v, ok := r["source_ip_cidr"]; ok && hasNarrowSourceCIDR(v) {
 			return true
 		}
 		if v, ok := r["source_ip_is_private"].(bool); ok && v {
 			return true
 		}
+	}
+	return false
+}
+
+func hasNarrowSourceCIDR(v interface{}) bool {
+	isWildcard := func(s string) bool {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" || s == "0.0.0.0/0" || s == "::/0" || s == "::ffff:0:0/96" || s == "::ffff:0.0.0.0/96" {
+			return true
+		}
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return false
+		}
+		ones, _ := ipNet.Mask.Size()
+		return ones == 0
+	}
+	switch t := v.(type) {
+	case string:
+		return !isWildcard(t)
+	case []interface{}:
+		if len(t) == 0 {
+			return false
+		}
+		for _, x := range t {
+			s, _ := x.(string)
+			if isWildcard(s) {
+				return false
+			}
+		}
+		return true
+	case []string:
+		if len(t) == 0 {
+			return false
+		}
+		for _, s := range t {
+			if isWildcard(s) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
@@ -198,7 +260,78 @@ func AnalyzeConfig(raw []byte) ([]Finding, map[int]string, error) {
 			}
 			continue
 		}
+		// Reality / Hysteria2 / Fallback abuse checks apply on EVERY public port,
+		// not only 80/443/8080/8443: scanners probe arbitrary high ports too.
+		if ib.TLS != nil && ib.TLS.Enabled && ib.TLS.Reality != nil && ib.TLS.Reality.Enabled {
+			target := strings.TrimSpace(ib.TLS.Reality.Handshake.Server)
+			if target == "" {
+				target = strings.TrimSpace(ib.TLS.ServerName)
+			}
+			if cdnKind, cdnLabel := classifySharedCDNHost(target); cdnKind != "" {
+				sev := Medium
+				if cdnKind == "cloudflare" {
+					sev = High
+				}
+				out = append(out, Finding{
+					Rule:     "reality_cdn_fallback",
+					Severity: sev,
+					Port:     ib.ListenPort,
+					Target:   name,
+					Title:    fmt.Sprintf("Reality 握手目标指向 %s 共享 CDN（%s）", cdnLabel, target),
+					Detail:   fmt.Sprintf("入站「%s」（端口 %d）的 Reality 回落目标 %s 托管在 %s 共享边缘网络。未认证的外部请求伪造 SNI 后会被原样透传到该 CDN 边缘节点，可能被僵尸网络用作 C2 代理或触发服务商（如 DMIT）滥用警告。", name, ib.ListenPort, target, cdnLabel),
+					Fix:      "将 Reality 握手目标更换为独立源站（非 Cloudflare / Akamai / Fastly 等多租户 CDN），或改用自有域名证书的 VLESS+TLS / Hysteria2（不向外网回落）。",
+				})
+			}
+			if realityHasEmptyShortID(ib.TLS.Reality.ShortID) {
+				out = append(out, Finding{
+					Rule:     "reality_empty_short_id",
+					Severity: Medium,
+					Port:     ib.ListenPort,
+					Target:   name,
+					Title:    "Reality 未设置有效 Short ID（允许空 short_id）",
+					Detail:   fmt.Sprintf("入站「%s」（端口 %d）的 Reality short_id 为空或包含空字符串，降低了握手校验强度。", name, ib.ListenPort),
+					Fix:      "在 TLS/Reality 配置中生成至少一个非空十六进制 Short ID，并移除空项。",
+				})
+			}
+		}
+		if ib.Type == "hysteria2" {
+			if targetURL := externalMasqueradeURL(ib.Masquerade); targetURL != "" {
+				u, _ := url.Parse(targetURL)
+				host := ""
+				if u != nil {
+					host = u.Hostname()
+				}
+				sev := Medium
+				if cdnKind, _ := classifySharedCDNHost(host); cdnKind == "cloudflare" {
+					sev = High
+				}
+				out = append(out, Finding{
+					Rule:     "hysteria2_external_masquerade",
+					Severity: sev,
+					Port:     ib.ListenPort,
+					Target:   name,
+					Title:    "Hysteria2 伪装（masquerade）反代了外部网站",
+					Detail:   fmt.Sprintf("入站「%s」（端口 %d）将未认证的 HTTP/3 流量反向代理到外部地址 %s，可能被外部滥用或触发服务商开放代理告警。", name, ib.ListenPort, targetURL),
+					Fix:      "移除 masquerade 配置（默认由本机直接返回 404），或改为指向本机静态文件目录。",
+				})
+			}
+		}
 		if !WebPorts[ib.ListenPort] {
+			if ext := externalFallbackTarget(ib.Fallback, ib.FallbackFA); ext != "" {
+				sev := Medium
+				if cdnKind, _ := classifySharedCDNHost(ext); cdnKind == "cloudflare" {
+					sev = High
+				}
+				out = append(out, Finding{
+					Rule:     "fallback_external",
+					Severity: sev,
+					Port:     ib.ListenPort,
+					Target:   name,
+					Title:    fmt.Sprintf("入站回落（fallback）指向外部主机 %s", ext),
+					Detail:   fmt.Sprintf("入站「%s」（端口 %d）将未认证流量回落转发到外部服务器 %s，可能导致本机被当作未认证 HTTPS 跳板。", name, ib.ListenPort, ext),
+					Fix:      "删除指向外网的 fallback，或改为回落到 127.0.0.1 上的本机静态页面。",
+				})
+			}
 			continue
 		}
 		if fb := ib.Fallback; len(fb) > 0 || len(ib.FallbackFA) > 0 {
@@ -399,4 +532,211 @@ func Sort(fs []Finding) {
 		}
 		return fs[i].Port < fs[j].Port
 	})
+}
+
+var cloudflareCIDRs = mustParseCIDRs([]string{
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+	"2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+})
+
+func mustParseCIDRs(list []string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(list))
+	for _, s := range list {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err == nil {
+			out = append(out, ipNet)
+		}
+	}
+	return out
+}
+
+// IsCloudflareIP reports whether ip falls inside Cloudflare's published edge ranges.
+func IsCloudflareIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range cloudflareCIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifySharedCDNHost matches well-known multi-tenant CDN domains/IPs whose
+// use as a Reality handshake or unauthenticated fallback turns a node into an
+// open relay to other tenants on the same edge.
+func classifySharedCDNHost(host string) (kind, label string) {
+	h := strings.TrimSuffix(strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]")), ".")
+	if h == "" {
+		return "", ""
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		if IsCloudflareIP(ip) {
+			return "cloudflare", "Cloudflare"
+		}
+		return "", ""
+	}
+	matchSuffix := func(domains ...string) bool {
+		for _, d := range domains {
+			if h == d || strings.HasSuffix(h, "."+d) {
+				return true
+			}
+		}
+		return false
+	}
+	if matchSuffix("cloudflare.com", "cloudflare.net", "cloudflareclient.com", "workers.dev", "pages.dev", "chatgpt.com", "openai.com", "discord.com") {
+		return "cloudflare", "Cloudflare"
+	}
+	if matchSuffix("icloud.com", "apple.com", "akamai.com", "akamai.net", "akamaized.net", "edgekey.net", "edgesuite.net") {
+		return "akamai", "Akamai"
+	}
+	if matchSuffix("fastly.net", "fastly.com", "tesla.com") {
+		return "cdn", "多租户"
+	}
+	return "", ""
+}
+
+func realityHasEmptyShortID(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return true
+	}
+	var single string
+	if json.Unmarshal(raw, &single) == nil {
+		return strings.TrimSpace(single) == ""
+	}
+	var list []string
+	if json.Unmarshal(raw, &list) == nil {
+		if len(list) == 0 {
+			return true
+		}
+		for _, item := range list {
+			if strings.TrimSpace(item) == "" {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func externalMasqueradeURL(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		str = strings.TrimSpace(str)
+		if strings.HasPrefix(str, "http://") || strings.HasPrefix(str, "https://") {
+			if u, err := url.Parse(str); err == nil && IsPublicBind(u.Hostname()) {
+				return str
+			}
+		}
+		return ""
+	}
+	var obj map[string]interface{}
+	if json.Unmarshal(raw, &obj) == nil {
+		if t, _ := obj["type"].(string); t == "proxy" {
+			if target, _ := obj["url"].(string); target != "" {
+				if u, err := url.Parse(strings.TrimSpace(target)); err == nil && IsPublicBind(u.Hostname()) {
+					return strings.TrimSpace(target)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func externalFallbackTarget(fb, fbAlpn map[string]interface{}) string {
+	check := func(m map[string]interface{}) string {
+		if m == nil {
+			return ""
+		}
+		if srv, _ := m["server"].(string); strings.TrimSpace(srv) != "" && IsPublicBind(srv) {
+			return strings.TrimSpace(srv)
+		}
+		return ""
+	}
+	if s := check(fb); s != "" {
+		return s
+	}
+	for _, v := range fbAlpn {
+		if sub, ok := v.(map[string]interface{}); ok {
+			if s := check(sub); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// AnalyzeRealityDNS performs a live DNS check on Reality handshake targets that
+// were not already flagged as Cloudflare by name, catching custom domains
+// proxied behind Cloudflare edge IPs (the exact DMIT C2-fallback abuse vector).
+func AnalyzeRealityDNS(ctx context.Context, raw []byte, lookup func(context.Context, string) ([]net.IP, error)) []Finding {
+	if lookup == nil {
+		lookup = func(ctx context.Context, host string) ([]net.IP, error) {
+			addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			ips := make([]net.IP, 0, len(addrs))
+			for _, a := range addrs {
+				ips = append(ips, a.IP)
+			}
+			return ips, nil
+		}
+	}
+	var c config
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil
+	}
+	var out []Finding
+	for _, ib := range c.Inbounds {
+		if ib.ListenPort <= 0 || !IsPublicBind(ib.Listen) {
+			continue
+		}
+		if ib.TLS == nil || !ib.TLS.Enabled || ib.TLS.Reality == nil || !ib.TLS.Reality.Enabled {
+			continue
+		}
+		target := strings.TrimSpace(ib.TLS.Reality.Handshake.Server)
+		if target == "" {
+			target = strings.TrimSpace(ib.TLS.ServerName)
+		}
+		if target == "" {
+			continue
+		}
+		if kind, _ := classifySharedCDNHost(target); kind == "cloudflare" {
+			continue // already reported as High by AnalyzeConfig
+		}
+		ips, err := lookup(ctx, target)
+		if err != nil {
+			continue
+		}
+		for _, ip := range ips {
+			if IsCloudflareIP(ip) {
+				name := ib.Tag
+				if name == "" {
+					name = ib.Type
+				}
+				out = append(out, Finding{
+					Rule:     "reality_cloudflare_ip",
+					Severity: High,
+					Port:     ib.ListenPort,
+					Target:   name,
+					Title:    fmt.Sprintf("Reality 握手目标 %s 解析到 Cloudflare IP（%s）", target, ip.String()),
+					Detail:   fmt.Sprintf("入站「%s」（端口 %d）的 Reality 回落目标 %s 实际解析到了 Cloudflare 边缘 IP（%s）。未认证的 HTTPS 流量会被回退到 Cloudflare 基础设施，极易触发机房（如 DMIT）的 C2 代理滥用封禁。", name, ib.ListenPort, target, ip.String()),
+					Fix:      "立即更换为非 Cloudflare 托管的独立源站作为 Reality 握手目标，或改用自有证书的 VLESS+TLS / Hysteria2。",
+				})
+				break
+			}
+		}
+	}
+	return out
 }

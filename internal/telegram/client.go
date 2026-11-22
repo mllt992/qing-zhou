@@ -91,14 +91,14 @@ func (c *Client) call(ctx context.Context, method string, payload any, out any) 
 	url := c.apiBase() + "/bot" + c.Token + "/" + method
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
-		return err
+		return redactTokenErr(err, c.Token)
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.httpc().Do(req)
 	if err != nil {
-		return err
+		return redactTokenErr(err, c.Token)
 	}
 	defer resp.Body.Close()
 	const maxResponseBytes = 1 << 20
@@ -202,4 +202,29 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// redactedError preserves the underlying cause for errors.Is / errors.As while
+// scrubbing the bot token from the formatted message so network timeouts never
+// write the live token into systemd logs.
+type redactedError struct {
+	msg   string
+	cause error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.cause }
+
+func redactTokenErr(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	s := err.Error()
+	if !strings.Contains(s, token) {
+		return err
+	}
+	return &redactedError{
+		msg:   strings.ReplaceAll(s, token, "<redacted>"),
+		cause: err,
+	}
 }

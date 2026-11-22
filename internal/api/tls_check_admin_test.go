@@ -110,8 +110,8 @@ func TestInboundTLSCheckInlineTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := runTLSCheck(t, a, id)
-	if res.Status != tlsprobe.StatusOK || len(res.Results) != 1 || !res.Results[0].Handshake {
-		t.Fatalf("inline TLS inbound must be probed: %+v", res)
+	if res.Status != tlsprobe.StatusWarning || len(res.Results) != 1 || !res.Results[0].Handshake || !res.Results[0].SelfSigned {
+		t.Fatalf("inline self-signed HTTPS proxy must be probed and warned: %+v", res)
 	}
 	off, _ := st.SaveSbInbound(&store.SbInbound{ServerID: sid, Type: "mixed", Tag: "off", Listen: "::", ListenPort: 7891, Options: `{"tls":{"enabled":false}}`, Enabled: true})
 	if res := runTLSCheck(t, a, off); res.Status != tlsprobe.StatusSkipped {

@@ -1380,8 +1380,8 @@ func (a *API) nodeHost() string {
 		// Auto-detect: fall back to the first enabled server's host.
 		if servers, err := a.st.ListServers(); err == nil {
 			for _, sv := range servers {
-				if sv.Enabled && sv.Host != "" {
-					host = sv.Host
+				if sv.Enabled && sv.ClientHost() != "" {
+					host = sv.ClientHost()
 					break
 				}
 			}

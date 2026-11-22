@@ -49,6 +49,12 @@ func (s *Store) migrations() []migration {
 		{14, "server_egress_ip_strategy", func(tx *sql.Tx) error {
 			return execLegacyStatement(tx, `ALTER TABLE servers ADD COLUMN egress_ip_strategy TEXT NOT NULL DEFAULT ''`)
 		}},
+		{15, "server_client_domains", func(tx *sql.Tx) error {
+			if err := execLegacyStatement(tx, `ALTER TABLE servers ADD COLUMN domain TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+			return execLegacyStatement(tx, `ALTER TABLE servers ADD COLUMN domain_v6 TEXT NOT NULL DEFAULT ''`)
+		}},
 	}
 }
 

@@ -242,6 +242,30 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 			continue
 		}
 		m["users"] = users
+		// An HTTPS proxy (mixed + TLS) speaks HTTP/1.1 CONNECT on sing-box; when
+		// ALPN is omitted, HTTP/2-capable proxy clients receive no negotiated ALPN
+		// and may warn or misbehave. Clone the TLS map before mutating.
+		if ib.Type == "mixed" {
+			if tlsMap, ok := m["tls"].(map[string]interface{}); ok {
+				if on, _ := tlsMap["enabled"].(bool); on {
+					alpnEmpty := true
+					switch v := tlsMap["alpn"].(type) {
+					case []interface{}:
+						alpnEmpty = len(v) == 0
+					case []string:
+						alpnEmpty = len(v) == 0
+					}
+					if alpnEmpty {
+						cloned := make(map[string]interface{}, len(tlsMap)+1)
+						for k, v := range tlsMap {
+							cloned[k] = v
+						}
+						cloned["alpn"] = []string{"http/1.1"}
+						m["tls"] = cloned
+					}
+				}
+			}
+		}
 		// flow 是 per-user 字段，从 inbound 级别移除，否则 sing-box check 会报错
 		delete(m, "flow")
 		// Hy2 client-only hints live in inbound options so share links / subconv
@@ -269,6 +293,31 @@ func GenerateConfigWithOptions(base json.RawMessage, inbounds []Inbound, opt Opt
 
 	// Relay wiring: append each landing outbound and a route rule steering the
 	// relay inbounds' traffic into it (evaluated before route.final="direct").
+	// Only wire tags that actually survived inbound emission: a userless mixed
+	// inbound dropped above must not leave a dead route rule or leak an unused
+	// landing outbound (and its credentials) into the server config.
+	emittedSet := make(map[string]bool, len(emittedTags))
+	for _, t := range emittedTags {
+		emittedSet[t] = true
+	}
+	var activeRelays []Relay
+	for _, r := range relays {
+		if r.Outbound == nil || len(r.InboundTags) == 0 {
+			continue
+		}
+		var kept []string
+		for _, t := range r.InboundTags {
+			if emittedSet[t] {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		r.InboundTags = kept
+		activeRelays = append(activeRelays, r)
+	}
+	relays = activeRelays
 	if len(relays) > 0 {
 		obs, _ := cfg["outbounds"].([]interface{})
 		route, _ := cfg["route"].(map[string]interface{})

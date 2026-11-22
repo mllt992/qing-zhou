@@ -441,7 +441,7 @@
 
       <n-card v-show="activeSectionId === 'settings-cert'" id="settings-cert" class="settings-section" size="small">
         <p style="font-size:12px;color:var(--text-3);margin-bottom:10px;">
-          填写 Cloudflare API Token 后，「证书管理」页即可用 Cloudflare DNS 方式在面板本机一键申请 / 自动续期真实证书（DNS 验证无需节点参与，远程节点也能用）。
+          填写 Cloudflare API Token 后，可在「证书管理」一键申请 / 自动续期真实证书（含泛域名 <code>*.example.com</code>），也可在「服务器管理」为每台机器一键配置 Cloudflare 灰云子域名解析（用于 HTTPS 代理等场景）。
         </p>
         <details class="cf-guide">
           <summary class="cf-guide-t">如何获取 Cloudflare API Token（约 1 分钟）</summary>
@@ -455,7 +455,15 @@
         </details>
         <n-form label-placement="top">
           <n-form-item label="Cloudflare API Token">
-            <n-input v-model:value="form.cf_api_token" type="password" show-password-on="click" placeholder="留空表示未配置；显示 *** 表示已设置" />
+            <div style="width:100%;">
+              <n-input v-model:value="form.cf_api_token" type="password" show-password-on="click" placeholder="留空表示未配置；显示 *** 表示已设置" />
+              <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <n-button size="small" :loading="testingCfToken" @click="handleTestCFToken">测试 Token / 查看可用域名</n-button>
+                <span v-if="cfTestZones !== null" style="font-size:12px;color:var(--text-2);">
+                  {{ cfTestZones.length ? '可用区域：' + cfTestZones.join('、') : 'Token 有效，但未查到活跃区域（请检查区域范围）' }}
+                </span>
+              </div>
+            </div>
           </n-form-item>
           <n-form-item label="ACME 账户邮箱">
             <n-input v-model:value="form.acme_email" placeholder="可选，建议填写（Let's Encrypt 到期提醒）" />
@@ -1248,6 +1256,23 @@ async function handleTestSMTP() {
   if (!testEmail.value) { message.warning('请输入测试收件人'); return }
   testingSmtp.value = true
   try { await apiPost('/api/admin/settings/test-smtp', { to: testEmail.value }); message.success('测试邮件已发送') } catch (e: any) { message.error(e.message) } finally { testingSmtp.value = false }
+}
+
+const testingCfToken = ref(false)
+const cfTestZones = ref<string[] | null>(null)
+async function handleTestCFToken() {
+  testingCfToken.value = true
+  cfTestZones.value = null
+  try {
+    const res: any = await apiPost('/api/admin/settings/test-cf-token', { cf_api_token: form.cf_api_token || '' })
+    const zones: any[] = res?.zones || []
+    cfTestZones.value = zones.map((z: any) => z.name).filter(Boolean)
+    message.success(cfTestZones.value.length ? `验证通过，共 ${cfTestZones.value.length} 个可用域名` : 'Token 验证通过，但暂无可用区域')
+  } catch (e: any) {
+    message.error(e.message || 'Cloudflare Token 验证失败')
+  } finally {
+    testingCfToken.value = false
+  }
 }
 
 // 接收人列表与「实际能收到的聊天数」都由后端算：解绑、封禁、chat id 写错都会

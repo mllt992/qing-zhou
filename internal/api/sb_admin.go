@@ -93,8 +93,8 @@ func (a *API) handleAdminQuickSelfSignedTls(w http.ResponseWriter, r *http.Reque
 	serverHost := ""
 	if req.ServerID != 0 {
 		if sv, _ := a.st.GetServer(req.ServerID); sv != nil {
-			serverHost = strings.TrimSpace(sv.Host)
-			names = append(names, sv.Host, sv.HostV6)
+			serverHost = sv.ClientHost()
+			names = append(names, sv.ClientHost(), sv.ClientHostV6(), sv.Host, sv.HostV6)
 		}
 	}
 	if serverHost == "" {
@@ -1566,7 +1566,7 @@ func (a *API) handleAdminListSbInbounds(w http.ResponseWriter, r *http.Request) 
 			if n.ServerID == 0 {
 				hosts = append(hosts, a.nodeHost())
 			} else if sv, _ := a.st.GetServer(n.ServerID); sv != nil {
-				hosts = append(hosts, sv.Host, sv.HostV6)
+				hosts = append(hosts, sv.ClientHost(), sv.ClientHostV6())
 			}
 			if info := a.st.InboundTLSInfo(n); info != nil {
 				m["tls_info"] = info

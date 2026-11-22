@@ -78,11 +78,14 @@
           </div>
           <div class="lc-meta">
             <span class="kv">主机 <b>{{ s.host }}</b></span>
+            <span v-if="s.domain" class="kv">域名 <n-tag type="success" size="tiny" :bordered="false">{{ s.domain }}</n-tag></span>
+            <span v-if="s.domain_v6" class="kv">IPv6 域名 <n-tag type="success" size="tiny" :bordered="false">{{ s.domain_v6 }}</n-tag></span>
             <span class="kv">端口 <b>{{ s.port }}</b></span>
             <span class="kv">探针 <n-tag :type="s.probe_enabled ? 'info' : 'default'" size="tiny" :bordered="false">{{ s.probe_enabled ? '开' : '关' }}</n-tag></span>
           </div>
           <div class="lc-foot">
             <n-button size="tiny" type="primary" secondary @click="openTrafficAnalysis(s)">流量分析</n-button>
+            <n-button size="tiny" type="info" secondary @click="openDnsModal(s)">子域名</n-button>
             <n-button size="tiny" @click="handleRebuild(s.id)">重建</n-button>
             <n-button size="tiny" @click="openForm(s)">编辑</n-button>
             <n-button size="tiny" :loading="clearing === s.id" @click="handleClearHostKey(s)">清除密钥指纹</n-button>
@@ -96,9 +99,11 @@
     <n-modal v-model:show="showForm" preset="card" :title="editing?'编辑服务器':'添加服务器'" style="max-width:560px;">
       <n-form label-placement="left" label-width="100">
         <n-form-item label="名称"><n-input v-model:value="form.name" /></n-form-item>
-        <n-form-item label="主机"><n-input v-model:value="form.host" placeholder="IP 或域名" /></n-form-item>
+        <n-form-item label="主机"><n-input v-model:value="form.host" placeholder="IP 或域名（SSH 连接始终走此地址）" /></n-form-item>
+        <n-form-item label="对外域名（可选）"><n-input v-model:value="form.domain" placeholder="如 taxi.example.com（订阅和 HTTPS 代理优先使用此域名）" /></n-form-item>
         <n-form-item label="IPv6 订阅地址（可选）"><n-input v-model:value="form.host_v6" placeholder="IPv6 地址或 AAAA 域名，留空则不生成" /></n-form-item>
-        <div style="margin:-12px 0 12px;font-size:12px;color:var(--text-3)">填写后订阅会为本机每个节点额外生成一条「原名-v6」节点，原节点不变；SSH 仍使用上面的主机。本机直出流量会按客户端连入的地址族自动优先走 IPv4 或 IPv6（中转落地不受影响）。主机和 IPv6 订阅地址建议填字面量，不要填双栈域名。</div>
+        <n-form-item label="IPv6 对外域名（可选）"><n-input v-model:value="form.domain_v6" placeholder="如 taxi-v6.example.com（覆盖上面 IPv6 订阅地址）" /></n-form-item>
+        <div style="margin:-12px 0 12px;font-size:12px;color:var(--text-3)">填写后订阅会为本机每个节点额外生成一条「原名-v6」节点（建议填字面量 IPv6 地址，或使用下方 IPv6 对外域名），原节点不变；SSH 仍使用上面的主机。本机直出流量会按客户端连入的地址族自动优先走 IPv4 或 IPv6（中转落地不受影响）。设置「对外域名」后，订阅链接与 HTTPS 代理将自动优先使用域名（配合泛域名证书即可让 1Panel / Docker / curl 直接信任）；也可以在服务器卡片点「子域名」通过 Cloudflare Token 一键创建解析。</div>
         <n-form-item label="SSH 端口"><n-input-number v-model:value="form.port" :min="1" :max="65535" style="width:100%;" /></n-form-item>
         <n-form-item label="SSH 用户"><n-input v-model:value="form.ssh_user" placeholder="root" @update:value="onSshUserInput" /></n-form-item>
         <n-form-item label="sudo 提权">
@@ -149,6 +154,85 @@
         <n-button type="primary" :loading="saving" @click="handleSave">保存</n-button>
         <n-button @click="handleTest" :loading="testing">测试连接</n-button>
       </n-space>
+    </n-modal>
+
+    <n-modal v-model:show="showDns" preset="card" :title="`配置子域名 · ${dnsServer?.name || ''}`" style="max-width:560px;">
+      <n-spin :show="cfZonesLoading">
+        <n-alert v-if="cfZonesLoaded && !cfConfigured" type="warning" :bordered="false" style="margin-bottom:12px;">
+          尚未配置 Cloudflare API Token。请先到「系统设置 → 证书 / ACME」填写具备 <b>Zone · DNS · Edit</b> 与 <b>Zone · Read</b> 权限的 Token，即可在这里一键写灰云解析；也可以取消下方同步开关仅保存手动解析好的域名。
+        </n-alert>
+        <n-alert v-else-if="cfZonesError" type="warning" :bordered="false" style="margin-bottom:12px;">
+          拉取 Cloudflare 根域名列表失败：{{ cfZonesError }}（仍可手动输入完整子域名）
+        </n-alert>
+        <n-form label-placement="left" label-width="110">
+          <n-form-item label="服务器 IP">
+            <div style="font-size:12px;color:var(--text-2);line-height:1.6;">
+              IPv4：<code>{{ dnsServer?.host || '—' }}</code>
+              <template v-if="dnsServer?.host_v6"><br>IPv6：<code>{{ dnsServer.host_v6 }}</code></template>
+            </div>
+          </n-form-item>
+          <n-form-item v-if="cfZones.length" label="快捷拼接">
+            <div style="display:flex;gap:8px;width:100%;">
+              <n-input v-model:value="dnsForm.prefix" placeholder="前缀，如 taxi / dmit" style="flex:1;" @update:value="syncPrefixToDomain" />
+              <n-select v-model:value="dnsForm.zone" :options="cfZoneOptions" placeholder="选择根域名" style="width:190px;" @update:value="syncPrefixToDomain" />
+            </div>
+          </n-form-item>
+          <n-form-item label="主子域名">
+            <n-input v-model:value="dnsForm.domain" placeholder="如 taxi.example.com" />
+          </n-form-item>
+          <n-form-item label="写入 IPv4 (A)">
+            <div style="width:100%;">
+              <n-switch v-model:value="dnsForm.sync_v4" :disabled="!dnsHasIPv4" />
+              <span style="margin-left:8px;font-size:12px;color:var(--text-3);">
+                {{ dnsHasIPv4 ? `自动在 Cloudflare 写入灰云 A 记录 → ${dnsServer?.host}` : '当前主机不是 IPv4 地址，无法自动写入 A 记录' }}
+              </span>
+            </div>
+          </n-form-item>
+          <template v-if="dnsHasIPv6">
+            <n-form-item label="写入 IPv6 (AAAA)">
+              <div style="width:100%;">
+                <n-switch v-model:value="dnsForm.sync_v6" />
+                <span style="margin-left:8px;font-size:12px;color:var(--text-3);">
+                  自动写入灰云 AAAA 记录 → {{ dnsServer?.host_v6 }}
+                </span>
+              </div>
+            </n-form-item>
+            <n-form-item label="IPv6 独立子域名">
+              <div style="width:100%;">
+                <n-input v-model:value="dnsForm.domain_v6" placeholder="可选，如 taxi-v6.example.com（留空则把 AAAA 写到主子域名）" />
+                <div class="form-tip">填写独立 IPv6 子域名可配合轻舟的双栈分流与「-v6」节点；留空且开启写入 AAAA 时，主子域名会同时带有 A 与 AAAA 记录。</div>
+              </div>
+            </n-form-item>
+          </template>
+          <n-form-item v-if="dnsForm.sync_v4 || dnsForm.sync_v6" label="清理旧记录">
+            <div style="width:100%;">
+              <n-switch v-model:value="dnsForm.cleanup_old" />
+              <span style="margin-left:8px;font-size:12px;color:var(--text-3);">改名时自动清理 Cloudflare 上旧的轻舟托管记录（不会误删手动记录）</span>
+            </div>
+          </n-form-item>
+        </n-form>
+
+        <n-alert v-if="dnsResult" type="success" :bordered="false" style="margin-bottom:12px;">
+          <div><b>已保存并同步完成</b></div>
+          <div v-for="(r, idx) in dnsResult.results || []" :key="idx" style="font-size:12px;margin-top:4px;">
+            {{ r.type }} <code>{{ r.name }}</code> → <code>{{ r.content }}</code>（{{ r.action === 'created' ? '已新建' : r.action === 'updated' ? '已更新' : '无需变更' }}，灰云仅 DNS）
+          </div>
+          <div v-if="dnsResult.matching_certs?.length" style="font-size:12px;margin-top:6px;">
+            ✅ 证书中心已有可覆盖该域名的真实证书：<b>{{ dnsResult.matching_certs.map((c:any) => `${c.name} (${c.domain})`).join('、') }}</b>，可直接去「sing-box → TLS 配置」引用并绑定到 HTTPS 代理或 Hy2/Trojan 入站。
+          </div>
+          <div v-else-if="dnsResult.suggested_wildcard" style="font-size:12px;margin-top:6px;">
+            💡 证书中心暂无覆盖该域名的 CA 证书：建议去「证书管理」用 Cloudflare DNS 申请一张泛域名证书 <code>{{ dnsResult.suggested_wildcard }}</code>（全机房所有子域名通用、自动续期）。
+          </div>
+        </n-alert>
+
+        <n-space justify="space-between" style="width:100%;">
+          <n-space>
+            <n-button type="primary" :loading="dnsSaving" @click="submitDns(false)">保存并同步 DNS</n-button>
+            <n-button @click="showDns = false">关闭</n-button>
+          </n-space>
+          <n-button v-if="dnsServer?.domain || dnsServer?.domain_v6" type="error" secondary :loading="dnsDeleting" @click="confirmClearDns">清除子域名</n-button>
+        </n-space>
+      </n-spin>
     </n-modal>
 
     <n-drawer v-model:show="showTraffic" :width="trafficDrawerWidth" placement="right" @after-leave="disposeTrafficChart">
@@ -228,7 +312,7 @@ const servers = ref<any[]>([])
 const loading = ref(false); const saving = ref(false); const testing = ref(false)
 const reordering = ref(false)
 const showForm = ref(false); const editing = ref<any>(null)
-const mk = () => ({ name:'', host:'', host_v6:'', port:22, ssh_user:'root', ssh_password:'', ssh_key:'', ssh_key_pass:'', use_sudo:false, sudo_password:'', ssh_key_path:'', config_path:'/etc/sing-box/config.json', systemd_unit:'sing-box', sing_box_bin:'/usr/local/bin/sing-box', v2ray_listen:'127.0.0.1:18080', enabled:true })
+const mk = () => ({ name:'', host:'', domain:'', host_v6:'', domain_v6:'', port:22, ssh_user:'root', ssh_password:'', ssh_key:'', ssh_key_pass:'', use_sudo:false, sudo_password:'', ssh_key_path:'', config_path:'/etc/sing-box/config.json', systemd_unit:'sing-box', sing_box_bin:'/usr/local/bin/sing-box', v2ray_listen:'127.0.0.1:18080', enabled:true })
 const form = reactive(mk())
 
 // 私钥来源二选一。粘贴走 ssh_key（加密入库），选文件走 ssh_key_path（只存文件名，
@@ -253,7 +337,7 @@ async function loadKeys(){
 }
 function openForm(s?:any){
   editing.value = s||null
-  if(s){ Object.assign(form,{ name:s.name, host:s.host, host_v6:s.host_v6||'', port:s.port||22, ssh_user:s.ssh_user||'root', ssh_password:'', ssh_key:'', ssh_key_pass:s.ssh_key_pass||'', use_sudo:s.use_sudo??false, sudo_password:s.sudo_password||'', ssh_key_path:s.ssh_key_path||'', config_path:s.config_path||'/etc/sing-box/config.json', systemd_unit:s.systemd_unit||'sing-box', sing_box_bin:s.sing_box_bin||'/usr/local/bin/sing-box', v2ray_listen:s.v2ray_listen||'127.0.0.1:18080', enabled:s.enabled??true }) }
+  if(s){ Object.assign(form,{ name:s.name, host:s.host, domain:s.domain||'', host_v6:s.host_v6||'', domain_v6:s.domain_v6||'', port:s.port||22, ssh_user:s.ssh_user||'root', ssh_password:'', ssh_key:'', ssh_key_pass:s.ssh_key_pass||'', use_sudo:s.use_sudo??false, sudo_password:s.sudo_password||'', ssh_key_path:s.ssh_key_path||'', config_path:s.config_path||'/etc/sing-box/config.json', systemd_unit:s.systemd_unit||'sing-box', sing_box_bin:s.sing_box_bin||'/usr/local/bin/sing-box', v2ray_listen:s.v2ray_listen||'127.0.0.1:18080', enabled:s.enabled??true }) }
   else { Object.assign(form, mk()) }
   keyMode.value = form.ssh_key_path ? 'file' : 'paste'
   showForm.value = true
@@ -463,6 +547,136 @@ async function pollUpgrade(id:number){
     else message.success(`安装完成${row.version ? '：' + row.version : ''}`)
     return
   }
+}
+
+// ---- Cloudflare 子域名管理 ----
+const showDns = ref(false)
+const dnsServer = ref<any>(null)
+const cfZones = ref<any[]>([])
+const cfZonesLoading = ref(false)
+const cfZonesLoaded = ref(false)
+const cfConfigured = ref(false)
+const cfZonesError = ref('')
+const dnsSaving = ref(false)
+const dnsDeleting = ref(false)
+const dnsResult = ref<any>(null)
+const dnsForm = reactive({ prefix: '', zone: '', domain: '', domain_v6: '', sync_v4: true, sync_v6: false, cleanup_old: true })
+const cfZoneOptions = computed(() => cfZones.value.map((z: any) => ({ label: z.name, value: z.name })))
+const dnsHasIPv4 = computed(() => /^(\d{1,3}\.){3}\d{1,3}$/.test((dnsServer.value?.host || '').trim()))
+const dnsHasIPv6 = computed(() => /:/.test((dnsServer.value?.host_v6 || '').trim()))
+
+function suggestPrefix(s: any): string {
+  const raw = String(s?.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return raw ? raw.slice(0, 24) : `node-${s?.id || 1}`
+}
+
+function syncPrefixToDomain() {
+  const p = dnsForm.prefix.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
+  const z = dnsForm.zone.trim().toLowerCase()
+  if (!p || !z) return
+  dnsForm.domain = `${p}.${z}`
+  if (dnsHasIPv6.value) dnsForm.domain_v6 = `${p}-v6.${z}`
+}
+
+async function openDnsModal(s: any) {
+  dnsServer.value = s
+  dnsResult.value = null
+  cfZonesError.value = ''
+  dnsForm.domain = s.domain || ''
+  dnsForm.domain_v6 = s.domain_v6 || ''
+  dnsForm.sync_v4 = /^(\d{1,3}\.){3}\d{1,3}$/.test((s.host || '').trim())
+  dnsForm.sync_v6 = /:/.test((s.host_v6 || '').trim())
+  dnsForm.cleanup_old = true
+  dnsForm.prefix = ''
+  dnsForm.zone = ''
+  showDns.value = true
+  cfZonesLoading.value = true
+  try {
+    const r: any = await apiGet('/api/admin/cf/zones')
+    cfConfigured.value = !!r?.configured
+    cfZones.value = r?.zones || []
+    cfZonesLoaded.value = true
+    if (cfZones.value.length) {
+      if (dnsForm.domain) {
+        const matched = cfZones.value.find((z: any) => dnsForm.domain.endsWith('.' + z.name))
+        if (matched) {
+          dnsForm.zone = matched.name
+          dnsForm.prefix = dnsForm.domain.slice(0, -(matched.name.length + 1))
+        }
+      } else {
+        dnsForm.zone = cfZones.value[0].name
+        dnsForm.prefix = suggestPrefix(s)
+        syncPrefixToDomain()
+      }
+    }
+    if (!cfConfigured.value) {
+      dnsForm.sync_v4 = false
+      dnsForm.sync_v6 = false
+    }
+  } catch (e: any) {
+    cfZonesLoaded.value = true
+    cfConfigured.value = true
+    cfZonesError.value = e?.message || '未知错误'
+  } finally {
+    cfZonesLoading.value = false
+  }
+}
+
+async function submitDns(overwrite: boolean) {
+  if (!dnsServer.value) return
+  dnsSaving.value = true
+  try {
+    const res: any = await apiPost(`/api/admin/servers/${dnsServer.value.id}/dns`, {
+      domain: dnsForm.domain.trim(),
+      domain_v6: dnsForm.domain_v6.trim(),
+      sync_v4: dnsForm.sync_v4,
+      sync_v6: dnsForm.sync_v6,
+      overwrite,
+      cleanup_old: dnsForm.cleanup_old,
+    })
+    dnsResult.value = res
+    if (res?.server) dnsServer.value = res.server
+    message.success('子域名已保存并同步')
+    await load()
+  } catch (e: any) {
+    const msg = e?.message || '保存失败'
+    if (!overwrite && (e?.status === 409 || msg.includes('已存在'))) {
+      dialog.warning({
+        title: 'Cloudflare 已存在同名解析记录',
+        content: `${msg}\n\n确认要将该记录改为指向本服务器（灰云仅 DNS）吗？`,
+        positiveText: '确认覆盖',
+        negativeText: '取消',
+        onPositiveClick: () => submitDns(true),
+      })
+      return
+    }
+    message.error(msg)
+  } finally {
+    dnsSaving.value = false
+  }
+}
+
+function confirmClearDns() {
+  if (!dnsServer.value) return
+  dialog.warning({
+    title: '清除该服务器的子域名？',
+    content: '将清空本服务器绑定的对外域名（恢复使用 IP），并删除 Cloudflare 上由轻舟创建的对应托管记录（不会删除手动记录）。',
+    positiveText: '确认清除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      dnsDeleting.value = true
+      try {
+        await apiDelete(`/api/admin/servers/${dnsServer.value.id}/dns?delete_cf=1`)
+        message.success('已清除子域名')
+        showDns.value = false
+        await load()
+      } catch (e: any) {
+        message.error(e?.message || '清除失败')
+      } finally {
+        dnsDeleting.value = false
+      }
+    },
+  })
 }
 
 onMounted(() => { load(); loadVersions() })
