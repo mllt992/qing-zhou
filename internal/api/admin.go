@@ -177,6 +177,12 @@ func (a *API) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if raw, submitted := in[settingSubCustomHeaders]; submitted {
+		if _, err := parseSubCustomHeaders(raw); err != nil {
+			fail(w, http.StatusBadRequest, "自定义订阅响应头有误："+err.Error())
+			return
+		}
+	}
 	runtimeChanged, err := a.validateRuntimeIntervals(in)
 	if err != nil {
 		fail(w, http.StatusBadRequest, err.Error())

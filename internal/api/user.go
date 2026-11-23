@@ -1126,6 +1126,13 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply default Profile-Update-Interval and optional admin custom headers
+	// before panel-managed headers, so system metadata/security headers always
+	// win even if settings were edited out-of-band.
+	w.Header().Set("Profile-Update-Interval", "12")
+	if customHeaders, _ := a.st.GetSetting(settingSubCustomHeaders); customHeaders != "" {
+		applySubCustomHeaders(w.Header(), customHeaders)
+	}
 	// A revoked link must not outlive its revocation in someone else's cache.
 	// Panels commonly sit behind a CDN (or a "cache everything" rule), and a
 	// cached 200 for a token the panel already deleted looks exactly like
@@ -1133,13 +1140,21 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Subscription-Userinfo",
 		"upload="+itoa(traffic.Upload)+"; download="+itoa(traffic.Download)+"; total="+itoa(traffic.Total)+"; expire="+itoa(traffic.ExpiryAt))
-	w.Header().Set("Profile-Update-Interval", "12")
 	// Clash-family clients name the imported profile after this; without it they
 	// fall back to the URL's last path segment, which is the subscription token —
 	// pinning a secret into the client's visible profile list.
 	w.Header().Set("Content-Disposition", contentDisposition(siteName, format))
 	w.Header().Set("Content-Type", ctype)
-	if n, err := w.Write([]byte(body)); err == nil && n == len(body) {
+	w.Header().Add("Vary", "Accept-Encoding")
+
+	payload := []byte(body)
+	if acceptsGzip(r.Header.Get("Accept-Encoding")) {
+		if gz, err := compressGzip(payload); err == nil {
+			w.Header().Set("Content-Encoding", "gzip")
+			payload = gz
+		}
+	}
+	if n, err := w.Write(payload); err == nil && n == len(payload) {
 		a.recordSubscriptionFetch(u, format, subscriptionClientForUA(r.Header.Get("User-Agent")))
 	}
 }
