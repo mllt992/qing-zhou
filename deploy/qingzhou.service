@@ -11,11 +11,15 @@ Restart=on-failure
 RestartSec=5s
 # Harden a little
 NoNewPrivileges=true
-# /usr is read-only for this service and everything it forks. That is deliberate
-# — the panel only ever writes /opt/qingzhou and /etc/sing-box — but it also
-# means 面板本机 的「重装 sing-box」cannot install to /usr/local/bin from a
-# forked child; it goes through systemd-run instead (internal/api/nodever_admin.go).
+# ProtectSystem=full mounts /usr and /etc read-only for this service and
+# everything it forks. Explicitly allow /etc/sing-box (with '-' so startup
+# still succeeds before sing-box is installed) so fresh panels can write
+# /etc/sing-box/config.json directly instead of escaping via systemd-run on
+# every apply; older units without this line still fall back to systemd-run
+# (internal/sbproc/manager.go). /usr stays read-only, so local sing-box
+# reinstall continues to go through systemd-run (internal/api/nodever_admin.go).
 ProtectSystem=full
+ReadWritePaths=-/etc/sing-box
 
 [Install]
 WantedBy=multi-user.target
