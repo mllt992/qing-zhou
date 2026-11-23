@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -207,7 +208,7 @@ func acceptsGzip(acceptEncoding string) bool {
 				continue
 			}
 			parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-			if err != nil {
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 || parsed > 1 {
 				q = 0
 			} else {
 				q = parsed

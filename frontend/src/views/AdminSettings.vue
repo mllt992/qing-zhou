@@ -503,10 +503,10 @@
           <n-form-item label="自定义订阅响应头">
             <div style="width:100%;">
               <n-input v-model:value="form.sub_custom_headers" type="textarea" :rows="4"
-                       placeholder="每行一条 Header-Name: value，如：&#10;profile-web-page-url: https://example.com&#10;announce: 欢迎使用轻舟"
+                       placeholder="每行一条 Header-Name: value，如：&#10;profile-web-page-url: https://example.com&#10;announce: base64:5qyi6L+O5L2/55So6L276Iif"
                        style="font-family:monospace;font-size:12px;" />
               <div style="font-size:12px;color:var(--text-3);margin-top:6px;line-height:1.6;">
-                附加到 <code>/sub/{token}</code> 订阅正文响应中（不影响浏览器打开的信息页）。支持以 <code>#</code> 或 <code>//</code> 开头的注释行；
+                附加到 <code>/sub/{token}</code> 订阅正文响应中（不影响浏览器打开的信息页）。支持以 <code>#</code> 或 <code>//</code> 开头的注释行；非 ASCII 内容（如中文公告）建议按客户端约定使用 <code>base64:</code> 编码，避免部分客户端按 Latin-1 解析乱码。
                 禁止覆盖 <code>Host</code>、<code>Content-Length</code>、<code>Content-Encoding</code> 等危险头及 <code>Subscription-Userinfo</code>、<code>Content-Type</code>、<code>Cache-Control</code>、<code>Content-Disposition</code> 系统托管头。
                 客户端声明 <code>Accept-Encoding: gzip</code> 时会自动压缩正文。
               </div>
@@ -1559,6 +1559,7 @@ async function loadSettings() {
       // undefined —— 否则第一次输入前它不是一个受控输入。
       form.node_host_override ??= ''
       form.brand_icon_data_uri ??= ''
+      form.sub_custom_headers ??= ''
       form.help_docs_mode = data.help_docs_mode === 'external' ? 'external' : 'builtin'
       form.help_docs_url ??= ''
       form.homepage_machine_health = data.homepage_machine_health === 'true' ? 'true' : 'false'

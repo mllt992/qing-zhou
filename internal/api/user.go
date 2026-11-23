@@ -1148,7 +1148,7 @@ func (a *API) handleSub(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Vary", "Accept-Encoding")
 
 	payload := []byte(body)
-	if acceptsGzip(r.Header.Get("Accept-Encoding")) {
+	if acceptsGzip(strings.Join(r.Header.Values("Accept-Encoding"), ",")) {
 		if gz, err := compressGzip(payload); err == nil {
 			w.Header().Set("Content-Encoding", "gzip")
 			payload = gz
