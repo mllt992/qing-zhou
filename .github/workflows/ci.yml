@@ -38,7 +38,9 @@ jobs:
       - name: Test (race)
         # Retain the full SQLite-backed lifecycle suite and the 81-pair protocol
         # matrix under race instrumentation; neither is replaced by core checks.
-        run: go test -race -timeout=30m ./...
+        # internal/store alone takes 18-27 min under -race on shared runners, so the
+        # old 30m ceiling flaked; 60m leaves headroom (job default is 360m).
+        run: go test -race -timeout=60m ./...
 
   shell:
     runs-on: ubuntu-latest
