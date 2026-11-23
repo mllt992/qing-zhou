@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"qingzhou/internal/singbox"
 )
 
 // TestRenderedConfigPassesSingboxCheck runs the real `sing-box check` over the
@@ -40,8 +42,14 @@ func TestRenderedConfigPassesSingboxCheck(t *testing.T) {
 	// on an unknown one — exactly the failure this test exists to catch. One
 	// blocked node per whitelisted protocol, plus an anytls node that must NOT
 	// get the field.
+	echCfgPEM, _, err := singbox.GenerateECHKeypair("public.example.com")
+	if err != nil {
+		t.Fatalf("GenerateECHKeypair: %v", err)
+	}
+	echB64 := singbox.ECHConfigBase64(echCfgPEM)
 	links := []string{
 		"trojan://pw@node.example.com:443?security=tls&sni=node.example.com#A",
+		"trojan://pw@node.example.com:443?security=tls&fp=chrome&sni=node.example.com&ech=" + echB64 + "#A-ech",
 		"hysteria2://pw@203.0.113.7:8443?security=tls&insecure=1&sni=node.example.com#B",
 		"tuic://11111111-2222-3333-4444-555555555555:pw@203.0.113.8:8444?security=tls&sni=node.example.com&udp_relay_mode=native#C",
 

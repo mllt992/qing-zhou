@@ -272,6 +272,48 @@ func TestAdminECHKeygenAndCertTlsLifecycle_NoPrivateKeyLeak(t *testing.T) {
 		t.Fatalf("edit did not preserve ECH keypair: server=%v clientCfg=%q", strings.Contains(afterEdit.ServerJSON, "BEGIN ECH KEYS"), singbox.ECHConfigBase64(afterClientECH["config"]))
 	}
 
+	// 5b. Calling UpdateRealityTls against a cert-TLS profile must fail cleanly
+	// without corrupting mode or leaking ECH private keys.
+	realityMisuseBody := `{"name":"oops","server_name":"real.example.com"}`
+	wMisuse := httptest.NewRecorder()
+	reqMisuse := withChiParam(httptest.NewRequest(http.MethodPut, "/api/admin/sb/tls/reality/"+strconv.FormatInt(tlsID, 10), strings.NewReader(realityMisuseBody)), "id", strconv.FormatInt(tlsID, 10))
+	a.handleAdminUpdateRealityTls(wMisuse, reqMisuse)
+	if wMisuse.Code != http.StatusBadRequest || strings.Contains(wMisuse.Body.String(), "BEGIN ECH KEYS") {
+		t.Fatalf("reality update on cert TLS: code=%d body=%s", wMisuse.Code, wMisuse.Body.String())
+	}
+
+	// 5c. Mismatched key_token vs ech_public_name is rejected; changing
+	// ech_public_name without key_token regenerates the ECH keypair.
+	mismatchBody, _ := json.Marshal(map[string]any{
+		"name": "tls-ech", "server_name": "real.example.com", "insecure": true,
+		"ech_enabled": true, "ech_key_token": genResp.Data.KeyToken, "ech_public_name": "other.example.com",
+	})
+	wMismatch := httptest.NewRecorder()
+	a.handleAdminSaveCertTls(wMismatch, withChiParam(httptest.NewRequest(http.MethodPut, "/api/admin/sb/tls/cert/"+strconv.FormatInt(tlsID, 10), bytes.NewReader(mismatchBody)), "id", strconv.FormatInt(tlsID, 10)))
+	if wMismatch.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched key_token/public_name status = %d, want 400", wMismatch.Code)
+	}
+
+	rotateBody, _ := json.Marshal(map[string]any{
+		"name": "tls-ech-rotated", "server_name": "real.example.com", "insecure": true,
+		"ech_enabled": true, "ech_public_name": "new-public.example.com",
+	})
+	wRotate := httptest.NewRecorder()
+	a.handleAdminSaveCertTls(wRotate, withChiParam(httptest.NewRequest(http.MethodPut, "/api/admin/sb/tls/cert/"+strconv.FormatInt(tlsID, 10), bytes.NewReader(rotateBody)), "id", strconv.FormatInt(tlsID, 10)))
+	if wRotate.Code != http.StatusOK || strings.Contains(wRotate.Body.String(), "BEGIN ECH KEYS") {
+		t.Fatalf("rotate public_name status=%d body=%s", wRotate.Code, wRotate.Body.String())
+	}
+	var rotateResp struct {
+		Data struct {
+			ECHPublicName string `json:"ech_public_name"`
+			ECHConfig     string `json:"ech_config"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(wRotate.Body.Bytes(), &rotateResp)
+	if rotateResp.Data.ECHPublicName != "new-public.example.com" || rotateResp.Data.ECHConfig == "" || rotateResp.Data.ECHConfig == genResp.Data.ConfigBase64 {
+		t.Fatalf("expected regenerated ECH for new-public.example.com, got %+v", rotateResp.Data)
+	}
+
 	// 6. Disabling ECH removes it from server config and subscriptions cleanly.
 	offBody, _ := json.Marshal(map[string]any{
 		"name": "tls-ech-off", "server_name": "real.example.com",

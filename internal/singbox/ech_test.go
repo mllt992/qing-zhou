@@ -117,8 +117,8 @@ func TestParseECHLinkParam(t *testing.T) {
 	if gotCfg != "" || gotQSN != "cloudflare-ech.com" {
 		t.Fatalf("domain+DNS form: got (%q, %q)", gotCfg, gotQSN)
 	}
-	// Garbage or empty rejected.
-	for _, bad := range []string{"", "not-base64!!!", "AAAA", "bad host+https://dns"} {
+	// Garbage or structurally invalid ECHConfigList rejected (must not poison subscriptions).
+	for _, bad := range []string{"", "not-base64!!!", "AAAA", "AAIAAA==", "AAb+DQAAAA==", "bad host+https://dns"} {
 		if c, q := ParseECHLinkParam(bad); c != "" || q != "" {
 			t.Errorf("ParseECHLinkParam(%q) = (%q, %q), want empty", bad, c, q)
 		}

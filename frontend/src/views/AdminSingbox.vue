@@ -467,15 +467,19 @@
               <n-form-item label="ECH 公开名称">
                 <div style="width:100%;">
                   <n-input-group>
-                    <n-input v-model:value="te.ech_public_name" placeholder="外层伪装 SNI，如 cloudflare-ech.com" />
+                    <n-input :value="te.ech_public_name" @update:value="onEchPublicNameChange" placeholder="外层伪装 SNI，如 cloudflare-ech.com" />
                     <n-button :loading="genEchLoading" @click="genEch">生成 ECH 密钥</n-button>
                   </n-input-group>
                   <div class="form-tip">
                     公开名称是客户端明文发送的外层伪装 SNI，真实 SNI 会在 ECH 内加密传输；请勿填成上面的真实 SNI，否则无法起到隐藏作用。
                   </div>
+                  <div v-if="te.ech_public_name.trim() && te.server_name.trim() && te.ech_public_name.trim().toLowerCase() === te.server_name.trim().toLowerCase()"
+                       class="form-tip" style="color:var(--warn,#d97706);">
+                    当前公开名称与真实 SNI 相同，外层明文仍会暴露你的真实域名，建议换一个公开名称。
+                  </div>
                   <div class="form-tip" :style="te.ech_has_key || te.ech_key_token ? 'color:var(--ok,#18a058);' : 'color:var(--warn,#d97706);'">
                     <template v-if="te.ech_key_token">已生成新 ECH 密钥对（私钥仅在服务端加密保存，不明文下发；点击「保存」生效）。</template>
-                    <template v-else-if="te.ech_has_key">已配置服务端 ECH 私钥（留空保持不变；如需轮换可重新点击「生成 ECH 密钥」）。</template>
+                    <template v-else-if="te.ech_has_key">已配置服务端 ECH 私钥（公开名称不变时保持原密钥；修改公开名称后点击「生成 ECH 密钥」或直接保存将自动轮换）。</template>
                     <template v-else>请填写公开名称并点击「生成 ECH 密钥」（或在填写公开名称后直接保存自动生成）。</template>
                   </div>
                 </div>
@@ -1324,6 +1328,12 @@ async function genKeys() {
 }
 
 const genEchLoading = ref(false)
+function onEchPublicNameChange(v: string) {
+  te.ech_public_name = v
+  // Changing the public name invalidates any freshly generated key_token preview.
+  te.ech_key_token = ''
+  te.ech_config = ''
+}
 async function genEch() {
   const pubName = (te.ech_public_name || '').trim()
   if (!pubName) { message.warning('请先填写 ECH 公开名称（外层 SNI）'); return }

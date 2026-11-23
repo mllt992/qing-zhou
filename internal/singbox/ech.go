@@ -277,7 +277,43 @@ func isValidECHConfigListBase64(b64 string) bool {
 	if err != nil || len(list) <= 2 {
 		return false
 	}
-	return int(list[0])<<8|int(list[1]) == len(list)-2
+	s := cryptobyte.String(list)
+	var entries cryptobyte.String
+	if !s.ReadUint16LengthPrefixed(&entries) || !s.Empty() || entries.Empty() {
+		return false
+	}
+	count := 0
+	for !entries.Empty() {
+		var version uint16
+		var contents cryptobyte.String
+		if !entries.ReadUint16(&version) || version != echExtensionVersion || !entries.ReadUint16LengthPrefixed(&contents) {
+			return false
+		}
+		if !isValidECHConfigContents(contents) {
+			return false
+		}
+		count++
+	}
+	return count > 0
+}
+
+func isValidECHConfigContents(contents cryptobyte.String) bool {
+	var configID uint8
+	var kemID uint16
+	var pubKey, cipherSuites, pubName, exts cryptobyte.String
+	var maxNameLen uint8
+	if !contents.ReadUint8(&configID) ||
+		!contents.ReadUint16(&kemID) ||
+		!contents.ReadUint16LengthPrefixed(&pubKey) || len(pubKey) == 0 ||
+		!contents.ReadUint16LengthPrefixed(&cipherSuites) || len(cipherSuites) == 0 || len(cipherSuites)%4 != 0 ||
+		!contents.ReadUint8(&maxNameLen) ||
+		!contents.ReadUint8LengthPrefixed(&pubName) || len(pubName) == 0 ||
+		!contents.ReadUint16LengthPrefixed(&exts) ||
+		!contents.Empty() {
+		return false
+	}
+	_, err := ValidateECHPublicName(string(pubName))
+	return err == nil
 }
 
 func parseECHConfigPublicName(echConfig []byte) string {

@@ -117,6 +117,7 @@ func (a *API) applyCertTlsECH(existingID int64, req certTlsECHReq, server, clien
 	if tlsVersion(req.MaxVersion) == "1.2" {
 		return errors.New("启用 ECH 需要 TLS 1.3，最高 TLS 版本不能设为 1.2")
 	}
+	reqPubName := strings.TrimSpace(req.PublicName)
 	var keyPEM string
 	switch {
 	case strings.TrimSpace(req.KeyToken) != "":
@@ -124,6 +125,15 @@ func (a *API) applyCertTlsECH(existingID int64, req certTlsECHReq, server, clien
 		keyPEM, err = a.unsealECHKeyToken(strings.TrimSpace(req.KeyToken))
 		if err != nil {
 			return err
+		}
+		if reqPubName != "" {
+			_, tokenPub, err := singbox.ECHConfigFromKeyPEM(keyPEM)
+			if err != nil {
+				return err
+			}
+			if !strings.EqualFold(reqPubName, tokenPub) {
+				return errors.New("ECH 公开名称与已生成密钥不一致，请重新点击「生成 ECH 密钥」")
+			}
 		}
 	case existingID != 0:
 		if cur, _ := a.st.GetSbTls(existingID); cur != nil && !cur.DecryptFailed {
@@ -134,15 +144,24 @@ func (a *API) applyCertTlsECH(existingID int64, req certTlsECHReq, server, clien
 				}
 			}
 		}
-		if keyPEM == "" && strings.TrimSpace(req.PublicName) != "" {
-			_, generatedKey, err := singbox.GenerateECHKeypair(req.PublicName)
-			if err != nil {
-				return err
+		// If the admin changed public_name on an existing ECH profile without
+		// clicking Generate, regenerate a keypair for the new public_name
+		// instead of silently keeping the old one.
+		if reqPubName != "" {
+			existingPub := ""
+			if keyPEM != "" {
+				_, existingPub, _ = singbox.ECHConfigFromKeyPEM(keyPEM)
 			}
-			keyPEM = generatedKey
+			if keyPEM == "" || !strings.EqualFold(reqPubName, existingPub) {
+				_, generatedKey, err := singbox.GenerateECHKeypair(reqPubName)
+				if err != nil {
+					return err
+				}
+				keyPEM = generatedKey
+			}
 		}
-	case strings.TrimSpace(req.PublicName) != "":
-		_, generatedKey, err := singbox.GenerateECHKeypair(req.PublicName)
+	case reqPubName != "":
+		_, generatedKey, err := singbox.GenerateECHKeypair(reqPubName)
 		if err != nil {
 			return err
 		}

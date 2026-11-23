@@ -589,7 +589,7 @@ func (a *API) handleAdminCreateRealityTls(w http.ResponseWriter, r *http.Request
 		return
 	}
 	saved, _ := a.st.GetSbTls(id)
-	ok(w, saved)
+	ok(w, sbTlsAPIView(saved))
 }
 
 var validFingerprints = map[string]bool{
@@ -620,6 +620,10 @@ func (a *API) handleAdminUpdateRealityTls(w http.ResponseWriter, r *http.Request
 	cur, _ := a.st.GetSbTls(id)
 	if cur == nil {
 		fail(w, http.StatusNotFound, "配置不存在")
+		return
+	}
+	if cur.Mode != "reality" {
+		fail(w, http.StatusBadRequest, "该配置不是 Reality 类型")
 		return
 	}
 	var req struct {
@@ -692,7 +696,7 @@ func (a *API) handleAdminUpdateRealityTls(w http.ResponseWriter, r *http.Request
 	}
 	a.sbRebuildLog()
 	saved, _ := a.st.GetSbTls(id)
-	ok(w, saved)
+	ok(w, sbTlsAPIView(saved))
 }
 
 // POST /api/admin/sb/tls/cert  and  PUT /api/admin/sb/tls/cert/{id} — create or
