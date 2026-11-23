@@ -313,7 +313,7 @@ const editableInboundOpts = computed(() => inbounds.value
     return { label: `${ib.tag}（${ib.type} :${ib.listen_port}${sv ? ' · ' + sv.name : ''}）`, value: ib.id }
   }))
 const reusableTls = computed(() => tlsList.value
-  .filter(t => t.mode !== 'reality' && !(t.server_json || '').includes('"reality"'))
+  .filter(t => t.mode !== 'reality' && !(t.server_json || '').includes('"reality"') && (!t.server_id || t.server_id === serverId.value))
   .map(t => ({ label: t.name, value: t.id })))
 
 function needText(s: Scenario) {
@@ -357,13 +357,8 @@ function pickScenario(key: string) {
   applyScenarioDefaults(scenarioByKey(key))
   tlsId.value = 0
 }
-function onServerChange() {
+function reconcileDomainBindings() {
   const s = server.value
-  domain.value = s?.domain || ''
-  const sp = splitDomain(domain.value, zones.value.map((z: any) => z.name))
-  prefix.value = sp.prefix; zone.value = sp.zone
-  dnsRes.value = null
-  // 切换服务器后，若原选中的证书不再覆盖新服务器域名，或原 TLS 绑定在别的服务器上，清理掉以免串配
   const eff = (s?.domain || '').trim().toLowerCase()
   const curCert = certs.value.find(c => c.id === certId.value)
   if (curCert && (!eff || !certCoversDomain(curCert.domain, eff))) certId.value = 0
@@ -374,6 +369,16 @@ function onServerChange() {
     if (wrongServer || wrongSni) tlsId.value = 0
   }
 }
+function onServerChange() {
+  const s = server.value
+  domain.value = s?.domain || ''
+  const sp = splitDomain(domain.value, zones.value.map((z: any) => z.name))
+  prefix.value = sp.prefix
+  zone.value = sp.zone || (zones.value[0]?.name || '')
+  dnsRes.value = null
+  reconcileDomainBindings()
+}
+watch(effDomain, () => reconcileDomainBindings())
 function syncDomain() { const d = joinDomain(prefix.value, zone.value); if (d) domain.value = d }
 function switchToRealCert() {
   useRealCert.value = true
@@ -497,6 +502,7 @@ async function saveInbound() {
       ? await apiPut('/api/admin/sb/inbounds/' + editingId.value, body)
       : await apiPost('/api/admin/sb/inbounds', body)
     savedId.value = saved?.id || editingId.value
+    if (savedId.value) editingId.value = savedId.value
     inbounds.value = await apiList('/api/admin/sb/inbounds')
     message.success('已保存，配置推送中…')
     cur.value = 'verify'
@@ -604,7 +610,12 @@ async function applyRoute() {
       serverId.value = id; onServerChange()
       scenarioKey.value = 'https-proxy'; applyScenarioDefaults(scenarioByKey('https-proxy'))
       cur.value = 'domain'; reached.value = 2
+      return
     }
+  }
+  if (serverId.value == null && servers.value.length) {
+    serverId.value = servers.value[0].id
+    onServerChange()
   }
 }
 

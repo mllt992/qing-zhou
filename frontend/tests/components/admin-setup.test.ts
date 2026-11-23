@@ -142,4 +142,40 @@ describe('AdminSetup wizard', () => {
       cert_id: 10,
     }))
   })
+
+  it('invalidates existing TLS profile when the server domain is changed in step 3', async () => {
+    seedApi()
+    let currentDomain = 'vps-taxi.mllt.vip'
+    mocks.apiList.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/servers') return [{ ...sampleServers[0], domain: currentDomain }]
+      if (url === '/api/admin/certs') return [{ id: 10, name: 'wildcard', domain: '*.mllt.vip', status: 'valid', days_left: 80, self_signed: false }]
+      if (url === '/api/admin/sb/tls') return sampleTls
+      if (url === '/api/admin/sb/inbounds') return sampleInbounds
+      return []
+    })
+    mocks.apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/dns')) { currentDomain = 'taxi2.mllt.vip'; return {} }
+      if (url.endsWith('/dns-check')) return { domain: currentDomain, status: 'ok', resolved: ['217.216.188.164'] }
+      if (url === '/api/admin/sb/tls/cert') return { id: 99, name: 'taxi2.mllt.vip' }
+      return {}
+    })
+
+    const { wrapper } = await mountSetup('/admin/setup?inbound=30')
+    // Go to domain step and save a new domain under the same wildcard cert
+    const domainStep = wrapper.findAll('.n-step').find(s => s.text().includes('域名与解析'))!
+    await domainStep.trigger('click')
+    await flushPromises()
+    const saveManualBtn = wrapper.findAll('button').find(b => b.text().includes('仅保存域名'))!
+    await saveManualBtn.trigger('click')
+    await flushPromises()
+
+    // Moving to TLS step must create a new TLS profile for taxi2.mllt.vip instead of keeping old tls_id=20
+    const tlsStep = wrapper.findAll('.n-step').find(s => s.text().includes('TLS 配置'))!
+    await tlsStep.trigger('click')
+    await flushPromises()
+    expect(mocks.apiPost).toHaveBeenCalledWith('/api/admin/sb/tls/cert', expect.objectContaining({
+      server_name: 'taxi2.mllt.vip',
+      cert_id: 10,
+    }))
+  })
 })
