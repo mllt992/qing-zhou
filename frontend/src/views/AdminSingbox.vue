@@ -96,6 +96,7 @@
           <n-button v-if="checkedIds.size" size="small" :disabled="batchToggling" @click="batchToggle(false)">批量停用</n-button>
           <n-button v-if="checkedIds.size" size="small" type="error" :disabled="batchToggling" @click="batchDelete">批量删除</n-button>
           <n-button size="small" @click="toggleAllMachines">{{ allExpanded ? '全部折叠' : '全部展开' }}</n-button>
+          <n-button size="small" type="primary" secondary @click="router.push('/admin/setup')">配置向导</n-button>
           <n-button size="small" type="primary" @click="openInbound()">添加入站</n-button>
         </div>
         <n-alert v-if="batchToggleFailures.length" type="error" title="部分入站未保存" style="margin-bottom:12px;">
@@ -156,6 +157,7 @@
                   </div>
                   <div class="lc-foot">
                     <n-button size="tiny" @click="openInbound(r)">编辑</n-button>
+                    <n-button v-if="canWizardEdit(r)" size="tiny" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { inbound: String(r.id) } })">向导编辑</n-button>
                     <n-button v-if="(r.tls_id || hasInlineTls(r)) && !TLS_PROBE_QUIC.includes(r.type)" size="tiny" :loading="tlsChecking[r.id]" @click="runTlsCheck(r)">TLS 检测</n-button>
                     <n-button size="tiny" @click="cloneInbound(r)">克隆</n-button>
                     <n-button size="tiny" :loading="portChecking === r.id" @click="checkPort(r)">测端口</n-button>
@@ -742,6 +744,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NTabs, NTabPane, NDrawer, NDrawerContent, NButton, NForm, NFormItem, NInput, NInputNumber, NInputGroup,
   NSelect, NSwitch, NRadioGroup, NRadio, NTag, NSpin, NEmpty, NCode, NCheckbox, NCollapse, NCollapseItem,
@@ -750,7 +753,12 @@ import {
 import { apiList, apiGet, apiGetRaw, apiPost, apiPut, apiDelete } from '@/api'
 import { applyInboundToggle, type BatchToggleFailure } from '@/utils/inboundBatch'
 import { sniForCert } from '@/utils/certSni'
+import { scenarioForInbound } from '@/utils/setupWizard'
 
+const router = useRouter()
+function canWizardEdit(r: any): boolean {
+  return !!r?.server_id && !!scenarioForInbound(r, tlsList.value.find((t: any) => t.id === r.tls_id) || null)
+}
 const message = useMessage()
 const dialog = useDialog()
 const tab = ref('tls')

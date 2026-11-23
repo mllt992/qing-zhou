@@ -55,8 +55,9 @@ func runTLSCheck(t *testing.T, a *API, id int64) inboundTLSCheckResult {
 }
 
 // #118: the HTTPS proxy from the bug report — TCP-reachable, TLS handshake
-// fine, certificate issued only for a shared domain — gets a TLS error, while
-// QUIC and non-TLS inbounds are skipped rather than failed.
+// fine, certificate issued only for a shared domain — gets a TLS warning (an
+// uncovered address is allowed, reminder only), while QUIC and non-TLS
+// inbounds are skipped rather than failed.
 func TestInboundTLSCheck(t *testing.T) {
 	a, st := newUserEditAPI(t)
 	certPEM, keyPEM, _ := singbox.GenerateSelfSignedCert("ssl.mllt.vip", 3650)
@@ -72,8 +73,8 @@ func TestInboundTLSCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := runTLSCheck(t, a, mixed)
-	if res.Status != tlsprobe.StatusError || len(res.Results) != 1 || !res.Results[0].Handshake {
-		t.Fatalf("mixed with shared domain cert by IP must be a TLS error: %+v", res)
+	if res.Status != tlsprobe.StatusWarning || len(res.Results) != 1 || !res.Results[0].Handshake || len(res.Results[0].Problems) != 0 {
+		t.Fatalf("mixed with shared domain cert by IP must only warn: %+v", res)
 	}
 	if pm := res.Results[0].PinMatch; pm == nil || !*pm {
 		t.Fatalf("presented certificate equals the managed one: %+v", res.Results[0])

@@ -20,6 +20,8 @@
         提示：ACME 申请需先在
         <router-link to="/admin/settings" style="color:var(--primary);">系统设置</router-link>
         填写 Cloudflare API Token；DNS 验证在面板本机完成，域名请在 Cloudflare 用<b>灰云（DNS only）</b>指向节点 IP 以保持直连速度。
+        需要按步骤完成域名、证书、TLS 与入站？可使用
+        <router-link to="/admin/setup" style="color:var(--primary);">配置向导</router-link>。
       </div>
     </n-card>
 

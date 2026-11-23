@@ -41,22 +41,29 @@ func serveTLS(t *testing.T, certPEM, keyPEM string) string {
 	return ln.Addr().String()
 }
 
-// The reported case: a shared domain certificate on an HTTPS proxy reached by
-// IP. The handshake succeeds (TCP health would be green) but the TLS status is
-// an error naming the address and the certificate's real names.
+// A shared domain certificate on an HTTPS proxy reached by IP (or an IPv6
+// address the cert never covers). The handshake succeeds and the address
+// mismatch is only a warning naming the address and the certificate's names —
+// never an error.
 func TestProbeHTTPSProxySharedDomainCert(t *testing.T) {
 	certPEM, keyPEM, _ := singbox.GenerateSelfSignedCert("ssl.mllt.vip", 3650)
 	addr := serveTLS(t, certPEM, keyPEM)
 	pin := singbox.CertFingerprintSHA256(certPEM)
 	r := Probe(context.Background(), Target{Addr: addr, Host: "127.0.0.1", MustCoverHost: true, ExpectedSHA256: pin, SelfSigned: true}, time.Now())
-	if !r.Handshake || r.Status != StatusError {
+	if !r.Handshake || r.Status != StatusWarning || len(r.Problems) != 0 {
 		t.Fatalf("status=%s handshake=%v %+v", r.Status, r.Handshake, r)
 	}
 	if r.PinMatch == nil || !*r.PinMatch || r.HostCovered == nil || *r.HostCovered {
 		t.Fatalf("pin/host flags wrong: %+v", r)
 	}
-	if !strings.Contains(strings.Join(r.Problems, ""), "ssl.mllt.vip") {
-		t.Fatalf("problem must name the certificate's names: %v", r.Problems)
+	if !strings.Contains(strings.Join(r.Warnings, ""), "ssl.mllt.vip") {
+		t.Fatalf("warning must name the certificate's names: %v", r.Warnings)
+	}
+	// Non-HTTPS protocols without an SNI (hy2, tuic…) do not verify the
+	// address: informational note only, status stays ok.
+	r = Probe(context.Background(), Target{Addr: addr, Host: "127.0.0.1", ExpectedSHA256: pin, SelfSigned: true}, time.Now())
+	if r.Status != StatusOK || len(r.Notes) == 0 {
+		t.Fatalf("non-HTTPS protocol must be ok with a note: %+v", r)
 	}
 	// Same certificate on a protocol that sends the SNI: fine, only a note.
 	r = Probe(context.Background(), Target{Addr: addr, SNI: "ssl.mllt.vip", Host: "127.0.0.1", ExpectedSHA256: pin, SelfSigned: true}, time.Now())

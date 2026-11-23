@@ -90,7 +90,7 @@ import {
   PersonOutline, PeopleOutline, PeopleCircleOutline, ArchiveOutline, ServerOutline,
   SettingsOutline, KeyOutline, NotificationsOutline, DocumentTextOutline,
   PulseOutline, HardwareChipOutline, HomeOutline, LogOutOutline, CloudDownloadOutline, CloudOutline,
-  ShieldCheckmarkOutline, SearchOutline
+  ShieldCheckmarkOutline, SearchOutline, CompassOutline
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
@@ -152,6 +152,7 @@ const adminOpsItems: MenuOption[] = [
   { label: 'API Token', key: '/admin/api-tokens', icon: renderIcon(KeyOutline) },
 ]
 const adminNodeItems: MenuOption[] = [
+  { label: '配置向导', key: '/admin/setup', icon: renderIcon(CompassOutline) },
   { label: '节点管理', key: '/admin/nodes', icon: renderIcon(ServerOutline) },
   { label: 'sing-box', key: '/admin/singbox', icon: renderIcon(HardwareChipOutline) },
   { label: '证书管理', key: '/admin/certs', icon: renderIcon(ShieldCheckmarkOutline) },
@@ -191,7 +192,7 @@ const titleMap: Record<string, string> = {
   '/': '首页', '/dashboard': '控制台', '/sub': '订阅管理', '/shop': '积分商城',
   '/orders': '订单记录', '/points': '积分明细', '/notices': '公告通知', '/help': '帮助中心', '/account': '账户设置',
   '/admin': '管理概览', '/admin/upstreams': '上游管理', '/admin/users': '用户管理', '/admin/user-groups': '用户组', '/admin/packages': '套餐管理', '/admin/nodes': '节点管理',
-  '/admin/singbox': 'sing-box', '/admin/certs': '证书管理', '/admin/orders': '订单管理', '/admin/servers': '服务器', '/admin/monitor': '监控管理',
+  '/admin/singbox': 'sing-box', '/admin/setup': '配置向导', '/admin/certs': '证书管理', '/admin/orders': '订单管理', '/admin/servers': '服务器', '/admin/monitor': '监控管理',
   '/admin/point-codes': '积分兑换码', '/admin/settings': '系统设置', '/admin/reg-codes': '注册码', '/admin/api-tokens': 'API Token', '/admin/announcements': '公告管理', '/admin/manual-notifications': '手动通知', '/admin/help': '帮助文档',
   '/admin/update': '在线更新',
 }
