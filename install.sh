@@ -303,6 +303,7 @@ Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=full
+ReadWritePaths=-/etc/sing-box
 
 [Install]
 WantedBy=multi-user.target

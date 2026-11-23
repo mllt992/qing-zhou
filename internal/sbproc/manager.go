@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -83,7 +84,7 @@ func sandboxHint(dir string, err error) error {
 	}
 	return fmt.Errorf("%w —— %s 对面板进程只读，宿主机上能写不代表服务里能写："+
 		"面板 systemd 单元的 ProtectSystem 把它挡在了外面。放行后重启面板："+
-		"mkdir -p /etc/systemd/system/qingzhou.service.d && printf '[Service]\\nReadWritePaths=%s\\n' "+
+		"mkdir -p /etc/systemd/system/qingzhou.service.d && printf '[Service]\\nReadWritePaths=-%s\\n' "+
 		"> /etc/systemd/system/qingzhou.service.d/10-singbox-rw.conf && systemctl daemon-reload && systemctl restart qingzhou",
 		err, dir, dir)
 }
@@ -130,11 +131,10 @@ func writeConfig(path string, config []byte, direct, escalate func(string, []byt
 	if e := escalate(path, config); e != nil {
 		return fmt.Errorf("%w（已试过用 systemd-run 绕开沙箱，也失败了：%v）", sandboxHint(dir, err), e)
 	}
-	// The escalated write hands the bytes to another process down a pipe, so a
-	// clean EOF is indistinguishable from a truncated transfer: if this panel is
-	// killed mid-write, `cat` ends happily and installs a short config that stays
-	// invisible until the next sing-box restart refuses to parse it. Reading the
-	// file back settles it exactly, and reading is never what the mount forbids.
+	// Guard against an escalator that exits 0 without landing the expected bytes
+	// (mid-transfer truncation when this panel dies is caught inside the helper
+	// script itself via its byte-count check before mv). Reading is never what
+	// the read-only mount forbids, so verifying the landed file is cheap and exact.
 	got, e := os.ReadFile(path)
 	if e != nil {
 		return fmt.Errorf("绕过沙箱写入后读回失败，无法确认 %s 的内容: %w", path, e)
@@ -187,17 +187,18 @@ func writeDirect(path string, config []byte) error {
 // config and again for every `servers` row on this machine, and systemd refuses
 // a name it has not finished collecting yet. These writes are milliseconds long
 // and already serialized by their callers, so there is nothing to pile up.
-func systemdRunArgv(systemdRun, configPath string) []string {
-	// Same atomic swap as writeDirect, expressed for sh: sibling temp, then mv.
-	// umask matches os.CreateTemp's 0600 so the escalated path doesn't quietly
-	// widen the permissions on a file holding every user's credentials. The trap
-	// clears the temp when the write dies partway, so a failed attempt doesn't
-	// leave a stale half-config sitting next to the live one.
-	const script = `set -e; umask 077; trap 'rm -f "$1.qz-tmp"' EXIT; cat > "$1.qz-tmp"; mv "$1.qz-tmp" "$1"`
+func systemdRunArgv(systemdRun, configPath string, configLen int) []string {
+	// Same atomic swap as writeDirect, expressed for sh: sibling temp, byte-count
+	// check, then mv. umask matches os.CreateTemp's 0600 so the escalated path
+	// doesn't quietly widen the permissions on a file holding every user's
+	// credentials. Checking byte count inside the transient unit stops a
+	// mid-write kill of the panel (which closes the pipe with a clean EOF) from
+	// installing a truncated config. The trap clears the temp on any failure.
+	const script = `set -e; umask 077; trap 'rm -f "$1.qz-tmp"' EXIT; cat > "$1.qz-tmp"; [ $(wc -c < "$1.qz-tmp") -eq "$2" ]; mv "$1.qz-tmp" "$1"`
 	return []string{
 		systemdRun, "--pipe", "--wait", "--collect", "--quiet",
 		"-p", "RuntimeMaxSec=15", "--",
-		"/bin/sh", "-c", script, "sh", configPath,
+		"/bin/sh", "-c", script, "sh", configPath, strconv.Itoa(configLen),
 	}
 }
 
@@ -216,7 +217,7 @@ func systemdRunSwap(configPath string, config []byte) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	argv := systemdRunArgv(bin, configPath)
+	argv := systemdRunArgv(bin, configPath, len(config))
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdin = bytes.NewReader(config)
 	out, err := cmd.CombinedOutput()

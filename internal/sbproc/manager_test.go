@@ -125,7 +125,7 @@ func TestSandboxHint_ExplainsEROFSAndKeepsCause(t *testing.T) {
 	if !errors.Is(got, syscall.EROFS) {
 		t.Fatalf("wrapped error lost the EROFS cause: %v", got)
 	}
-	for _, want := range []string{"ProtectSystem", "ReadWritePaths", "/etc/sing-box"} {
+	for _, want := range []string{"ProtectSystem", "ReadWritePaths=-/etc/sing-box"} {
 		if !strings.Contains(got.Error(), want) {
 			t.Errorf("hint does not mention %q:\n%s", want, got)
 		}
@@ -147,10 +147,13 @@ func TestSandboxHint_LeavesOtherErrorsAlone(t *testing.T) {
 // ones that predate systemd 236 (same set localInstallArgv settled on).
 func TestSystemdRunArgv_PathIsArgumentNotScript(t *testing.T) {
 	path := `/etc/sing-box/o'ddly named.json`
-	argv := systemdRunArgv("/usr/bin/systemd-run", path)
+	argv := systemdRunArgv("/usr/bin/systemd-run", path, 42)
 
-	if argv[len(argv)-1] != path {
-		t.Errorf("config path is not the last argument: %q", argv)
+	if argv[len(argv)-2] != path {
+		t.Errorf("config path is not the $1 argument: %q", argv)
+	}
+	if argv[len(argv)-1] != "42" {
+		t.Errorf("config length is not the $2 argument: %q", argv)
 	}
 	for _, a := range argv {
 		if strings.Contains(a, "cat >") && strings.Contains(a, path) {
