@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import {
   SCENARIOS, scenarioByKey, visibleSteps, defaultUseRealCert, certCoversDomain, matchingCerts,
-  scenarioForInbound, inboundOptions, joinDomain, splitDomain, canChooseCertMode, verifyVerdict,
+  matchingCertTls, tlsServerName, scenarioForInbound, inboundOptions, joinDomain, splitDomain, canChooseCertMode, verifyVerdict,
 } from '@/utils/setupWizard'
 
 it('HTTPS proxy walks the full domain → cert → TLS path', () => {
@@ -78,3 +78,18 @@ it('a TLS warning is a reminder, not a failure', () => {
   expect(verifyVerdict('error').type).toBe('error')
   expect(verifyVerdict('skipped').type).toBe('default')
 })
+
+it('matchingCertTls requires matching cert_id, SNI, and compatible server_id so wildcard certs do not cross-reuse', () => {
+  const list = [
+    { id: 1, cert_id: 10, server_id: 0, mode: 'tls', server_json: '{"enabled":true,"server_name":"node1.mllt.vip"}' },
+    { id: 2, cert_id: 10, server_id: 2, mode: 'tls', server_json: '{"enabled":true,"server_name":"vps-taxi.mllt.vip"}' },
+    { id: 3, cert_id: 10, server_id: 0, mode: 'tls', server_json: '{"enabled":true,"server_name":"vps-taxi.mllt.vip"}' },
+  ]
+  expect(tlsServerName(list[0])).toBe('node1.mllt.vip')
+  // Different subdomain under same wildcard cert_id=10 must not match node1
+  expect(matchingCertTls(list.slice(0, 1), 10, 'vps-taxi.mllt.vip', 1)).toBeNull()
+  // Server-scoped profile for server 2 must not be reused on server 1, falls back to global profile 3
+  expect(matchingCertTls(list, 10, 'vps-taxi.mllt.vip', 1)?.id).toBe(3)
+  expect(matchingCertTls(list, 10, 'VPS-Taxi.mllt.vip', 2)?.id).toBe(2)
+})
+

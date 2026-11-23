@@ -125,9 +125,9 @@
                 <n-tag size="small" :type="pre.acme_installed ? 'success' : 'warning'" :bordered="false">{{ pre.acme_installed ? 'acme.sh 已安装' : 'acme.sh 未安装' }}</n-tag>
                 <n-tag size="small" :type="cf.configured ? 'success' : 'default'" :bordered="false">{{ cf.configured ? 'Cloudflare Token 已配置' : '未配置 Cloudflare Token' }}</n-tag>
               </p>
-              <div class="setup-row">
+              <div v-if="!pre.acme_installed" class="setup-row">
                 <n-input v-model:value="acmeEmail" placeholder="ACME 账号邮箱（可选，用于到期提醒）" style="max-width:320px" />
-                <n-button v-if="!pre.acme_installed" :loading="busy.install" @click="installAcme">一键安装 acme.sh</n-button>
+                <n-button :loading="busy.install" @click="installAcme">一键安装 acme.sh</n-button>
               </div>
               <div class="setup-row">
                 <n-radio-group v-model:value="acmeMethod">
@@ -168,6 +168,7 @@
           <n-select v-if="selfMode === 'reuse'" v-model:value="tlsId" :options="reusableTls" placeholder="选择已有 TLS 配置" style="max-width:420px;margin-top:8px" />
           <n-space class="setup-gap">
             <n-button v-if="selfMode === 'new'" type="primary" :loading="busy.tls" @click="quickSelfSigned">{{ tlsId ? '重新生成' : '生成自签证书' }}</n-button>
+            <n-button text type="primary" @click="switchToRealCert">改用域名 + 真实证书 →</n-button>
           </n-space>
           <n-alert v-if="tlsId" type="success" :show-icon="false" class="setup-gap">已就绪：TLS 配置「{{ tlsName }}」。</n-alert>
         </section>
@@ -256,7 +257,8 @@ import {
 import { apiList, apiGet, apiPost, apiPut } from '@/api'
 import {
   SCENARIOS, STEP_TITLES, QUIC_TYPES, scenarioByKey, scenarioForInbound, visibleSteps, defaultUseRealCert,
-  canChooseCertMode, matchingCerts, inboundOptions, joinDomain, splitDomain, verifyVerdict, type Scenario, type StepKey,
+  canChooseCertMode, certCoversDomain, matchingCerts, matchingCertTls, tlsServerName,
+  inboundOptions, joinDomain, splitDomain, verifyVerdict, type Scenario, type StepKey,
 } from '@/utils/setupWizard'
 
 const route = useRoute(), router = useRouter(), message = useMessage(), dialog = useDialog()
@@ -361,8 +363,24 @@ function onServerChange() {
   const sp = splitDomain(domain.value, zones.value.map((z: any) => z.name))
   prefix.value = sp.prefix; zone.value = sp.zone
   dnsRes.value = null
+  // 切换服务器后，若原选中的证书不再覆盖新服务器域名，或原 TLS 绑定在别的服务器上，清理掉以免串配
+  const eff = (s?.domain || '').trim().toLowerCase()
+  const curCert = certs.value.find(c => c.id === certId.value)
+  if (curCert && (!eff || !certCoversDomain(curCert.domain, eff))) certId.value = 0
+  const curTls = tlsList.value.find(t => t.id === tlsId.value)
+  if (curTls) {
+    const wrongServer = curTls.server_id && curTls.server_id !== s?.id
+    const wrongSni = useRealCert.value && canChooseCertMode(scenario.value) && tlsServerName(curTls).toLowerCase() !== eff
+    if (wrongServer || wrongSni) tlsId.value = 0
+  }
 }
 function syncDomain() { const d = joinDomain(prefix.value, zone.value); if (d) domain.value = d }
+function switchToRealCert() {
+  useRealCert.value = true
+  tlsId.value = 0
+  cur.value = 'domain'
+  reached.value = Math.max(reached.value, steps.value.indexOf('domain'))
+}
 
 // 域名 + 解析
 async function saveDomain(mode: 'cf' | 'manual', overwrite = false) {
@@ -422,7 +440,7 @@ async function ensureTls() {
   if (!certId.value || !effDomain.value) return
   busy.tls = true
   try {
-    const exist = tlsList.value.find(t => t.cert_id === certId.value && t.mode !== 'reality')
+    const exist = matchingCertTls(tlsList.value, certId.value, effDomain.value, serverId.value)
     if (exist) { tlsId.value = exist.id; message.success('已复用现有 TLS 配置'); return }
     const t: any = await apiPost('/api/admin/sb/tls/cert', { name: effDomain.value, server_id: 0, server_name: effDomain.value, cert_id: certId.value, insecure: false })
     await refreshTls()
@@ -535,6 +553,12 @@ function loadInboundIntoWizard(ib: any): boolean {
   tlsId.value = ib.tls_id || 0
   certId.value = tls?.cert_id || 0
   useRealCert.value = canChooseCertMode(sc) ? !!tls?.cert_id : false
+  if (sc.tls === 'reality') {
+    const sni = tlsServerName(tls)
+    if (sni) realitySni.value = sni
+  } else if (sc.tls === 'cert' && !tls?.cert_id && ib.tls_id) {
+    selfMode.value = 'reuse'
+  }
   onServerChange()
   cur.value = 'server'; reached.value = steps.value.length - 1
   return true
@@ -585,6 +609,12 @@ async function applyRoute() {
 }
 
 onMounted(bootstrap)
+watch(() => [route.query.inbound, route.query.server], ([ib, sv]) => {
+  if (loading.value) return
+  if (ib && Number(ib) !== editingId.value) applyRoute()
+  else if (!ib && !sv && editingId.value) restart()
+  else if (sv && Number(sv) !== serverId.value) applyRoute()
+})
 </script>
 
 <style scoped>

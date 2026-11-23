@@ -90,6 +90,29 @@ export function matchingCerts(certs: any[], domain: string): any[] {
     c && c.status !== 'expired' && c.status !== 'decrypt_failed' && certCoversDomain(c.domain, domain))
 }
 
+/** 解析 TLS 配置里的 server_name（SNI）。 */
+export function tlsServerName(tls?: { server_json?: string } | null): string {
+  if (!tls || !tls.server_json) return ''
+  try {
+    const o = typeof tls.server_json === 'string' ? JSON.parse(tls.server_json) : tls.server_json
+    return typeof o?.server_name === 'string' ? o.server_name.trim() : ''
+  } catch { return '' }
+}
+
+/**
+ * 查找可复用的证书型 TLS 配置：必须引用同一张证书、非 Reality、
+ * 所属机器为全局(0)或当前服务器，且 SNI 与当前域名一致（防止泛域名证书跨子域名误复用不同 SNI）。
+ */
+export function matchingCertTls(tlsList: any[], certId: number, domain: string, serverId?: number | null): any | null {
+  const d = (domain || '').trim().toLowerCase()
+  if (!certId || !d) return null
+  const sid = serverId || 0
+  return (tlsList || []).find(t =>
+    t && t.cert_id === certId && t.mode !== 'reality' && !(t.server_json || '').includes('"reality"')
+    && (!t.server_id || t.server_id === sid)
+    && tlsServerName(t).toLowerCase() === d) || null
+}
+
 /** 从已有入站反推向导场景；向导不支持的协议返回 null（让用户去 sing-box 页面改）。 */
 export function scenarioForInbound(inbound: { type: string }, tls?: { server_json?: string } | null): Scenario | null {
   switch (inbound.type) {

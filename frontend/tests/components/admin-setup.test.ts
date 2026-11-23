@@ -116,4 +116,30 @@ describe('AdminSetup wizard', () => {
       options: '{"tcp_fast_open":true}',
     }))
   })
+
+  it('does not reuse a wildcard cert TLS profile whose SNI belongs to another subdomain', async () => {
+    seedApi()
+    mocks.apiList.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/servers') return sampleServers
+      if (url === '/api/admin/certs') return [{ id: 10, name: 'wildcard', domain: '*.mllt.vip', status: 'valid', days_left: 80, self_signed: false }]
+      if (url === '/api/admin/sb/tls') return [{ id: 21, name: 'other-node', mode: 'tls', cert_id: 10, server_id: 0, server_json: '{"enabled":true,"server_name":"other.mllt.vip"}' }]
+      if (url === '/api/admin/sb/inbounds') return []
+      return []
+    })
+    mocks.apiPost.mockResolvedValue({ id: 22, name: 'vps-taxi.mllt.vip' })
+
+    const { wrapper } = await mountSetup('/admin/setup?server=1')
+    // Jump from domain → cert → tls
+    const nextBtn = () => wrapper.findAll('button').find(b => b.text() === '下一步')!
+    await nextBtn().trigger('click') // to cert (auto-selects wildcard cert 10)
+    await flushPromises()
+    await nextBtn().trigger('click') // to tls (triggers ensureTls)
+    await flushPromises()
+
+    expect(mocks.apiPost).toHaveBeenCalledWith('/api/admin/sb/tls/cert', expect.objectContaining({
+      name: 'vps-taxi.mllt.vip',
+      server_name: 'vps-taxi.mllt.vip',
+      cert_id: 10,
+    }))
+  })
 })

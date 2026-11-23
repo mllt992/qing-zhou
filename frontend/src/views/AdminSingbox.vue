@@ -157,7 +157,7 @@
                   </div>
                   <div class="lc-foot">
                     <n-button size="tiny" @click="openInbound(r)">编辑</n-button>
-                    <n-button v-if="r.server_id" size="tiny" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { inbound: String(r.id) } })">向导编辑</n-button>
+                    <n-button v-if="canWizardEdit(r)" size="tiny" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { inbound: String(r.id) } })">向导编辑</n-button>
                     <n-button v-if="(r.tls_id || hasInlineTls(r)) && !TLS_PROBE_QUIC.includes(r.type)" size="tiny" :loading="tlsChecking[r.id]" @click="runTlsCheck(r)">TLS 检测</n-button>
                     <n-button size="tiny" @click="cloneInbound(r)">克隆</n-button>
                     <n-button size="tiny" :loading="portChecking === r.id" @click="checkPort(r)">测端口</n-button>
@@ -753,8 +753,12 @@ import {
 import { apiList, apiGet, apiGetRaw, apiPost, apiPut, apiDelete } from '@/api'
 import { applyInboundToggle, type BatchToggleFailure } from '@/utils/inboundBatch'
 import { sniForCert } from '@/utils/certSni'
+import { scenarioForInbound } from '@/utils/setupWizard'
 
 const router = useRouter()
+function canWizardEdit(r: any): boolean {
+  return !!r?.server_id && !!scenarioForInbound(r, tlsList.value.find((t: any) => t.id === r.tls_id) || null)
+}
 const message = useMessage()
 const dialog = useDialog()
 const tab = ref('tls')
