@@ -111,6 +111,11 @@ func clashToLink(m map[string]any) string {
 		if cbool(m["skip-cert-verify"]) {
 			q.Set("allowInsecure", "1")
 		}
+		if q.Get("security") == "tls" {
+			if ech := clashECHParam(m); ech != "" {
+				q.Set("ech", ech)
+			}
+		}
 		return "vless://" + str(m["uuid"]) + "@" + addr + qstr(q) + frag
 
 	case "vmess":
@@ -143,6 +148,9 @@ func clashToLink(m map[string]any) string {
 			}
 			if v := alpnStr(m["alpn"]); v != "" {
 				j["alpn"] = v
+			}
+			if ech := clashECHParam(m); ech != "" {
+				j["ech"] = ech
 			}
 		}
 		if strOr(str(m["network"]), "tcp") == "ws" {
@@ -190,6 +198,9 @@ func clashToLink(m map[string]any) string {
 		if cbool(m["skip-cert-verify"]) {
 			q.Set("allowInsecure", "1")
 		}
+		if ech := clashECHParam(m); ech != "" {
+			q.Set("ech", ech)
+		}
 		return "trojan://" + url.User(str(m["password"])).String() + "@" + addr + qstr(q) + frag
 
 	// hysteria (v1) is deliberately NOT folded in here: it is a different wire
@@ -205,6 +216,9 @@ func clashToLink(m map[string]any) string {
 		}
 		if cbool(m["skip-cert-verify"]) {
 			q.Set("insecure", "1")
+		}
+		if ech := clashECHParam(m); ech != "" {
+			q.Set("ech", ech)
 		}
 		return "hysteria2://" + str(m["password"]) + "@" + addr + qstr(q) + frag
 
@@ -224,6 +238,9 @@ func clashToLink(m map[string]any) string {
 		}
 		if v := alpnStr(m["alpn"]); v != "" {
 			q.Set("alpn", v)
+		}
+		if ech := clashECHParam(m); ech != "" {
+			q.Set("ech", ech)
 		}
 		return "anytls://" + url.QueryEscape(str(m["password"])) + "@" + addr + qstr(q) + frag
 
@@ -264,6 +281,9 @@ func clashToLink(m map[string]any) string {
 		if cbool(m["skip-cert-verify"]) {
 			q.Set("insecure", "1")
 		}
+		if ech := clashECHParam(m); ech != "" {
+			q.Set("ech", ech)
+		}
 		return "hysteria://" + addr + qstr(q) + frag
 
 	case "tuic":
@@ -279,6 +299,9 @@ func clashToLink(m map[string]any) string {
 		}
 		if cbool(m["skip-cert-verify"]) {
 			q.Set("allow_insecure", "1")
+		}
+		if ech := clashECHParam(m); ech != "" {
+			q.Set("ech", ech)
 		}
 		return "tuic://" + str(m["uuid"]) + ":" + str(m["password"]) + "@" + addr + qstr(q) + frag
 	}

@@ -153,11 +153,25 @@ func protocolCheckFixtures(t *testing.T) []Inbound {
 	if err != nil {
 		t.Fatalf("self-signed cert: %v", err)
 	}
+	_, echKeyPEM, err := GenerateECHKeypair("public.example.test")
+	if err != nil {
+		t.Fatalf("ech keygen: %v", err)
+	}
 	tls := map[string]interface{}{
 		"enabled":     true,
 		"server_name": "check.example.test",
 		"certificate": certPEM,
 		"key":         keyPEM,
+	}
+	tlsWithECH := map[string]interface{}{
+		"enabled":     true,
+		"server_name": "check.example.test",
+		"certificate": certPEM,
+		"key":         keyPEM,
+		"ech": map[string]interface{}{
+			"enabled": true,
+			"key":     PEMLines(echKeyPEM),
+		},
 	}
 	user := User{Name: "tester", UUID: "11111111-2222-4333-8444-555555555555", Password: "testpass-32bytes-xxxxxxxx"}
 	listen := func(typ, tag string, port int, extra map[string]interface{}) Inbound {
@@ -202,6 +216,7 @@ func protocolCheckFixtures(t *testing.T) []Inbound {
 			"method": "2022-blake3-aes-128-gcm", "password": ssServerKey,
 		}),
 		listen("anytls", "in-anytls", 19013, map[string]interface{}{"tls": tls}),
+		listen("trojan", "in-trojan-ech", 19014, map[string]interface{}{"tls": tlsWithECH}),
 	}
 }
 

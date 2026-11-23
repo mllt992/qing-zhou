@@ -1026,6 +1026,22 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		} else {
 			p.PinSHA256 = ""
 		}
+		if tlsEnabled && !tlsDisabled {
+			if se, ok := server["ech"].(map[string]interface{}); ok && mapBool(se, "enabled") {
+				var echCfg string
+				if ce, ok := client["ech"].(map[string]interface{}); ok {
+					echCfg = singbox.ECHConfigBase64(ce["config"])
+				}
+				if echCfg == "" {
+					if keyPEM := singbox.JoinPEMLines(se["key"]); keyPEM != "" {
+						if cfgPEM, _, err := singbox.ECHConfigFromKeyPEM(keyPEM); err == nil {
+							echCfg = singbox.ECHConfigBase64(cfgPEM)
+						}
+					}
+				}
+				p.ECHConfig = echCfg
+			}
+		}
 		// Multiplex + Brutal (vless/vmess/trojan): both are opt-in on the client,
 		// so mirror the inbound's setting onto the link or Brutal does nothing.
 		if mx, ok := opts["multiplex"].(map[string]interface{}); ok && mapBool(mx, "enabled") {

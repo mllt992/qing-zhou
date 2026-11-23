@@ -17,6 +17,7 @@ func LegacyShareLinkForNodeKey(p LinkParams) string {
 	// The certificate-pinning extensions postdate every legacy serializer.
 	// Hysteria links have always carried the standard pinSHA256.
 	p.PinCert = ""
+	p.ECHConfig = ""
 	if p.Type != "hysteria" && p.Type != "hysteria2" {
 		p.PinSHA256 = ""
 	}

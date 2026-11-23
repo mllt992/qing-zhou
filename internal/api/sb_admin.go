@@ -418,18 +418,7 @@ func (a *API) handleAdminListSbTls(w http.ResponseWriter, r *http.Request) {
 	// 为每个证书 TLS 模式的配置附带证书有效期信息
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, t := range list {
-		m := map[string]interface{}{
-			"id":          t.ID,
-			"server_id":   t.ServerID,
-			"name":        t.Name,
-			"mode":        t.Mode,
-			"server_json": t.ServerJSON,
-			"client_json": t.ClientJSON,
-			"cert_id":     t.CertID,
-			"sort_order":  t.SortOrder,
-			"created_at":  t.CreatedAt,
-			"updated_at":  t.UpdatedAt,
-		}
+		m := sbTlsAPIView(t)
 		if t.Mode == "tls" {
 			if t.CertID != 0 {
 				// Managed cert: expiry comes from the certificates row, not inline PEM.
@@ -464,6 +453,7 @@ func (a *API) handleAdminSaveSbTls(w http.ResponseWriter, r *http.Request) {
 	if id != "" {
 		t.ID = atoi(id)
 	}
+	a.preserveStoredECHKey(&t)
 	newID, err := a.st.SaveSbTls(&t)
 	if err != nil {
 		if failRelayTopology(w, err) {
@@ -477,7 +467,7 @@ func (a *API) handleAdminSaveSbTls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	saved, _ := a.st.GetSbTls(newID)
-	ok(w, saved)
+	ok(w, sbTlsAPIView(saved))
 }
 
 // handleAdminReorderSbTls persists a new display order for the TLS list.
@@ -718,9 +708,12 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		CertID      int64    `json:"cert_id"` // reference a managed certificate instead of inline PEM
 		Insecure    bool     `json:"insecure"`
 		ALPN        []string `json:"alpn"`
-		Fingerprint string   `json:"fingerprint"`
-		MinVersion  string   `json:"min_version"`
-		MaxVersion  string   `json:"max_version"`
+		Fingerprint   string   `json:"fingerprint"`
+		MinVersion    string   `json:"min_version"`
+		MaxVersion    string   `json:"max_version"`
+		ECHEnabled    bool     `json:"ech_enabled"`
+		ECHKeyToken   string   `json:"ech_key_token"`
+		ECHPublicName string   `json:"ech_public_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		fail(w, http.StatusBadRequest, "请求格式错误")
@@ -775,6 +768,15 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 			"insecure": insecure,
 			"utls":     map[string]interface{}{"enabled": true, "fingerprint": fpOrDefault(req.Fingerprint)},
 		}
+		if err := a.applyCertTlsECH(id, certTlsECHReq{
+			Enabled:    req.ECHEnabled,
+			KeyToken:   req.ECHKeyToken,
+			PublicName: req.ECHPublicName,
+			MaxVersion: req.MaxVersion,
+		}, server, client); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		sj, _ := json.Marshal(server)
 		cj, _ := json.Marshal(client)
 		newID, err := a.st.SaveSbTls(&store.SbTls{ID: id, ServerID: req.ServerID, Name: req.Name, Mode: "tls", CertID: req.CertID, ServerJSON: string(sj), ClientJSON: string(cj)})
@@ -787,7 +789,7 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		}
 		a.sbRebuildLog()
 		saved, _ := a.st.GetSbTls(newID)
-		ok(w, saved)
+		ok(w, sbTlsAPIView(saved))
 		return
 	}
 	// On edit, keep existing cert/key when the form leaves them blank.
@@ -855,6 +857,15 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 		"insecure": req.Insecure,
 		"utls":     map[string]interface{}{"enabled": true, "fingerprint": fpOrDefault(req.Fingerprint)},
 	}
+	if err := a.applyCertTlsECH(id, certTlsECHReq{
+		Enabled:    req.ECHEnabled,
+		KeyToken:   req.ECHKeyToken,
+		PublicName: req.ECHPublicName,
+		MaxVersion: req.MaxVersion,
+	}, server, client); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	sj, _ := json.Marshal(server)
 	cj, _ := json.Marshal(client)
 	newID, err := a.st.SaveSbTls(&store.SbTls{ID: id, ServerID: req.ServerID, Name: req.Name, Mode: "tls", ServerJSON: string(sj), ClientJSON: string(cj)})
@@ -867,7 +878,7 @@ func (a *API) handleAdminSaveCertTls(w http.ResponseWriter, r *http.Request) {
 	}
 	a.sbRebuildLog()
 	saved, _ := a.st.GetSbTls(newID)
-	ok(w, saved)
+	ok(w, sbTlsAPIView(saved))
 }
 
 // ---- sb_egresses ----
@@ -1843,7 +1854,7 @@ func (a *API) handleAdminSbPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(cfg)
+	_, _ = w.Write(redactPreviewECHKeys(cfg))
 }
 
 // GET /api/admin/sb/check?server_id=N — generate the config for a server and

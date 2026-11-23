@@ -617,6 +617,20 @@ func relayClientTLS(server, client map[string]interface{}, protocol string, quic
 			tls["certificate"] = pem
 		}
 	}
+	if _, hasExplicitECH := client["ech"]; !hasExplicitECH {
+		if se, ok := server["ech"].(map[string]interface{}); ok && mapBool(se, "enabled") {
+			if keyPEM := singbox.JoinPEMLines(se["key"]); keyPEM != "" {
+				if cfgPEM, _, err := singbox.ECHConfigFromKeyPEM(keyPEM); err == nil {
+					if echCfg := singbox.ECHConfigBase64(cfgPEM); echCfg != "" {
+						tls["ech"] = map[string]interface{}{
+							"enabled": true,
+							"config":  singbox.ECHConfigPEMLines(echCfg),
+						}
+					}
+				}
+			}
+		}
+	}
 	if reality, ok := server["reality"].(map[string]interface{}); ok && mapBool(reality, "enabled") {
 		r, _ := tls["reality"].(map[string]interface{})
 		if r == nil {

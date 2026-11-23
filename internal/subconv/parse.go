@@ -343,6 +343,8 @@ var volatileParams = map[string]bool{
 	// Certificate-pinning extensions (#116): they follow the certificate, and a
 	// rotation must not re-key the node.
 	"qz-pin": true, "qz-cert": true,
+	// ECH config (#107): enabling/rotating ECH keys must not re-key the node.
+	"ech": true,
 }
 
 // NodeKey returns a stable per-node identifier derived from a share link,
@@ -640,11 +642,13 @@ func canonicalVMessPins(s string) string {
 	}
 	_, hasPin := obj["qz-pin"]
 	_, hasCert := obj["qz-cert"]
-	if !hasPin && !hasCert {
+	_, hasECH := obj["ech"]
+	if !hasPin && !hasCert && !hasECH {
 		return s
 	}
 	delete(obj, "qz-pin")
 	delete(obj, "qz-cert")
+	delete(obj, "ech")
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return s
