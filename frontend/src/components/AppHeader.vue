@@ -68,6 +68,7 @@ const adminMenu = [
   { label: '用户管理', key: '/admin/users' },
   { label: '套餐管理', key: '/admin/packages' },
   { label: '节点管理', key: '/admin/nodes' },
+  { label: '配置向导', key: '/admin/setup' },
   { label: 'sing-box', key: '/admin/singbox' },
   { label: '服务器', key: '/admin/servers' },
   { label: '监控', key: '/admin/monitor' },

@@ -192,12 +192,16 @@ func Evaluate(r *Result, leaf *x509.Certificate, t Target, now time.Time) {
 		r.HostCovered = boolp(ok)
 		if !ok {
 			msg := fmt.Sprintf("证书不包含节点地址 %s（证书签发给 %s）", host, namesOrNone(r.CertNames))
+			// A certificate that does not cover the advertised address is
+			// never an error: certificates usually cover the domain / IPv4
+			// only, and only HTTPS-proxy clients verify the dialed address
+			// at all. Hy2/TUIC/VLESS-style clients validate the SNI (or skip
+			// verification), so for them it is merely informational.
 			switch {
 			case t.MustCoverHost:
-				nameIssue(msg + "：HTTPS 代理客户端只能按地址校验证书")
+				r.Warnings = append(r.Warnings, msg+"：HTTPS 代理客户端会按连接地址校验证书，按此地址连接的客户端需改用域名或跳过校验（仅提醒，不影响其他地址）")
 			case sni == "":
-				// No SNI: the client verifies against the address after all.
-				nameIssue(msg)
+				r.Notes = append(r.Notes, msg+"；该协议客户端通常不校验地址，仅提醒")
 			default:
 				r.Notes = append(r.Notes, msg+"；客户端按 SNI 校验，不影响连接")
 			}

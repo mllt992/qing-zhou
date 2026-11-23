@@ -85,6 +85,7 @@
           </div>
           <div class="lc-foot">
             <n-button size="tiny" type="primary" secondary @click="openTrafficAnalysis(s)">流量分析</n-button>
+            <n-button size="tiny" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { server: String(s.id) } })">向导配置</n-button>
             <n-button size="tiny" type="info" secondary @click="openDnsModal(s)">子域名</n-button>
             <n-button size="tiny" @click="handleRebuild(s.id)">重建</n-button>
             <n-button size="tiny" @click="openForm(s)">编辑</n-button>
@@ -299,6 +300,7 @@
 </template>
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, shallowRef, h } from 'vue'
+import { useRouter } from 'vue-router'
 import { NSpin, NButton, NModal, NForm, NFormItem, NInput, NInputNumber, NSwitch, NSpace, NTag, NEmpty, NCard, NSelect, NRadioGroup, NRadioButton, NDrawer, NDrawerContent, NAlert, NProgress, useMessage, useDialog } from 'naive-ui'
 import { apiList, apiPost, apiPut, apiDelete, apiGet } from '@/api'
 import { fmtBytes, fmtDateTime, pct } from '@/utils/format'
@@ -306,6 +308,7 @@ import AdminServiceTraffic from '@/components/AdminServiceTraffic.vue'
 import AdminRelayMetering from '@/components/AdminRelayMetering.vue'
 import AdminComplianceCheck from '@/components/AdminComplianceCheck.vue'
 import * as echarts from 'echarts'
+const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
 const servers = ref<any[]>([])
