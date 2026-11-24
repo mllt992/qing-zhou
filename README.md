@@ -35,6 +35,7 @@
 - **⏮️ 版本可回退** —— 「在线更新」页可**一键回滚到上一个版本**（使用本机保留的旧二进制，**不联网、不重新下载**），或指定安装历史版本。替换前自动创建带版本、revision 和校验信息的一致性数据库快照，失败则中止，最多保留 5 份。**二进制回滚不等于数据库降级**：页面提供对应快照下载和[恢复指引](docs/disaster-recovery.md)；新版本完全无法启动时，需由服务器管理员停服恢复配套数据库与二进制。
 - **💾 在线备份** —— 面板一键导出整库一致性快照（`VACUUM INTO`，单文件、无 `-wal` 附件），也可在「系统设置 → 数据备份」配置定时上传到 S3 兼容存储（如 Cloudflare R2，详见[灾备说明](docs/disaster-recovery.md)）。WAL 模式下直接拷贝 `.db` 拿到的是残缺副本，这里由 SQLite 自己在读事务上生成，导出期间面板照常读写。
 - **🚀 为小机器而生** —— WAL 模式 SQLite、纯 Go 无 CGO、内存占用低，1H1G 可同时跑面板 + 落地。
+- **🤖 AI 一键部署与内置 Remote MCP 智能运维** —— 面板原生内置符合官方 Go MCP SDK 的 **Streamable HTTP `/mcp`** 端点（复用分级 `api_tokens` 鉴权、敏感字段严格脱敏、破坏性操作两段确认、全量审计日志），配合仓库自带的 **[AI 运维 Skill](skills/qingzhou/SKILL.md)**，新手可直接让 AI 完成从安装部署、签发 MCP 密钥到建节点、配套餐、查故障的全链路运维。
 
 ---
 
@@ -150,7 +151,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/mllt992/qing-zhou/main/insta
 
 > ⚠️ **升级前**请自行独立备份一份一致性数据库，并妥善保存原 `QZ_SECRET_KEY`。新版本带数据库迁移，旧二进制不能直接用新库回退；从 **v0.2.84 或更早**首次升级尤其要备份（旧更新器只备份二进制）。节点核心需在「服务器管理」里逐台重装。
 
-常用选项：`--version vX.Y.Z` 装指定版本；`--force` 同版本强制重装；`--proxy https://mirror.ghproxy.com/` 国内下载加速。装完后升级可重跑脚本，或直接用面板内「在线更新」。
+常用选项：`--version vX.Y.Z` 装指定版本；`--force` 同版本强制重装；`--proxy https://mirror.ghproxy.com/` 国内下载加速；`--init-mcp` 安装启动后自动签发管理员 MCP 密钥并打印客户端配置 JSON。装完后升级可重跑脚本，或直接用面板内「在线更新」。
+
+#### 🤖 AI 一键部署与智能运维（推荐新手）
+
+不想手动翻找多个配置页面，可以把仓库内的 **[`skills/qingzhou/SKILL.md`](skills/qingzhou/SKILL.md)** 交给你的 AI 客户端（Claude Code / Antigravity / Cursor / OpenClaw 等）：
+
+1. AI 按 Skill 自动完成面板与含 `with_v2ray_api` 的 sing-box 部署；
+2. 在面板机运行 `/opt/qingzhou/qingzhou token create --name ai-ops --preset mcp-admin --json`（或安装时传 `--init-mcp`）签发管理员 MCP 令牌，并将 **Remote MCP 端点（`https://<你的面板域名>/mcp`）与密钥配置**完整交给你保存（方便在其他设备复用）；
+3. 接入后即可直接用自然语言让 AI 执行一站式诊断（`diagnose_panel`）、一键建节点（`quick_setup_node`）、维护服务器/监控/流量、绑定 Telegram、管理套餐与用户。
+
+> 也可随时登录后台 **「API / MCP Token」** 页面创建分级权限的 MCP 令牌（只读监控 / 日常运维 / 全量管理）、一键复制客户端 JSON 配置、查看全部 MCP 调用审计日志或随时吊销令牌。
 
 安装时会问「面板打算怎么访问」：**直接用 IP:端口打开选 1**（监听 `0.0.0.0:8081`，默认项）；前面有 nginx/caddy 反代才选 2（监听 `127.0.0.1:8081`）。选错了不用重装，改配置重启即可：
 
