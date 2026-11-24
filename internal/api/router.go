@@ -72,6 +72,8 @@ type API struct {
 	// Per-Telegram-user command limiter. The bind token is already gated by
 	// resendRL; this one stops a bound chat from hammering /sub.
 	tgRL *rateLimiter
+	// Per-IP rate limiter for built-in Remote MCP (/mcp).
+	mcpRL *rateLimiter
 	// Tests replace Telegram I/O; production leaves these nil.
 	tgSendFn   func(chatID int64, html string) error
 	tgClientFn func(token string) *telegram.Client
@@ -172,6 +174,7 @@ func New(st *store.Store, secret []byte, mail *mailer.Mailer) *API {
 		// enough that nobody swapping addresses on purpose will notice.
 		subRL:             newRateLimiter(5, 10*time.Minute), // 5 address swaps / user / 10min
 		tgRL:              newRateLimiter(20, time.Minute),   // 20 bot commands / telegram user / min
+		mcpRL:             newRateLimiter(120, time.Minute),  // 120 MCP calls / IP / min
 		remoteBackup:      backup.New(st),
 		linkCache:         make(map[int64]linkCacheEntry),
 		restartCh:         make(chan restartEvent, restartEventQueue),
@@ -323,6 +326,7 @@ func (a *API) Router() http.Handler {
 		ar.Get("/api/admin/tokens", a.handleAdminListAPITokens)
 		ar.Post("/api/admin/tokens", a.handleAdminCreateAPIToken)
 		ar.Delete("/api/admin/tokens/{id}", a.handleAdminRevokeAPIToken)
+		ar.Get("/api/admin/mcp/audit-logs", a.handleAdminMCPAuditLogs)
 		ar.Get("/api/admin/onboarding", a.handleAdminOnboarding)
 		a.registerSetupRoutes(ar)
 		ar.Get("/api/admin/settings", a.handleGetSettings)
@@ -558,6 +562,10 @@ func (a *API) Router() http.Handler {
 	// swallow it — and did, silently, which is what made 找回密码 a dead end.
 	// See handleResetPage.
 	r.Get("/reset", a.handleResetPage)
+
+	// Built-in Remote MCP (Streamable HTTP) endpoint for AI ops clients.
+	// Registered explicitly above the SPA catch-all.
+	r.Handle("/mcp", a.mcpHTTPHandler())
 
 	// Embedded SPA (must be last; specific routes above take precedence).
 	r.Handle("/*", frontend.Handler())

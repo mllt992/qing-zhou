@@ -55,6 +55,10 @@ func (s *Store) migrations() []migration {
 			}
 			return execLegacyStatement(tx, `ALTER TABLE servers ADD COLUMN domain_v6 TEXT NOT NULL DEFAULT ''`)
 		}},
+		{16, "mcp_audit_logs", func(tx *sql.Tx) error {
+			_, err := tx.Exec(mcpAuditSchema)
+			return err
+		}},
 	}
 }
 
