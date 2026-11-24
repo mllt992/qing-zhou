@@ -407,6 +407,7 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/sb/tls/quick-selfsigned", a.handleAdminQuickSelfSignedTls)
 		ar.Post("/api/admin/sb/tls/acme", a.handleAdminAcmeCert)
 		ar.Post("/api/admin/sb/tls/cert", a.handleAdminSaveCertTls)
+		ar.Post("/api/admin/sb/tls/ech-keygen", a.handleAdminGenerateECHKeypair)
 		ar.Post("/api/admin/sb/tls/reorder", a.handleAdminReorderSbTls)
 		ar.Put("/api/admin/sb/tls/cert/{id}", a.handleAdminSaveCertTls)
 		ar.Put("/api/admin/sb/tls/{id}", a.handleAdminSaveSbTls)

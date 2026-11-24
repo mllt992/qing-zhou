@@ -59,12 +59,14 @@
                   <div class="lc-head">
                     <span class="lc-title wrap" :title="r.name || ''">{{ r.name || '—' }}</span>
                     <n-tag :type="r.mode === 'reality' ? 'success' : 'info'" size="tiny" :bordered="false">{{ r.mode === 'reality' ? 'Reality' : '证书 TLS' }}</n-tag>
+                    <n-tag v-if="r.ech_enabled" type="info" size="tiny" :bordered="false">ECH</n-tag>
                     <n-tag v-if="r.cert_info" :type="r.cert_info.expired ? 'error' : r.cert_info.expiring ? 'warning' : 'success'" size="tiny" :bordered="false">
                       {{ r.cert_info.expired ? '已过期' : r.cert_info.days_left + '天' }}
                     </n-tag>
                   </div>
                   <div class="lc-meta">
                     <span class="kv">SNI <b>{{ jp(r.server_json).server_name || '—' }}</b></span>
+                    <span v-if="r.ech_enabled && r.ech_public_name" class="kv">ECH 外层 <b>{{ r.ech_public_name }}</b></span>
                     <span class="kv">入站数 <b>{{ tlsUseCount(r.id) }}</b></span>
                   </div>
                   <div class="lc-foot">
@@ -457,6 +459,40 @@
             <n-form-item label="最低 TLS"><n-select v-model:value="te.min_version" :options="verOpts" clearable /></n-form-item>
             <n-form-item label="最高 TLS"><n-select v-model:value="te.max_version" :options="verOpts" clearable /></n-form-item>
             <n-form-item label="允许不安全"><n-switch v-model:value="te.insecure" /></n-form-item>
+            <n-form-item label="启用 ECH">
+              <div style="width:100%;">
+                <n-switch v-model:value="te.ech_enabled" />
+                <div class="form-tip">加密 TLS 握手中的真实 SNI，降低按 SNI 识别/封锁风险（需 TLS 1.3；可与自签证书指纹固定同时启用）。sing-box / Clash(mihomo) / 分享链接订阅均会自动下发。</div>
+              </div>
+            </n-form-item>
+            <template v-if="te.ech_enabled">
+              <n-form-item label="ECH 公开名称">
+                <div style="width:100%;">
+                  <n-input-group>
+                    <n-input :value="te.ech_public_name" @update:value="onEchPublicNameChange" placeholder="外层伪装 SNI，如 cloudflare-ech.com" />
+                    <n-button :loading="genEchLoading" @click="genEch">生成 ECH 密钥</n-button>
+                  </n-input-group>
+                  <div class="form-tip">
+                    公开名称是客户端明文发送的外层伪装 SNI，真实 SNI 会在 ECH 内加密传输；请勿填成上面的真实 SNI，否则无法起到隐藏作用。
+                  </div>
+                  <div v-if="te.ech_public_name.trim() && te.server_name.trim() && te.ech_public_name.trim().toLowerCase() === te.server_name.trim().toLowerCase()"
+                       class="form-tip" style="color:var(--warn,#d97706);">
+                    当前公开名称与真实 SNI 相同，外层明文仍会暴露你的真实域名，建议换一个公开名称。
+                  </div>
+                  <div class="form-tip" :style="te.ech_has_key || te.ech_key_token ? 'color:var(--ok,#18a058);' : 'color:var(--warn,#d97706);'">
+                    <template v-if="te.ech_key_token">已生成新 ECH 密钥对（私钥仅在服务端加密保存，不明文下发；点击「保存」生效）。</template>
+                    <template v-else-if="te.ech_has_key">已配置服务端 ECH 私钥（公开名称不变时保持原密钥；修改公开名称后点击「生成 ECH 密钥」或直接保存将自动轮换）。</template>
+                    <template v-else>请填写公开名称并点击「生成 ECH 密钥」（或在填写公开名称后直接保存自动生成）。</template>
+                  </div>
+                </div>
+              </n-form-item>
+              <n-form-item v-if="te.ech_config" label="ECH 配置">
+                <div style="width:100%;">
+                  <n-input :value="te.ech_config" type="textarea" :rows="2" readonly style="font-family:monospace;font-size:11px;" />
+                  <div class="form-tip">公开的 ECHConfigList（Base64），随订阅下发给客户端；对应私钥仅加密保存于服务端并下发至节点配置。</div>
+                </div>
+              </n-form-item>
+            </template>
           </template>
         </n-form>
         <n-button type="primary" block :loading="saving" @click="saveTls">保存</n-button>
@@ -1157,6 +1193,7 @@ const te = reactive({
   private_key: '', public_key: '', short_ids: [] as string[],
   certificate: '', key: '', alpn: [] as string[], min_version: '', max_version: '', insecure: false,
   cert_id: 0,
+  ech_enabled: false, ech_has_key: false, ech_public_name: '', ech_config: '', ech_key_token: '',
 })
 
 function openTls(t?: any, clone = false) {
@@ -1179,6 +1216,11 @@ function openTls(t?: any, clone = false) {
       certificate: Array.isArray(s.certificate) ? s.certificate.join('\n') : (s.certificate || ''), key: Array.isArray(s.key) ? s.key.join('\n') : (s.key || ''),
       alpn: s.alpn || [], min_version: s.min_version || '', max_version: s.max_version || '',
       insecure: !!c.insecure, cert_id: t.cert_id || 0,
+      ech_enabled: !!t.ech_enabled,
+      ech_has_key: clone ? false : !!t.ech_has_key,
+      ech_public_name: t.ech_public_name || '',
+      ech_config: clone ? '' : (t.ech_config || ''),
+      ech_key_token: '',
     })
   } else {
     Object.assign(te, {
@@ -1187,6 +1229,7 @@ function openTls(t?: any, clone = false) {
       private_key: '', public_key: '', short_ids: [''],
       certificate: '', key: '', alpn: ['h3', 'h2', 'http/1.1'], min_version: '', max_version: '', insecure: false,
       cert_id: 0,
+      ech_enabled: false, ech_has_key: false, ech_public_name: '', ech_config: '', ech_key_token: '',
     })
   }
   showTls.value = true
@@ -1292,8 +1335,36 @@ async function genKeys() {
   } catch (e: any) { message.error(e.message) } finally { genLoading.value = false }
 }
 
+const genEchLoading = ref(false)
+function onEchPublicNameChange(v: string) {
+  te.ech_public_name = v
+  // Changing the public name invalidates any freshly generated key_token preview.
+  te.ech_key_token = ''
+  te.ech_config = ''
+}
+async function genEch() {
+  const pubName = (te.ech_public_name || '').trim()
+  if (!pubName) { message.warning('请先填写 ECH 公开名称（外层 SNI）'); return }
+  genEchLoading.value = true
+  try {
+    const r = await apiPost<any>('/api/admin/sb/tls/ech-keygen', { public_name: pubName })
+    te.ech_public_name = r?.public_name || pubName
+    te.ech_config = r?.config_base64 || ''
+    te.ech_key_token = r?.key_token || ''
+    te.ech_has_key = !!te.ech_key_token
+    message.success('ECH 密钥对已生成，请点击保存')
+  } catch (e: any) { message.error(e.message || '生成 ECH 密钥失败') } finally { genEchLoading.value = false }
+}
+
 async function saveTls() {
   if (!te.name || !te.server_name) { message.error('名称和 SNI 必填'); return }
+  if (te.mode !== 'reality' && te.ech_enabled) {
+    if (te.max_version === '1.2') { message.error('启用 ECH 需要 TLS 1.3，最高 TLS 版本不能设为 1.2'); return }
+    if (!te.ech_has_key && !te.ech_key_token && !(te.ech_public_name || '').trim()) {
+      message.error('启用 ECH 请先填写公开名称并生成 ECH 密钥')
+      return
+    }
+  }
   saving.value = true
   try {
     const ep = te.mode === 'reality' ? '/api/admin/sb/tls/reality' : '/api/admin/sb/tls/cert'
@@ -1301,7 +1372,12 @@ async function saveTls() {
     const fn = te.id ? apiPut : apiPost
     const body = te.mode === 'reality'
       ? { name: te.name, server_id: te.server_id, server_name: te.server_name, handshake_server: te.handshake_server, handshake_port: te.handshake_port, fingerprint: te.fingerprint, private_key: te.private_key, public_key: te.public_key, short_ids: te.short_ids.filter(s => s.trim()) }
-      : { name: te.name, server_id: te.server_id, server_name: te.server_name, cert_id: te.cert_id || 0, certificate: te.certificate, key: te.key, insecure: te.insecure, alpn: te.alpn, fingerprint: te.fingerprint, min_version: te.min_version, max_version: te.max_version }
+      : {
+          name: te.name, server_id: te.server_id, server_name: te.server_name, cert_id: te.cert_id || 0,
+          certificate: te.certificate, key: te.key, insecure: te.insecure, alpn: te.alpn,
+          fingerprint: te.fingerprint, min_version: te.min_version, max_version: te.max_version,
+          ech_enabled: te.ech_enabled, ech_key_token: te.ech_key_token, ech_public_name: (te.ech_public_name || '').trim(),
+        }
     await fn(url, body)
     message.success('保存成功'); showTls.value = false; await load()
   } catch (e: any) { message.error(e.message) } finally { saving.value = false }

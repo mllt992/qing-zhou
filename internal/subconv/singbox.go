@@ -733,6 +733,7 @@ func sbTLS(p *Proxy, sec string) map[string]any {
 	// verification. `certificate` replaces the system roots in every sing-box
 	// version, so no client-version detection is needed (#116, #85).
 	if sec == "tls" {
+		applySingboxECH(p, tls)
 		if pem := p.pinnedCertPEM(); pem != "" {
 			tls["certificate"] = pem
 			return tls
