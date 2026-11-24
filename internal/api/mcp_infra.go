@@ -32,9 +32,9 @@ type mcpQuickSetupNodeIn struct {
 	Tag             string `json:"tag,omitempty" jsonschema:"入站 Tag（不能含空格，留空自动生成）"`
 	Port            int    `json:"port,omitempty" jsonschema:"监听端口 1-65535（留空自动挑选未占用端口，如 443 / 8443 / 2053）"`
 	TLSMode         string `json:"tls_mode,omitempty" jsonschema:"TLS 模式：reality（vless 默认）| self_signed（hy2/tuic/trojan 默认）| cert（引用 cert_id）| none"`
-	CertID          int64  `json:"cert_id,omitempty" jsonschema:"当 tls_mode=cert 时引用的托管证书 ID"`
+	CertID          int64  `json:"cert_id,omitempty" jsonschema:"当 tls_mode 为 cert 时引用的托管证书 ID"`
 	SNI             string `json:"sni,omitempty" jsonschema:"TLS/Reality 借用或证书 SNI 域名（reality 默认 www.microsoft.com）"`
-	NodeHost        string `json:"node_host,omitempty" jsonschema:"可选：当 server_id=0 且未设置 node_host_override 时指定本机对外地址（留空自动探测公网 IP）"`
+	NodeHost        string `json:"node_host,omitempty" jsonschema:"可选：当 server_id 为 0 且未设置 node_host_override 时指定本机对外地址（留空自动探测公网 IP）"`
 	GroupID         int64  `json:"group_id,omitempty" jsonschema:"要加入的节点分组 ID（留空时自动使用第一个分组，或自动新建『默认分组』）"`
 	GroupName       string `json:"group_name,omitempty" jsonschema:"当 group_id 未传且需新建分组时的名称，默认『默认分组』"`
 	BindPackageID   int64  `json:"bind_package_id,omitempty" jsonschema:"可选：顺便将该节点分组绑定到指定套餐 ID"`
@@ -85,7 +85,7 @@ type mcpConfirmIDIn struct {
 }
 
 type mcpResyncIn struct {
-	ServerID *int64 `json:"server_id,omitempty" jsonschema:"可选：指定只重推某台服务器（0=面板本机）；不传则全量重推"`
+	ServerID *int64 `json:"server_id,omitempty" jsonschema:"可选：指定只重推某台服务器（0 表示面板本机）；不传则全量重推"`
 }
 
 type mcpCreateRealityTLSIn struct {
@@ -109,7 +109,7 @@ type mcpIssueAcmeCertIn struct {
 	Name    string `json:"name" jsonschema:"证书名称（必填）"`
 	Domain  string `json:"domain" jsonschema:"申请域名，支持泛域名 *.example.com（必填）"`
 	Method  string `json:"method,omitempty" jsonschema:"验证方式：dns-cf（默认，需系统设置已填 Cloudflare Token）| http-01 | webroot"`
-	Webroot string `json:"webroot,omitempty" jsonschema:"当 method=webroot 时的站点目录"`
+	Webroot string `json:"webroot,omitempty" jsonschema:"当 method 为 webroot 时的站点目录"`
 	Profile string `json:"acme_profile,omitempty" jsonschema:"兼容策略：auto（默认）| compatible | modern"`
 }
 
@@ -141,8 +141,8 @@ type mcpManageEgressIn struct {
 	TLSCertID        int64  `json:"tls_cert_id,omitempty" jsonschema:"信任锚证书 ID"`
 	TLSInsecure      bool   `json:"tls_insecure,omitempty" jsonschema:"是否跳过证书校验（仅排障）"`
 	UDPMode          string `json:"udp_mode,omitempty" jsonschema:"passthrough | block"`
-	TestViaServerID  *int64 `json:"test_via_server_id,omitempty" jsonschema:"action=test 时从哪台机器发起测试（0=本机）"`
-	Confirm          bool   `json:"confirm,omitempty" jsonschema:"action=delete 时的确认开关"`
+	TestViaServerID  *int64 `json:"test_via_server_id,omitempty" jsonschema:"测试模式从哪台机器发起测试（0 表示本机）"`
+	Confirm          bool   `json:"confirm,omitempty" jsonschema:"删除操作时的确认开关"`
 }
 
 type mcpUpsertNodeIn struct {
@@ -173,7 +173,7 @@ type mcpManageNodeSourceIn struct {
 	URL      string  `json:"url,omitempty" jsonschema:"机场订阅 URL"`
 	Enabled  *bool   `json:"enabled,omitempty" jsonschema:"是否启用自动同步（默认 true）"`
 	GroupIDs []int64 `json:"group_ids,omitempty" jsonschema:"抓取后归入的节点分组 ID"`
-	Confirm  bool    `json:"confirm,omitempty" jsonschema:"action=delete 时的确认开关"`
+	Confirm  bool    `json:"confirm,omitempty" jsonschema:"删除操作时的确认开关"`
 }
 
 func (a *API) registerMCPInfraTools(srv *mcp.Server) {

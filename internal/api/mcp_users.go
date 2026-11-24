@@ -19,7 +19,7 @@ const mcpGiB int64 = 1 << 30
 
 type mcpProvisionUserAccessIn struct {
 	UserID       int64  `json:"user_id,omitempty" jsonschema:"已有用户 ID（与 username 二选一）"`
-	Username     string `json:"username,omitempty" jsonschema:"用户名（3-32 位字母/数字/下划线；若不存在且提供了 password 或 allow_create=true 则自动建号）"`
+	Username     string `json:"username,omitempty" jsonschema:"用户名（3-32 位字母/数字/下划线；若不存在则自动建号）"`
 	Password     string `json:"password,omitempty" jsonschema:"新建用户时的密码（至少 6 位，留空自动随机生成并在本次返回）"`
 	Email        string `json:"email,omitempty" jsonschema:"新建用户时的可选邮箱"`
 	PackageID    int64  `json:"package_id" jsonschema:"要分配给该用户的套餐 ID（必填）"`
@@ -61,7 +61,7 @@ type mcpUpdateUserIn struct {
 	ResetTraffic  bool     `json:"reset_traffic,omitempty" jsonschema:"是否重置当前已用流量"`
 	ManualEnabled *bool    `json:"manual_enabled,omitempty" jsonschema:"是否启用管理员手动额度"`
 	ManualGB      *float64 `json:"manual_gb,omitempty" jsonschema:"管理员手动额度流量（GB）"`
-	ManualExpiry  *int64   `json:"manual_expiry,omitempty" jsonschema:"管理员手动额度到期 Unix 时间戳（0=永不过期）"`
+	ManualExpiry  *int64   `json:"manual_expiry,omitempty" jsonschema:"管理员手动额度到期 Unix 时间戳（0 表示永不过期）"`
 	GroupIDs      *[]int64 `json:"group_ids,omitempty" jsonschema:"用户组 ID 列表"`
 }
 
@@ -82,10 +82,10 @@ type mcpManageRegCodesIn struct {
 	Action   string  `json:"action" jsonschema:"list | generate | toggle | delete"`
 	ID       int64   `json:"id,omitempty" jsonschema:"注册码 ID（toggle/delete 使用）"`
 	Count    int     `json:"count,omitempty" jsonschema:"generate 数量，默认 1"`
-	MaxUses  int64   `json:"max_uses,omitempty" jsonschema:"单个注册码最大使用次数（0=不限，默认 1）"`
+	MaxUses  int64   `json:"max_uses,omitempty" jsonschema:"单个注册码最大使用次数（0 表示不限，默认 1）"`
 	Note     string  `json:"note,omitempty" jsonschema:"备注"`
 	GroupIDs []int64 `json:"group_ids,omitempty" jsonschema:"使用该注册码后自动加入的用户组 ID"`
-	Enabled  *bool   `json:"enabled,omitempty" jsonschema:"action=toggle 时启用状态"`
+	Enabled  *bool   `json:"enabled,omitempty" jsonschema:"切换启停状态时的目标值"`
 }
 
 type mcpManageAnnouncementsIn struct {
