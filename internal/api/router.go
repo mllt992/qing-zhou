@@ -420,6 +420,7 @@ func (a *API) Router() http.Handler {
 		ar.Post("/api/admin/certs/paste", a.handleAdminCertPaste)
 		ar.Post("/api/admin/certs/self-signed", a.handleAdminCertSelfSigned)
 		ar.Post("/api/admin/certs/{id}/renew", a.handleAdminCertRenew)
+		ar.Post("/api/admin/certs/{id}/reissue", a.handleAdminCertReissue)
 		ar.Get("/api/admin/certs/{id}/export", a.handleAdminExportCert)
 		ar.Put("/api/admin/certs/{id}", a.handleAdminUpdateCert)
 		ar.Delete("/api/admin/certs/{id}", a.handleAdminDeleteCert)

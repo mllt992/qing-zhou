@@ -99,6 +99,12 @@
             </div>
           </div>
         </template>
+        <div v-if="filtered.length > pageSize" class="qz-pager">
+          <span class="qz-pager-info">
+            显示第 <b>{{ (page - 1) * pageSize + 1 }}–{{ Math.min(filtered.length, page * pageSize) }}</b> 单，共 <b>{{ filtered.length }}</b> 单
+          </span>
+          <n-pagination v-model:page="page" v-model:page-size="pageSize" :item-count="filtered.length" :page-sizes="[15, 30, 60]" show-size-picker size="small" />
+        </div>
       </div>
       <n-empty v-else-if="!loading" :description="orders.length ? '没有符合条件的订单' : '暂无订单'" style="padding:40px 0;">
         <template #extra>
@@ -114,9 +120,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { NCard, NSpin, NEmpty, NButton, NRadioGroup, NRadioButton, NSelect, NInput, NIcon } from 'naive-ui'
+import { NCard, NSpin, NEmpty, NButton, NRadioGroup, NRadioButton, NSelect, NInput, NIcon, NPagination } from 'naive-ui'
 import { CartOutline } from '@vicons/ionicons5'
 import * as echarts from 'echarts'
 import { apiList } from '@/api'
@@ -129,6 +135,9 @@ const loading = ref(false)
 const statusFilter = ref('all')
 const typeSel = ref<string | null>(null)
 const kw = ref('')
+const page = ref(1)
+const pageSize = ref(15)
+watch([statusFilter, typeSel, kw, pageSize], () => { page.value = 1 })
 function resetFilters() { statusFilter.value = 'all'; typeSel.value = null; kw.value = '' }
 
 // ---- 类型元信息 ----
@@ -197,8 +206,10 @@ function bucketLabel(o: any): string {
 const bucketOrder = ['今天', '昨天', '7 天内', '30 天内', '更早']
 
 const grouped = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  const slice = filtered.value.slice(start, start + pageSize.value)
   const map = new Map<string, any[]>()
-  for (const o of filtered.value) {
+  for (const o of slice) {
     const k = bucketLabel(o)
     if (!map.has(k)) map.set(k, [])
     map.get(k)!.push(o)

@@ -25,7 +25,8 @@
           </div>
           <div class="lc-foot">
             <n-button size="tiny" @click="openEdit(a)">编辑</n-button>
-            <n-button size="tiny" type="error" @click="handleDelete(a.id)">删除</n-button>
+            <span style="flex:1;" />
+            <n-button size="tiny" type="error" quaternary @click="handleDelete(a.id)">删除</n-button>
           </div>
         </div>
       </div>

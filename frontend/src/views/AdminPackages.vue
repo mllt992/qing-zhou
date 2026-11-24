@@ -47,12 +47,13 @@
             <span v-for="(h, i) in p.highlights" :key="i" class="kv">✓ {{ h }}</span>
           </div>
           <div class="lc-foot" style="flex-wrap:wrap;">
-            <n-button size="tiny" :disabled="idx === 0 || reordering" title="前移（在商城/列表更靠前）" @click="movePackage(idx, -1)">←</n-button>
-            <n-button size="tiny" :disabled="idx === packages.length - 1 || reordering" title="后移" @click="movePackage(idx, 1)">→</n-button>
+            <n-button size="tiny" quaternary :disabled="idx === 0 || reordering" title="前移（在商城/列表更靠前）" @click="movePackage(idx, -1)">←</n-button>
+            <n-button size="tiny" quaternary :disabled="idx === packages.length - 1 || reordering" title="后移" @click="movePackage(idx, 1)">→</n-button>
             <n-button size="tiny" @click="openForm(p)">编辑</n-button>
-            <n-button v-if="p.enabled !== false" size="tiny" type="warning" @click="handleRetire(p)">下架</n-button>
-            <n-button v-else size="tiny" type="success" @click="handleEnable(p.id)">上架</n-button>
-            <n-button size="tiny" type="error" @click="handleDelete(p)">删除</n-button>
+            <n-button v-if="p.enabled !== false" size="tiny" type="warning" secondary @click="handleRetire(p)">下架</n-button>
+            <n-button v-else size="tiny" type="success" secondary @click="handleEnable(p.id)">上架</n-button>
+            <span style="flex:1;" />
+            <n-button size="tiny" type="error" quaternary @click="handleDelete(p)">删除</n-button>
           </div>
         </div>
       </div>

@@ -72,7 +72,7 @@
                   <div class="lc-foot">
                     <n-button size="tiny" @click="openTls(r)">编辑</n-button>
                     <n-button size="tiny" @click="cloneTls(r)">克隆</n-button>
-                    <n-button size="tiny" type="error" @click="deleteTls(r.id)">删除</n-button>
+                    <n-button size="tiny" type="error" quaternary @click="deleteTls(r.id)">删除</n-button>
                     <span class="lc-order">
                       <n-button size="tiny" quaternary :disabled="idx === 0 || reordering" title="上移" @click="moveTls(g, idx, -1)">↑</n-button>
                       <n-button size="tiny" quaternary :disabled="idx === g.items.length - 1 || reordering" title="下移" @click="moveTls(g, idx, 1)">↓</n-button>
@@ -163,7 +163,7 @@
                     <n-button v-if="(r.tls_id || hasInlineTls(r)) && !TLS_PROBE_QUIC.includes(r.type)" size="tiny" :loading="tlsChecking[r.id]" @click="runTlsCheck(r)">TLS 检测</n-button>
                     <n-button size="tiny" @click="cloneInbound(r)">克隆</n-button>
                     <n-button size="tiny" :loading="portChecking === r.id" @click="checkPort(r)">测端口</n-button>
-                    <n-button size="tiny" type="error" @click="deleteInbound(r.id)">删除</n-button>
+                    <n-button size="tiny" type="error" quaternary @click="deleteInbound(r.id)">删除</n-button>
                     <span class="lc-order">
                       <n-button size="tiny" quaternary :disabled="idx === 0 || reordering" title="上移" @click="moveInbound(g, idx, -1)">↑</n-button>
                       <n-button size="tiny" quaternary :disabled="idx === g.items.length - 1 || reordering" title="下移" @click="moveInbound(g, idx, 1)">↓</n-button>
@@ -234,7 +234,8 @@
                 <n-button size="tiny" :loading="r._probing" @click="probeEgress(r)">并发探测</n-button>
                 <n-button size="tiny" :loading="r._cloning" @click="cloneEgress(r)">克隆</n-button>
                 <n-button size="tiny" @click="openEgress(r)">编辑</n-button>
-                <n-button size="tiny" type="error" @click="deleteEgress(r.id)">删除</n-button>
+                <span style="flex:1;" />
+                <n-button size="tiny" type="error" quaternary @click="deleteEgress(r.id)">删除</n-button>
               </div>
             </div>
           </div>

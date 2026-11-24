@@ -64,7 +64,7 @@
     <!-- ============ 明细列表 ============ -->
     <n-spin :show="loading">
       <div v-if="filtered.length" class="card-grid">
-        <div v-for="(t, i) in filtered" :key="t.id" class="tx-card" :style="{ '--i': Math.min(i, 12) }">
+        <div v-for="(t, i) in pagedTxs" :key="t.id" class="tx-card" :style="{ '--i': Math.min(i, 12) }">
           <div class="tx-ic" :class="t.amount > 0 ? 'up' : 'down'">
             <span>{{ t.amount > 0 ? '↑' : '↓' }}</span>
           </div>
@@ -81,7 +81,13 @@
           </div>
         </div>
       </div>
-      <n-empty v-else-if="!loading" :description="txs.length ? '没有符合条件的明细' : '还没有积分收支记录'" style="padding:40px 0;">
+      <div v-if="filtered.length > pageSize" class="qz-pager">
+        <span class="qz-pager-info">
+          显示第 <b>{{ (page - 1) * pageSize + 1 }}–{{ Math.min(filtered.length, page * pageSize) }}</b> 笔，共 <b>{{ filtered.length }}</b> 笔
+        </span>
+        <n-pagination v-model:page="page" v-model:page-size="pageSize" :item-count="filtered.length" :page-sizes="[18, 36, 72]" show-size-picker size="small" />
+      </div>
+      <n-empty v-else-if="!loading && !filtered.length" :description="txs.length ? '没有符合条件的明细' : '还没有积分收支记录'" style="padding:40px 0;">
         <template #extra>
           <div class="empty-actions">
             <span>{{ txs.length ? '当前筛选组合未命中记录，可清除条件查看全部明细。' : '充值、赠送、购买与退款都会在这里保留余额快照。' }}</span>
@@ -96,9 +102,9 @@
 
 <script setup lang="ts">
 import PointRedeem from '@/components/PointRedeem.vue'
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { NCard, NSpin, NEmpty, NButton, NRadioGroup, NRadioButton, NSelect, NInput } from 'naive-ui'
+import { NCard, NSpin, NEmpty, NButton, NRadioGroup, NRadioButton, NSelect, NInput, NPagination } from 'naive-ui'
 import * as echarts from 'echarts'
 import { useAuthStore } from '@/stores/auth'
 import { apiGet } from '@/api'
@@ -112,6 +118,9 @@ const loading = ref(false)
 const typeFilter = ref('all')
 const typeSel = ref<string | null>(null)
 const kw = ref('')
+const page = ref(1)
+const pageSize = ref(18)
+watch([typeFilter, typeSel, kw, pageSize], () => { page.value = 1 })
 function resetFilters() { typeFilter.value = 'all'; typeSel.value = null; kw.value = '' }
 
 const typeLabel: Record<string, string> = {
@@ -142,6 +151,11 @@ const filtered = computed(() => {
   const q = kw.value.trim().toLowerCase()
   if (q) list = list.filter(t => (t.note || '').toLowerCase().includes(q) || (t.label || '').toLowerCase().includes(q))
   return list
+})
+
+const pagedTxs = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
 })
 
 // ---- KPI 统计 ----

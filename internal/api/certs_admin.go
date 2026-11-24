@@ -187,6 +187,121 @@ func (a *API) handleAdminCertAcme(w http.ResponseWriter, r *http.Request) {
 	ok(w, certPublic(saved))
 }
 
+// POST /api/admin/certs/{id}/reissue {domain?, method?, webroot?, acme_profile?}
+// Re-issues an existing ACME certificate in place (keeping its ID and all TLS
+// profile references) and pushes the refreshed certificate to every server
+// referencing it. Useful when ~/.acme.sh state was lost, when switching key
+// compatibility profile, or when changing challenge method.
+func (a *API) handleAdminCertReissue(w http.ResponseWriter, r *http.Request) {
+	c, err := a.st.GetCert(atoi(chi.URLParam(r, "id")))
+	if err != nil || c == nil {
+		fail(w, http.StatusNotFound, "证书不存在")
+		return
+	}
+	if c.Source != "acme" {
+		fail(w, http.StatusBadRequest, "仅 ACME 证书支持重新申请；粘贴/自签证书请重新导入")
+		return
+	}
+	var req struct {
+		Name    string `json:"name"`
+		Domain  string `json:"domain"`
+		Method  string `json:"method"`
+		Webroot string `json:"webroot"`
+		Profile string `json:"acme_profile"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			fail(w, http.StatusBadRequest, "请求格式错误")
+			return
+		}
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = c.Name
+	}
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" {
+		domain = c.Domain
+	}
+	if domain == "" {
+		fail(w, http.StatusBadRequest, "域名必填")
+		return
+	}
+	method := acmesh.Method(strings.TrimSpace(req.Method))
+	if method == "" {
+		method = acmesh.Method(c.AcmeMethod)
+	}
+	if method == "" {
+		method = acmesh.MethodCFDNS
+	}
+	profile := strings.TrimSpace(req.Profile)
+	if profile == "" {
+		profile = c.AcmeProfile
+	}
+	if profile == "" {
+		profile = acmesh.ProfileAuto
+	}
+	keyLength, preferredChain, err := acmesh.OptionsForProfile(profile)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "证书兼容策略无效")
+		return
+	}
+	cfToken, _ := a.st.GetSetting("cf_api_token")
+	email, _ := a.st.GetSetting("acme_email")
+	if method == acmesh.MethodCFDNS && strings.TrimSpace(cfToken) == "" {
+		fail(w, http.StatusBadRequest, "请先在「系统设置」填写 Cloudflare API Token（Zone→DNS→Edit 权限）")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
+	defer cancel()
+	res, err := acmesh.Issue(ctx, acmesh.LocalRunner{}, acmesh.IssueOpts{
+		Domain:         domain,
+		Method:         method,
+		CFToken:        strings.TrimSpace(cfToken),
+		Webroot:        strings.TrimSpace(req.Webroot),
+		Email:          strings.TrimSpace(email),
+		CertDir:        a.certDir(),
+		KeyLength:      keyLength,
+		PreferredChain: preferredChain,
+	})
+	if err != nil {
+		_ = a.st.SetCertRenewError(c.ID, err.Error())
+		fail(w, http.StatusBadGateway, "重新申请证书失败："+err.Error())
+		return
+	}
+	certPEM, keyPEM, err := acmesh.ReadPEM(ctx, acmesh.LocalRunner{}, res)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "证书已签发，但读取文件失败："+err.Error())
+		return
+	}
+	verified, err := certcheck.Verify(certPEM, keyPEM, domain, time.Now())
+	if err != nil {
+		_ = a.st.SetCertVerifyError(c.ID, err.Error())
+		fail(w, http.StatusBadGateway, "签发结果核验失败，已保留原证书："+err.Error())
+		return
+	}
+	c.Name = name
+	c.Domain = domain
+	c.AcmeMethod = string(method)
+	c.AcmeProfile = profile
+	c.CertPEM = certPEM
+	c.KeyPEM = keyPEM
+	c.ActualKeyType = verified.KeyType
+	c.ActualChain = verified.Chain
+	c.LastVerifyAt = verified.VerifiedAt
+	c.VerifyError = ""
+	c.LastRenewAt = time.Now().Unix()
+	c.LastError = ""
+	if _, err := a.st.SaveCert(c); err != nil {
+		fail(w, http.StatusInternalServerError, "保存证书失败")
+		return
+	}
+	a.pushCertServers(c.ID)
+	saved, _ := a.st.GetCert(c.ID)
+	ok(w, certPublic(saved))
+}
+
 // POST /api/admin/certs/paste {name, domain?, certificate, key}
 // Stores an externally-issued cert+key. domain defaults to a name the leaf
 // actually covers (CN when listed in the SANs, else the first SAN).

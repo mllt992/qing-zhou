@@ -350,11 +350,62 @@ func Renew(ctx context.Context, r Runner, o IssueOpts, force bool) (*IssueResult
 	}
 	if out, err := runEnv(ctx, r, cmd, env); err != nil {
 		if !alreadyUpToDate(out) {
+			if notIssuedDomain(out) {
+				// 1. Legacy certificates issued before the policy update (or with a
+				// different acme.sh default key type) may live in the non-ECC directory
+				// even when ActualKeyType is ECDSA, or vice versa. Try toggling --ecc
+				// before falling back to a full re-issue.
+				altCmd := buildRenewCmd(domain, o, force, strings.TrimSpace(o.KeyLength) != "ec-256")
+				if altOut, altErr := runEnv(ctx, r, altCmd, env); altErr == nil || alreadyUpToDate(altOut) {
+					certPath, keyPath := certPaths(o.CertDir, domain)
+					return &IssueResult{CertPath: certPath, KeyPath: keyPath}, nil
+				}
+				// 2. When ~/.acme.sh was wiped (e.g. Docker container recreated or host
+				// migrated) and the challenge can run unattended (dns-cf orhttp-01 or
+				// webroot with path), fall back to Issue so renewal self-heals.
+				if canReissue(o) {
+					return Issue(ctx, r, o)
+				}
+			}
 			return nil, fmt.Errorf("acme.sh renew failed: %v: %s", err, out)
 		}
 	}
 	certPath, keyPath := certPaths(o.CertDir, domain)
 	return &IssueResult{CertPath: certPath, KeyPath: keyPath}, nil
+}
+
+func buildRenewCmd(domain string, o IssueOpts, force, ecc bool) string {
+	cmd := acmeBin + " --renew -d " + shellQuote(domain)
+	if ecc {
+		cmd += " --ecc"
+	}
+	if v := strings.TrimSpace(o.PreferredChain); v != "" {
+		cmd += " --preferred-chain " + shellQuote(v)
+	}
+	if force {
+		cmd += " --force"
+	}
+	return cmd
+}
+
+func canReissue(o IssueOpts) bool {
+	switch o.Method {
+	case MethodCFDNS:
+		return strings.TrimSpace(o.CFToken) != ""
+	case MethodHTTP01:
+		return !strings.HasPrefix(strings.TrimSpace(o.Domain), "*.")
+	case MethodWebroot:
+		return !strings.HasPrefix(strings.TrimSpace(o.Domain), "*.") && strings.TrimSpace(o.Webroot) != ""
+	default:
+		return false
+	}
+}
+
+// notIssuedDomain reports whether acme.sh rejected --renew because its local
+// state directory has no record of the domain ("'<domain>' is not an issued
+// domain, skipping.").
+func notIssuedDomain(out string) bool {
+	return strings.Contains(out, "is not an issued domain")
 }
 
 // alreadyUpToDate reports whether acme.sh declined to reissue because the

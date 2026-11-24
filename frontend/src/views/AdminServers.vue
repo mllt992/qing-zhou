@@ -11,40 +11,74 @@
       <div class="resource-metric" :class="{ danger: versions.filter(v => v.too_old || (v.version && !v.has_v2ray_api)).length }"><b>{{ versions.filter(v => v.too_old || (v.version && !v.has_v2ray_api)).length }}</b><span>版本或统计异常</span></div>
     </div>
     <AdminRelayMetering />
-    <!-- 各节点实际在跑的 sing-box。数据来自面板本来就在做的能力探测，
-         以前只取了「有没有 v2ray_api」，版本号被丢掉了。 -->
-    <n-card title="节点 sing-box 版本" size="small" style="margin-bottom:16px;">
+    <!-- 各节点实际在跑的 sing-box。数据来自面板本来就在做的能力探测 -->
+    <n-card size="small" class="ver-panel" style="margin-bottom:16px;">
+      <template #header>
+        <div class="vp-head-left">
+          <span>节点 sing-box 内核版本</span>
+          <span class="vp-req">要求 ≥ {{ minSupported }}</span>
+          <span v-if="currentReleaseVersion" class="vp-rel">面板构建 <code>{{ shortVer(currentReleaseVersion) }}</code></span>
+        </div>
+      </template>
       <template #header-extra>
-        <n-space size="small">
-          <n-button size="tiny" :loading="verLoading" @click="refreshVersions">重新检测</n-button>
+        <n-space size="small" align="center">
+          <n-button size="tiny" type="primary" secondary :loading="verLoading" @click="refreshVersions">重新检测</n-button>
         </n-space>
       </template>
-      <p class="nv-note">
-        这里显示每台机器最近检测到的内核版本；普通重新检测读取已安装文件，更换磁盘文件不代表运行中的进程已更新。
-        逐用户中转的 Vision、WebSocket/HTTPUpgrade 路径还会在下发前后核验实际运行的内核；预检不通过时不切换该路径，运行能力复核通过后才确认下发。
-        面板生成的配置要求 <b>sing-box ≥ {{ minSupported }}</b>；低于这个版本，节点的
-        <code>sing-box check</code> 会失败，面板会<b>停止向它下发任何配置</b>（旧配置继续跑，所以表面看不出来）。
-        「重装」装的是<b>面板自己发布的构建</b>（随面板版本走，当前标识<span v-if="currentReleaseVersion"> <code>{{ currentReleaseVersion }}</code></span>，含流量统计所需的 <code>v2ray_api</code> 与 Trojan 分段握手维护补丁）。
-        官方版不带这个插件，无法提供所需流量统计，也不含 Trojan 维护补丁。
-        已安装的历史审定标记（Vision <code v-if="visionFixedVersion">{{ visionFixedVersion }}</code>、WS/HTTPUpgrade <code v-if="transportFixedVersion">{{ transportFixedVersion }}</code>，以及旧 1.14.2 Trojan 标记）仍然算具备相应能力；不能仅凭官方版本号较新判断支持。
-      </p>
-      <div v-if="versions.length" class="nv-list">
+
+      <details class="nv-help-details">
+        <summary class="nv-help-summary">
+          <span>内核探测与补丁核验说明（点击展开详情）</span>
+          <span class="nv-help-tags">
+            <span v-if="visionFixedVersion">Vision <code>{{ visionFixedVersion }}</code></span>
+            <span v-if="transportFixedVersion">WS/HTTPUpgrade <code>{{ transportFixedVersion }}</code></span>
+            <span v-if="currentReleaseVersion">当前发布 <code>{{ currentReleaseVersion }}</code></span>
+          </span>
+        </summary>
+        <div class="nv-help-box">
+          这里显示每台机器最近检测到的内核版本；普通重新检测读取已安装文件，更换磁盘文件不代表运行中的进程已更新。
+          逐用户中转的 Vision、WebSocket/HTTPUpgrade 路径还会在下发前后核验实际运行的内核；预检不通过时不切换该路径，运行能力复核通过后才确认下发。
+          面板生成的配置要求 <b>sing-box ≥ {{ minSupported }}</b>；低于这个版本，节点的
+          <code>sing-box check</code> 会失败，面板会<b>停止向它下发任何配置</b>（旧配置继续跑，所以表面看不出来）。
+          「重装」装的是<b>面板自己发布的构建</b>（随面板版本走，当前标识<span v-if="currentReleaseVersion"> <code>{{ currentReleaseVersion }}</code></span>，含流量统计所需的 <code>v2ray_api</code> 与 Trojan 分段握手维护补丁）。
+          官方版不带这个插件，无法提供所需流量统计，也不含 Trojan 维护补丁。
+          已安装的历史审定标记（Vision <code v-if="visionFixedVersion">{{ visionFixedVersion }}</code>、WS/HTTPUpgrade <code v-if="transportFixedVersion">{{ transportFixedVersion }}</code>，以及旧 1.14.2 Trojan 标记）仍然算具备相应能力；不能仅凭官方版本号较新判断支持。
+        </div>
+      </details>
+
+      <div v-if="versions.length" class="nv-table">
         <div v-for="n in versions" :key="n.server_id" class="nv-row">
-          <div class="nv-main">
-            <span class="nv-name">{{ n.name }}<span v-if="n.host" class="nv-host">{{ n.host }}</span></span>
-            <span class="nv-ver">{{ n.version || '—' }}</span>
-            <n-tag v-if="n.too_old" type="error" size="tiny" :bordered="false">版本过低</n-tag>
-            <n-tag v-else-if="!n.version" type="default" size="tiny" :bordered="false">未知</n-tag>
-            <n-tag v-if="n.version && !n.has_v2ray_api" type="error" size="tiny" :bordered="false">缺少 with_v2ray_api</n-tag>
-            <n-tag v-if="n.version" :type="n.has_vision_framing_fix ? 'info' : 'default'" size="tiny" :bordered="false">{{ n.has_vision_framing_fix ? '版本含 Vision 修复标记' : '未确认 Vision 修复' }}</n-tag>
-            <n-tag v-if="n.version" :type="n.has_transport_read_buffer_fix ? 'info' : 'default'" size="tiny" :bordered="false">{{ n.has_transport_read_buffer_fix ? '版本含 WS/HTTPUpgrade 修复标记' : '未确认 WS/HTTPUpgrade 修复' }}</n-tag>
-            <n-tag v-if="n.version" :type="n.has_trojan_handshake_fix ? 'info' : 'default'" size="tiny" :bordered="false">{{ n.has_trojan_handshake_fix ? '版本含 Trojan 分段握手修复标记' : '未确认 Trojan 分段握手修复' }}</n-tag>
+          <div class="nv-col-node">
+            <span class="nv-dot" :class="n.too_old || (n.version && !n.has_v2ray_api) || n.error ? 'err' : (n.version ? 'ok' : 'idle')" />
+            <span class="nv-name">{{ n.name }}</span>
+            <code v-if="n.host" class="nv-host">{{ n.host }}</code>
+            <n-tag v-if="n.server_id === 0" size="tiny" :bordered="false">本机</n-tag>
           </div>
-          <div class="nv-side">
+          <div class="nv-col-ver">
+            <span class="nv-ver-badge" :title="n.version || '未知'">{{ shortVer(n.version) }}</span>
+            <span v-if="verBuildMeta(n.version)" class="nv-ver-sub" :title="n.version">{{ verBuildMeta(n.version) }}</span>
+          </div>
+          <div class="nv-col-caps">
+            <n-tag v-if="n.too_old" type="error" size="tiny" :bordered="false">版本过低</n-tag>
+            <n-tag v-else-if="!n.version" type="default" size="tiny" :bordered="false">未安装 / 未知</n-tag>
+            <n-tag v-if="n.version && !n.has_v2ray_api" type="error" size="tiny" :bordered="false">缺 v2ray_api</n-tag>
+            <template v-if="n.version">
+              <span class="cap-pill" :class="{ on: n.has_vision_framing_fix }">
+                {{ n.has_vision_framing_fix ? '版本含 Vision 修复标记' : '未确认 Vision 修复' }}
+              </span>
+              <span class="cap-pill" :class="{ on: n.has_transport_read_buffer_fix }">
+                {{ n.has_transport_read_buffer_fix ? '版本含 WS/HTTPUpgrade 修复标记' : '未确认 WS/HTTPUpgrade 修复' }}
+              </span>
+              <span class="cap-pill" :class="{ on: n.has_trojan_handshake_fix }">
+                {{ n.has_trojan_handshake_fix ? '版本含 Trojan 分段握手修复标记' : '未确认 Trojan 分段握手修复' }}
+              </span>
+            </template>
+          </div>
+          <div class="nv-col-side">
             <span v-if="n.checked_at" class="nv-time">{{ fmtDateTime(n.checked_at) }}</span>
-            <n-button size="tiny" :disabled="!n.upgradable || n.upgrading" :loading="n.upgrading"
+            <n-button size="tiny" secondary :disabled="!n.upgradable || n.upgrading" :loading="n.upgrading"
                       @click="confirmUpgrade(n)">
-              {{ n.upgrading ? '安装中' : (n.version ? '重装' : '安装') }}
+              {{ n.upgrading ? '安装中' : (n.version ? '重装内核' : '安装内核') }}
             </n-button>
           </div>
           <!-- 安装是后台跑的（要往节点上拉 ~60MB 的二进制），这里显示脚本的输出。 -->
@@ -57,7 +91,7 @@
           <div v-if="n.error" class="nv-err">探测失败：{{ n.error }}</div>
           <div v-else-if="n.version && !n.has_v2ray_api" class="nv-err">
             该版本不含 <code>with_v2ray_api</code> 插件 —— 这台机器的流量<b>统计不到</b>，配额也不会生效（界面上一直显示 0）。
-            点「重装」换成面板发布的版本即可；官方发布版不带这个插件。
+            点「重装内核」换成面板发布的版本即可；官方发布版不带这个插件。
           </div>
         </div>
       </div>
@@ -65,32 +99,57 @@
     </n-card>
 
     <n-spin :show="loading">
-      <div v-if="servers.length" class="card-grid">
-        <div v-for="(s, idx) in servers" :key="s.id" class="list-card" :class="{ 'is-disabled': !s.enabled }">
-          <div class="lc-head">
-            <span class="lc-title"><i class="order-no">{{ idx + 1 }}</i>{{ s.name || '—' }}</span>
-            <span class="lc-order">
+      <div v-if="servers.length" class="srv-grid">
+        <div v-for="(s, idx) in servers" :key="s.id" class="srv-item-card" :class="{ 'is-disabled': !s.enabled }">
+          <div class="sic-head">
+            <div class="sic-title-row">
+              <i class="order-no">{{ idx + 1 }}</i>
+              <span class="sic-name" :title="s.name">{{ s.name || '—' }}</span>
+              <n-tag v-if="!s.enabled" type="warning" size="tiny" :bordered="false">已禁用</n-tag>
+            </div>
+            <div class="sic-order">
               <n-button size="tiny" quaternary circle :disabled="idx === 0 || reordering" title="前移" @click="moveServer(idx, -1)">←</n-button>
               <n-button size="tiny" quaternary circle :disabled="idx === servers.length - 1 || reordering" title="后移" @click="moveServer(idx, 1)">→</n-button>
               <n-switch size="small" :value="!!s.enabled" :loading="togglingServer === s.id" @update:value="v => toggleServerEnabled(s, v)" />
-              <n-tag v-if="!s.enabled" type="warning" size="small" :bordered="false">已禁用</n-tag>
-            </span>
+            </div>
           </div>
-          <div class="lc-meta">
-            <span class="kv">主机 <b>{{ s.host }}</b></span>
-            <span v-if="s.domain" class="kv">域名 <n-tag type="success" size="tiny" :bordered="false">{{ s.domain }}</n-tag></span>
-            <span v-if="s.domain_v6" class="kv">IPv6 域名 <n-tag type="success" size="tiny" :bordered="false">{{ s.domain_v6 }}</n-tag></span>
-            <span class="kv">端口 <b>{{ s.port }}</b></span>
-            <span class="kv">探针 <n-tag :type="s.probe_enabled ? 'info' : 'default'" size="tiny" :bordered="false">{{ s.probe_enabled ? '开' : '关' }}</n-tag></span>
+
+          <div class="sic-info-grid">
+            <div class="sic-info-cell">
+              <span class="k">SSH 主机</span>
+              <code class="v">{{ s.host }}:{{ s.port }}</code>
+            </div>
+            <div class="sic-info-cell">
+              <span class="k">对外域名</span>
+              <span v-if="s.domain" class="v domain-chip">{{ s.domain }}</span>
+              <span v-else class="v muted">未绑定（使用 IP）</span>
+            </div>
+            <div v-if="s.domain_v6 || s.host_v6" class="sic-info-cell">
+              <span class="k">IPv6 接入</span>
+              <span class="v domain-chip">{{ s.domain_v6 || s.host_v6 }}</span>
+            </div>
+            <div class="sic-info-cell">
+              <span class="k">监控与内核</span>
+              <div class="v tags-inline">
+                <n-tag :type="s.probe_enabled ? 'success' : 'default'" size="tiny" :bordered="false">
+                  探针 {{ s.probe_enabled ? '已开启' : '未开启' }}
+                </n-tag>
+                <span v-if="serverVerOf(s.id)" class="ver-mini-tag" :title="serverVerOf(s.id)">
+                  {{ shortVer(serverVerOf(s.id)) }}
+                </span>
+              </div>
+            </div>
           </div>
-          <div class="lc-foot">
+
+          <div class="sic-foot">
             <n-button size="tiny" type="primary" secondary @click="openTrafficAnalysis(s)">流量分析</n-button>
             <n-button size="tiny" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { server: String(s.id) } })">向导配置</n-button>
-            <n-button size="tiny" type="info" secondary @click="openDnsModal(s)">子域名</n-button>
-            <n-button size="tiny" @click="handleRebuild(s.id)">重建</n-button>
+            <n-button size="tiny" secondary @click="openDnsModal(s)">子域名</n-button>
             <n-button size="tiny" @click="openForm(s)">编辑</n-button>
-            <n-button size="tiny" :loading="clearing === s.id" @click="handleClearHostKey(s)">清除密钥指纹</n-button>
-            <n-button size="tiny" type="error" @click="handleDelete(s.id)">删除</n-button>
+            <span style="flex:1;" />
+            <n-dropdown trigger="click" :options="serverMoreOpts(s)" @select="(k: string) => onServerMore(k, s)">
+              <n-button size="tiny" quaternary :loading="clearing === s.id">更多 ▾</n-button>
+            </n-dropdown>
           </div>
         </div>
       </div>
@@ -301,7 +360,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, shallowRef, h } from 'vue'
 import { useRouter } from 'vue-router'
-import { NSpin, NButton, NModal, NForm, NFormItem, NInput, NInputNumber, NSwitch, NSpace, NTag, NEmpty, NCard, NSelect, NRadioGroup, NRadioButton, NDrawer, NDrawerContent, NAlert, NProgress, useMessage, useDialog } from 'naive-ui'
+import { NSpin, NButton, NModal, NForm, NFormItem, NInput, NInputNumber, NSwitch, NSpace, NTag, NEmpty, NCard, NSelect, NRadioGroup, NRadioButton, NDrawer, NDrawerContent, NAlert, NProgress, NDropdown, useMessage, useDialog } from 'naive-ui'
 import { apiList, apiPost, apiPut, apiDelete, apiGet } from '@/api'
 import { fmtBytes, fmtDateTime, pct } from '@/utils/format'
 import AdminServiceTraffic from '@/components/AdminServiceTraffic.vue'
@@ -494,6 +553,37 @@ const visionFixedVersion = ref('')
 const transportFixedVersion = ref('')
 const currentReleaseVersion = ref('')
 const verLoading = ref(false)
+const showVerHelp = ref(false)
+
+function shortVer(v?: string): string {
+  if (!v) return '—'
+  const idx = v.indexOf('+')
+  if (idx < 0) return v
+  return v.slice(0, idx) + '+qz'
+}
+function verBuildMeta(v?: string): string {
+  if (!v) return ''
+  const idx = v.indexOf('+')
+  if (idx < 0) return ''
+  return v.slice(idx + 1).replace(/^qz-/, '')
+}
+function serverVerOf(id: number): string {
+  const row = versions.value.find(v => v.server_id === id)
+  return row?.version || ''
+}
+function serverMoreOpts(s: any) {
+  return [
+    { label: '重建并推送配置', key: 'rebuild' },
+    { label: '清除 SSH 主机密钥指纹', key: 'clearKey' },
+    { type: 'divider', key: 'd1' },
+    { label: () => h('span', { style: 'color:var(--danger)' }, '删除服务器'), key: 'delete' },
+  ]
+}
+function onServerMore(key: string, s: any) {
+  if (key === 'rebuild') handleRebuild(s.id)
+  else if (key === 'clearKey') handleClearHostKey(s)
+  else if (key === 'delete') handleDelete(s.id)
+}
 
 async function loadVersions(){
   try{
@@ -687,31 +777,149 @@ onUnmounted(() => trafficChart.value?.dispose())
 </script>
 
 <style scoped>
-.nv-note { font-size:12px; color:var(--text-3); line-height:1.75; margin:0 0 12px; }
-.nv-list { display:flex; flex-direction:column; gap:2px; }
-.nv-row {
-  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
-  padding:8px 0; border-bottom:1px solid var(--border);
+.vp-head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.vp-req {
+  font-size: 11.5px; font-weight: 550; color: var(--text-3);
+  background: var(--bg-soft); border: 1px solid var(--border);
+  padding: 1px 8px; border-radius: 999px;
 }
-.nv-row:last-child { border-bottom:0; }
-.nv-main { display:flex; align-items:center; gap:8px; flex:1; min-width:0; flex-wrap:wrap; }
-.nv-name { font-weight:600; font-size:13px; }
-.nv-host { color:var(--text-3); font-weight:400; font-size:12px; margin-left:6px; }
-.nv-ver { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; max-width:100%; overflow-wrap:anywhere; }
-.nv-side { display:flex; align-items:center; gap:10px; }
-.nv-time { font-size:11px; color:var(--text-3); }
-.nv-err { flex-basis:100%; font-size:11px; line-height:1.7; color:var(--warning,#d97706); }
+.vp-rel {
+  font-size: 11.5px; font-weight: 500; color: var(--accent-strong);
+  background: var(--accent-soft); padding: 1px 8px; border-radius: 999px;
+}
+.vp-rel code { font-family: var(--mono); font-weight: 650; }
+.nv-help-details {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+.nv-help-summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; font-size: 12px; font-weight: 560; color: var(--text-2);
+  cursor: pointer; user-select: none;
+}
+.nv-help-summary:hover { background: var(--bg-soft); color: var(--text); }
+.nv-help-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--text-3); font-weight: 400; }
+.nv-help-tags code { font-family: var(--mono); background: #fff; border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; }
+.nv-help-box {
+  font-size: 12px; color: var(--text-2); line-height: 1.75;
+  padding: 10px 14px 12px;
+  background: var(--bg-soft); border-top: 1px solid var(--border);
+}
+.nv-table { display: flex; flex-direction: column; }
+.nv-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.3fr) minmax(140px, 1fr) minmax(240px, 1.6fr) auto;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.nv-row:last-child { border-bottom: 0; }
+.nv-col-node { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.nv-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #cbd5e1; }
+.nv-dot.ok { background: var(--success); box-shadow: 0 0 0 3px rgba(5, 150, 105, .14); }
+.nv-dot.err { background: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, .15); }
+.nv-name { font-weight: 650; font-size: 13px; color: var(--text); }
+.nv-host {
+  font-family: var(--mono); color: var(--text-3); font-size: 11.5px;
+  background: var(--bg-soft); padding: 1px 6px; border-radius: 5px;
+}
+.nv-col-ver { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.nv-ver-badge {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 650; color: var(--text);
+}
+.nv-ver-sub {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nv-col-caps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cap-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 8px; border-radius: 6px;
+  font-size: 11.5px; font-weight: 560;
+  color: var(--text-3); background: var(--bg-soft); border: 1px solid transparent;
+}
+.cap-pill.on {
+  color: var(--accent-strong); background: var(--accent-soft);
+  border-color: rgba(15, 108, 189, .14);
+}
+.nv-col-side { display: flex; align-items: center; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+.nv-time { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.nv-err { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.65; color: var(--warn); padding-left: 16px; }
+@media (max-width: 960px) {
+  .nv-row { grid-template-columns: 1fr auto; }
+  .nv-col-ver, .nv-col-caps { grid-column: 1 / -1; padding-left: 16px; }
+}
 /* 脚本输出可能很长，限高 + 可滚动，免得一次失败把整页撑开。 */
 .nv-out {
   margin:4px 0 0; padding:8px 10px; max-height:220px; overflow:auto;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.6;
+  font-family:var(--mono); font-size:11px; line-height:1.6;
   white-space:pre-wrap; word-break:break-all;
-  background:var(--code-bg,rgba(128,128,128,.1)); border-radius:6px; color:var(--text-2);
+  background:var(--bg-soft); border:1px solid var(--border); border-radius:6px; color:var(--text-2);
 }
-.hint{ font-size:12px; line-height:1.6; color:var(--n-text-color-3,#8a8a8a); margin-top:6px; }
-.lc-title { display:flex; align-items:center; gap:7px; }
-.lc-order { display:flex; align-items:center; gap:3px; }
-.order-no { display:inline-grid; place-items:center; width:20px; height:20px; border-radius:6px; background:var(--bg-soft); color:var(--text-3); font-size:10px; font-style:normal; font-variant-numeric:tabular-nums; }
+
+/* 服务器卡片网格 */
+.srv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+@media (max-width: 640px) {
+  .srv-grid { grid-template-columns: 1fr; }
+}
+.srv-item-card {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 16px 18px 14px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); box-shadow: var(--shadow-sm);
+  transition: box-shadow .25s var(--ease-standard), border-color .22s var(--ease-standard), transform .25s var(--ease-emphasized);
+}
+.srv-item-card:hover {
+  box-shadow: var(--shadow); border-color: var(--border-strong); transform: translateY(-2px);
+}
+.srv-item-card.is-disabled { opacity: .68; }
+.sic-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sic-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sic-name { font-size: 15px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sic-order { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.order-no {
+  display: inline-grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 6px; background: var(--bg-soft); border: 1px solid var(--border);
+  color: var(--text-2); font-size: 11px; font-weight: 650; font-style: normal; font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.sic-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  background: var(--bg-soft);
+  border: 1px solid rgba(15, 23, 42, .055);
+  border-radius: 10px;
+}
+.sic-info-cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sic-info-cell .k { font-size: 11px; color: var(--text-3); }
+.sic-info-cell .v { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sic-info-cell code.v { font-family: var(--mono); font-size: 12px; }
+.sic-info-cell .v.muted { color: var(--text-3); font-weight: 400; font-size: 12px; }
+.sic-info-cell .v.domain-chip {
+  font-family: var(--mono); font-size: 12px; color: var(--success);
+}
+.tags-inline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ver-mini-tag {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--text-2); background: #fff; border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 5px;
+}
+.sic-foot {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(15, 23, 42, .055);
+}
+
+.hint{ font-size:12px; line-height:1.6; color:var(--text-3); margin-top:6px; }
 .traffic-summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
 .traffic-summary-card { min-width:0; padding:13px 14px; border:1px solid var(--border); border-radius:12px; background:var(--bg-soft); }
 .traffic-summary-card span,.traffic-summary-card small { display:block; color:var(--text-3); font-size:10px; }
@@ -738,6 +946,5 @@ onUnmounted(() => trafficChart.value?.dispose())
 .source-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#6e9fbe,#75aa8f); }
 .source-main small { color:var(--text-3); font-size:10px; }
 @media(max-width:700px){ .traffic-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));} .traffic-chart{height:230px;} }
-.list-card.is-disabled { opacity: 0.72; }
 .form-tip { margin-top: 6px; font-size: 12px; color: var(--text-3); line-height: 1.5; }
 </style>

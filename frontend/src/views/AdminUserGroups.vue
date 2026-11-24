@@ -26,9 +26,10 @@
             </span>
           </div>
           <div class="lc-foot" style="flex-wrap:wrap;">
-            <n-button size="tiny" @click="openMembers(g)">成员</n-button>
+            <n-button size="tiny" type="primary" secondary @click="openMembers(g)">管理成员</n-button>
             <n-button size="tiny" @click="openForm(g)">编辑</n-button>
-            <n-button size="tiny" type="error" @click="handleDelete(g)">删除</n-button>
+            <span style="flex:1;" />
+            <n-button size="tiny" type="error" quaternary @click="handleDelete(g)">删除</n-button>
           </div>
         </div>
       </div>

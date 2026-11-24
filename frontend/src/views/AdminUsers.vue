@@ -37,7 +37,7 @@
 
     <n-spin :show="loading">
       <div v-if="filtered.length" class="card-grid">
-        <div v-for="u in filtered" :key="u.id" class="user-card">
+        <div v-for="u in pagedUsers" :key="u.id" class="user-card">
           <!-- 身份 -->
           <div class="uc-head">
             <span class="uc-avatar" :style="avatarStyle(u.username)">{{ initial(u.username) }}</span>
@@ -106,7 +106,22 @@
           </div>
         </div>
       </div>
-      <n-empty v-else-if="!loading" :description="emptyText" style="padding:40px 0;" />
+      <div v-if="filtered.length > userPageSize" class="qz-pager">
+        <span class="qz-pager-info">
+          显示第 <b>{{ (userPage - 1) * userPageSize + 1 }}–{{ Math.min(filtered.length, userPage * userPageSize) }}</b> 位，共 <b>{{ filtered.length }}</b> 位用户
+        </span>
+        <div class="qz-pager-controls">
+          <n-pagination
+            v-model:page="userPage"
+            v-model:page-size="userPageSize"
+            :item-count="filtered.length"
+            :page-sizes="[12, 24, 48, 96]"
+            show-size-picker
+            size="small"
+          />
+        </div>
+      </div>
+      <n-empty v-else-if="!loading && !filtered.length" :description="emptyText" style="padding:40px 0;" />
     </n-spin>
 
     <!-- ===== 套餐面板：查看 / 聚合 / 移除 / 分配，一个用户的套餐都在这里 ===== -->
@@ -387,7 +402,7 @@
 import { ref, computed, reactive, watch, onMounted, h } from 'vue'
 import {
   NSpin, NInput, NInputNumber, NButton, NModal, NForm, NFormItem, NIcon,
-  NSwitch, NTag, NSelect, NEmpty, NCheckbox, NDropdown, NRadioGroup, NRadioButton,
+  NSwitch, NTag, NSelect, NEmpty, NCheckbox, NDropdown, NRadioGroup, NRadioButton, NPagination,
   useMessage, useDialog
 } from 'naive-ui'
 import { RefreshOutline, PersonAddOutline, SearchOutline } from '@vicons/ionicons5'
@@ -405,6 +420,12 @@ const saving = ref(false)
 const search = ref('')
 const filter = ref('all')
 const sortBy = ref('default')
+const userPage = ref(1)
+const userPageSize = ref(24)
+
+watch([search, filter, sortBy, userPageSize], () => {
+  userPage.value = 1
+})
 
 const sortOptions = [
   { label: '默认排序', value: 'default' },
@@ -555,6 +576,11 @@ const filtered = computed(() => {
     return 0
   })
   return sorted
+})
+
+const pagedUsers = computed(() => {
+  const start = (userPage.value - 1) * userPageSize.value
+  return filtered.value.slice(start, start + userPageSize.value)
 })
 
 // ---- 头像 ----

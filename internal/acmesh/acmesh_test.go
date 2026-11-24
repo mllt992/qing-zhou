@@ -233,6 +233,73 @@ func TestRenewAppliesStoredCryptoPolicy(t *testing.T) {
 	}
 }
 
+type scriptRunnerStub struct {
+	cmds    []string
+	handler func(cmd string) (string, error)
+}
+
+func (s *scriptRunnerStub) Run(_ context.Context, cmd string) (string, error) {
+	s.cmds = append(s.cmds, cmd)
+	return s.handler(cmd)
+}
+
+func TestRenewFallsBackToNonECCOrReissueWhenDomainNotIssued(t *testing.T) {
+	notIssued := "[Tue Nov 24 10:29:50 PM CST 2026] Renew: 'ssl.mllt.vip'\n[Tue Nov 24 10:29:50 PM CST 2026] 'ssl.mllt.vip' is not an issued domain, skipping.\n"
+
+	// Case 1: --renew --ecc fails with "not an issued domain", retry without --ecc succeeds.
+	r1 := &scriptRunnerStub{
+		handler: func(cmd string) (string, error) {
+			if strings.Contains(cmd, "--renew") && strings.Contains(cmd, "--ecc") {
+				return notIssued, context.DeadlineExceeded
+			}
+			return "ok", nil
+		},
+	}
+	if _, err := Renew(context.Background(), r1, IssueOpts{
+		Domain: "ssl.mllt.vip", Method: MethodCFDNS, CFToken: "tok", KeyLength: "ec-256",
+	}, true); err != nil {
+		t.Fatalf("expected fallback without --ecc to succeed, got: %v", err)
+	}
+	if len(r1.cmds) != 2 {
+		t.Fatalf("expected 2 commands (--ecc then non-ecc), got %d: %v", len(r1.cmds), r1.cmds)
+	}
+
+	// Case 2: both --renew attempts fail with "not an issued domain" (e.g. container recreated),
+	// fallback to Issue (--issue + --install-cert) succeeds.
+	r2 := &scriptRunnerStub{
+		handler: func(cmd string) (string, error) {
+			if strings.Contains(cmd, "[ -x ") {
+				return "__yes__", nil
+			}
+			if strings.Contains(cmd, "--renew") {
+				return notIssued, context.DeadlineExceeded
+			}
+			return "ok", nil
+		},
+	}
+	res, err := Renew(context.Background(), r2, IssueOpts{
+		Domain: "ssl.mllt.vip", Method: MethodCFDNS, CFToken: "tok", KeyLength: "ec-256",
+	}, true)
+	if err != nil {
+		t.Fatalf("expected fallback to Issue to succeed, got: %v", err)
+	}
+	if res == nil || res.CertPath == "" {
+		t.Fatalf("expected non-empty IssueResult, got: %+v", res)
+	}
+	var sawIssue, sawInstall bool
+	for _, c := range r2.cmds {
+		if strings.Contains(c, "--issue") {
+			sawIssue = true
+		}
+		if strings.Contains(c, "--install-cert") {
+			sawInstall = true
+		}
+	}
+	if !sawIssue || !sawInstall {
+		t.Errorf("expected --issue and --install-cert in fallback commands, got: %v", r2.cmds)
+	}
+}
+
 func TestCertPaths(t *testing.T) {
 	c, k := certPaths("", "a.example.com")
 	if c != "/etc/sing-box/certs/a.example.com.crt" || k != "/etc/sing-box/certs/a.example.com.key" {
