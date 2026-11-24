@@ -234,7 +234,9 @@ func (a *API) Router() http.Handler {
 	r.Use(middleware.Recoverer)
 	// gzip responses (JSON API + the embedded JS/CSS bundle). Cheap CPU for a large
 	// bandwidth win on the small boxes this targets; skips already-compressed types.
-	r.Use(middleware.Compress(5))
+	// /sub/ handles its own gzip negotiation so text/yaml (Clash), application/json
+	// (sing-box), text/plain (base64/Surge), and q=0 are all handled consistently.
+	r.Use(compressExceptSub(5))
 	r.Use(middleware.Timeout(RequestTimeout))
 	// Cap request bodies so an authenticated client can't drive the process into
 	// memory pressure with a multi-GB POST. 8 MiB comfortably covers the largest

@@ -500,6 +500,18 @@
               </div>
             </div>
           </n-form-item>
+          <n-form-item label="自定义订阅响应头">
+            <div style="width:100%;">
+              <n-input v-model:value="form.sub_custom_headers" type="textarea" :rows="4"
+                       placeholder="每行一条 Header-Name: value，如：&#10;profile-web-page-url: https://example.com&#10;announce: base64:5qyi6L+O5L2/55So6L276Iif"
+                       style="font-family:monospace;font-size:12px;" />
+              <div style="font-size:12px;color:var(--text-3);margin-top:6px;line-height:1.6;">
+                附加到 <code>/sub/{token}</code> 订阅正文响应中（不影响浏览器打开的信息页）。支持以 <code>#</code> 或 <code>//</code> 开头的注释行；非 ASCII 内容（如中文公告）建议按客户端约定使用 <code>base64:</code> 编码，避免部分客户端按 Latin-1 解析乱码。
+                禁止覆盖 <code>Host</code>、<code>Content-Length</code>、<code>Content-Encoding</code> 等危险头及 <code>Subscription-Userinfo</code>、<code>Content-Type</code>、<code>Cache-Control</code>、<code>Content-Disposition</code> 系统托管头。
+                客户端声明 <code>Accept-Encoding: gzip</code> 时会自动压缩正文。
+              </div>
+            </div>
+          </n-form-item>
           <n-form-item label="Clash 模板 (YAML)">
             <div style="width:100%;">
               <n-input v-model:value="form.sub_clash_template" type="textarea" :rows="8" placeholder="留空用内置模板" style="font-family:monospace;font-size:12px;" />
@@ -726,7 +738,7 @@ const settingsGroups: SettingsGroup[] = [
   { label: '节点与安全', sections: [
     { id: 'settings-cert', label: '证书 / ACME', note: 'Cloudflare DNS', description: '配置 Cloudflare DNS 验证所需的令牌与 ACME 邮箱。', keywords: '证书 ACME Cloudflare DNS Token Let’s Encrypt' },
     { id: 'settings-security', label: '出口安全', note: '内网访问防护', description: '控制节点是否阻断内网、链路本地地址和云元数据。', keywords: '安全 内网 元数据 127 192 169 阻断' },
-    { id: 'settings-template', label: '订阅模板', note: '客户端输出', description: '自定义 Clash / sing-box 订阅模板与 Clash UDP 声明。', keywords: '订阅 模板 Clash YAML sing-box JSON UDP' },
+    { id: 'settings-template', label: '订阅模板', note: '客户端输出', description: '自定义 Clash / sing-box 订阅模板、Clash UDP 声明与订阅响应头。', keywords: '订阅 模板 Clash YAML sing-box JSON UDP 响应头 Header gzip announce' },
     { id: 'settings-runtime', label: '采集与同步', note: '节点负载', description: '调整探针采集、流量统计和健康检查频率。', keywords: '探针 采集 流量 统计 健康检查 同步 间隔 重建' },
   ] },
   { label: '系统维护', sections: [
@@ -1547,6 +1559,7 @@ async function loadSettings() {
       // undefined —— 否则第一次输入前它不是一个受控输入。
       form.node_host_override ??= ''
       form.brand_icon_data_uri ??= ''
+      form.sub_custom_headers ??= ''
       form.help_docs_mode = data.help_docs_mode === 'external' ? 'external' : 'builtin'
       form.help_docs_url ??= ''
       form.homepage_machine_health = data.homepage_machine_health === 'true' ? 'true' : 'false'
