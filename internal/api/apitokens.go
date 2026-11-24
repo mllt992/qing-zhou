@@ -27,9 +27,26 @@ func (a *API) handleAdminListAPITokens(w http.ResponseWriter, r *http.Request) {
 
 type createAPITokenReq struct {
 	Name      string   `json:"name"`
+	Preset    string   `json:"preset"`
 	Scopes    []string `json:"scopes"`
 	ExpiresIn int64    `json:"expires_in"` // seconds from now; 0 = never
 	ExpiresAt int64    `json:"expires_at"` // absolute unix; takes precedence if >0
+}
+
+// BuildMCPClientConfig returns a ready-to-paste Remote MCP (Streamable HTTP)
+// client configuration snippet for the given panel base URL and bearer token.
+func BuildMCPClientConfig(mcpURL, plainToken string) map[string]any {
+	return map[string]any{
+		"mcpServers": map[string]any{
+			"qingzhou": map[string]any{
+				"type": "http",
+				"url":  mcpURL,
+				"headers": map[string]string{
+					"Authorization": "Bearer " + plainToken,
+				},
+			},
+		},
+	}
 }
 
 // handleAdminCreateAPIToken POST /api/admin/tokens
@@ -42,18 +59,27 @@ func (a *API) handleAdminCreateAPIToken(w http.ResponseWriter, r *http.Request) 
 		fail(w, http.StatusBadRequest, "无效请求")
 		return
 	}
+	scopes := req.Scopes
+	if len(scopes) == 0 && strings.TrimSpace(req.Preset) != "" {
+		resolved, okPreset := store.ResolveAPITokenPreset(req.Preset)
+		if !okPreset {
+			fail(w, http.StatusBadRequest, "未知 preset（可选：mcp-readonly / mcp-ops / mcp-admin）")
+			return
+		}
+		scopes = resolved
+	}
 	expiresAt := req.ExpiresAt
 	if expiresAt == 0 && req.ExpiresIn > 0 {
 		expiresAt = time.Now().Unix() + req.ExpiresIn
 	}
 	uid, _ := r.Context().Value(ctxUserID).(int64)
-	plain, tok, err := a.st.CreateAPIToken(req.Name, req.Scopes, uid, expiresAt)
+	plain, tok, err := a.st.CreateAPIToken(req.Name, scopes, uid, expiresAt)
 	if err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	log.Printf("audit: api_token created id=%d name=%q scopes=%v by=%d", tok.ID, tok.Name, tok.Scopes, uid)
-	ok(w, J{
+	resp := J{
 		"token":      plain, // shown once
 		"id":         tok.ID,
 		"name":       tok.Name,
@@ -61,7 +87,13 @@ func (a *API) handleAdminCreateAPIToken(w http.ResponseWriter, r *http.Request) 
 		"scopes":     tok.Scopes,
 		"expires_at": tok.ExpiresAt,
 		"created_at": tok.CreatedAt,
-	})
+	}
+	if store.HasAnyMCPScope(tok.Scopes) {
+		mcpURL := strings.TrimRight(a.publicBase(r), "/") + "/mcp"
+		resp["mcp_url"] = mcpURL
+		resp["mcp_config"] = BuildMCPClientConfig(mcpURL, plain)
+	}
+	ok(w, resp)
 }
 
 // handleAdminRevokeAPIToken DELETE /api/admin/tokens/{id}
@@ -123,6 +155,9 @@ func scopeForAdminRequest(r *http.Request) string {
 	}
 	if method == http.MethodGet && path == "/api/admin/backup" {
 		return "backup:write"
+	}
+	if method == http.MethodGet && path == "/api/admin/mcp/audit-logs" {
+		return "mcp:read"
 	}
 	return ""
 }

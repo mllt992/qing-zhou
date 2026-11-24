@@ -19,6 +19,48 @@ var KnownAPITokenScopes = []string{
 	"nodes:read",
 	"servers:read",
 	"backup:write",
+	// MCP (Model Context Protocol) scopes — scoped strictly to /mcp (and MCP audit read),
+	// never widening legacy REST routes.
+	"mcp:read",
+	"mcp:nodes",
+	"mcp:servers",
+	"mcp:users",
+	"mcp:settings",
+}
+
+// ResolveAPITokenPreset maps a named preset to its scope list.
+func ResolveAPITokenPreset(preset string) ([]string, bool) {
+	switch strings.TrimSpace(strings.ToLower(preset)) {
+	case "mcp-readonly":
+		return []string{"mcp:read"}, true
+	case "mcp-ops":
+		return []string{"mcp:read", "mcp:nodes", "mcp:servers", "mcp:users"}, true
+	case "mcp-admin":
+		return []string{"mcp:read", "mcp:nodes", "mcp:servers", "mcp:users", "mcp:settings"}, true
+	default:
+		return nil, false
+	}
+}
+
+// HasAnyMCPScope reports whether scopes grants any MCP capability.
+func HasAnyMCPScope(scopes []string) bool {
+	for _, s := range scopes {
+		if strings.HasPrefix(s, "mcp:") {
+			return true
+		}
+	}
+	return false
+}
+
+// FirstActiveAdminID returns the lowest-id active admin account, used by local
+// CLI token issuance so the minted token inherits a live admin owner.
+func (s *Store) FirstActiveAdminID() (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY id ASC LIMIT 1`).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 const apiTokenPlainPrefix = "qz_at_"

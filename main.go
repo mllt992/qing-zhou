@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"qingzhou/internal/api"
+	"qingzhou/internal/cli"
 	"qingzhou/internal/config"
 	"qingzhou/internal/intervalcfg"
 	"qingzhou/internal/mailer"
@@ -24,6 +25,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+
 	cfg := config.Load()
 
 	st, err := store.Open(cfg.DBPath)

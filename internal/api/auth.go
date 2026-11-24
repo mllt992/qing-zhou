@@ -20,9 +20,10 @@ const (
 	ctxUserID   ctxKey = "uid"
 	ctxRole     ctxKey = "role"
 	ctxJti      ctxKey = "jti"
-	ctxAuthKind ctxKey = "auth_kind" // "jwt" | "api_token"
-	ctxScopes   ctxKey = "scopes"    // []string when auth_kind=api_token
-	ctxTokenID  ctxKey = "token_id"
+	ctxAuthKind  ctxKey = "auth_kind" // "jwt" | "api_token"
+	ctxScopes    ctxKey = "scopes"    // []string when auth_kind=api_token
+	ctxTokenID   ctxKey = "token_id"
+	ctxTokenName ctxKey = "token_name"
 
 	cookieName = "qz_token"
 	tokenTTL   = 7 * 24 * time.Hour
@@ -238,6 +239,7 @@ func (a *API) authMiddleware(next http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, ctxAuthKind, "api_token")
 			ctx = context.WithValue(ctx, ctxScopes, at.Scopes)
 			ctx = context.WithValue(ctx, ctxTokenID, at.ID)
+			ctx = context.WithValue(ctx, ctxTokenName, at.Name)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}

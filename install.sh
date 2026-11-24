@@ -8,6 +8,7 @@
 #   --version vX.Y.Z   安装指定版本（默认取 GitHub 最新 release）
 #   --force            与当前版本相同也强制重装
 #   --proxy <前缀>     GitHub 下载加速前缀，如 https://mirror.ghproxy.com/
+#   --init-mcp         安装并启动后自动签发管理员 MCP 令牌并输出配置 JSON
 #   uninstall          卸载（保留数据库与配置，除非再确认删除）
 #                      装好后本脚本会存一份到 /opt/qingzhou/install.sh，卸载直接：
 #                        bash /opt/qingzhou/install.sh uninstall
@@ -27,14 +28,16 @@ VERSION_MARKER="$INSTALL_DIR/.version"
 GH_PROXY="${GH_PROXY:-}"
 WANT_VERSION=""
 FORCE=0
+INIT_MCP=0
 ACTION="install"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --version) WANT_VERSION="$2"; shift 2 ;;
-    --force)   FORCE=1; shift ;;
-    --proxy)   GH_PROXY="$2"; shift 2 ;;
-    uninstall) ACTION="uninstall"; shift ;;
+    --version)  WANT_VERSION="$2"; shift 2 ;;
+    --force)    FORCE=1; shift ;;
+    --proxy)    GH_PROXY="$2"; shift 2 ;;
+    --init-mcp) INIT_MCP=1; shift ;;
+    uninstall)  ACTION="uninstall"; shift ;;
     *) echo "未知参数: $1"; exit 1 ;;
   esac
 done
@@ -398,8 +401,14 @@ if [ "$OK" = "1" ]; then
     echo "   配置文件: $ENV_FILE（chmod 600，QZ_SECRET_KEY 请勿更换）"
   fi
   echo "   常用命令: systemctl status $SERVICE_NAME | journalctl -u $SERVICE_NAME -f"
+  echo "   AI MCP:   $BIN_PATH token create --name ai-ops --preset mcp-admin --json"
   echo "   更新:     重跑本脚本，或用面板内「在线更新」"
   echo "   卸载:     bash $INSTALL_DIR/install.sh uninstall"
+  if [ "$INIT_MCP" = "1" ]; then
+    echo ""
+    echo "========== 自动签发 AI 运维 MCP 密钥 =========="
+    "$BIN_PATH" token create --name "ai-ops" --preset mcp-admin --env-file "$ENV_FILE" || true
+  fi
 else
   echo "⚠️  服务未确认启动成功，请查看日志:"
   echo "   journalctl -u $SERVICE_NAME -n 30 --no-pager"
