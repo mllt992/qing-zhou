@@ -110,9 +110,9 @@
               <div v-if="verOf(s.id)?.version" class="sr-row">
                 <span class="k">能力修复</span>
                 <span class="v caps">
-                  <span class="cap-pill" :class="{ on: verOf(s.id).has_vision_framing_fix }">Vision</span>
-                  <span class="cap-pill" :class="{ on: verOf(s.id).has_transport_read_buffer_fix }">WS/HTTPUpgrade</span>
-                  <span class="cap-pill" :class="{ on: verOf(s.id).has_trojan_handshake_fix }">Trojan 握手</span>
+                  <span class="cap-pill" :class="{ on: verOf(s.id).has_vision_framing_fix }">{{ verOf(s.id).has_vision_framing_fix ? '版本含 Vision 修复标记' : '未确认 Vision 修复' }}</span>
+                  <span class="cap-pill" :class="{ on: verOf(s.id).has_transport_read_buffer_fix }">{{ verOf(s.id).has_transport_read_buffer_fix ? '版本含 WS/HTTPUpgrade 修复标记' : '未确认 WS/HTTPUpgrade 修复' }}</span>
+                  <span class="cap-pill" :class="{ on: verOf(s.id).has_trojan_handshake_fix }">{{ verOf(s.id).has_trojan_handshake_fix ? '版本含 Trojan 分段握手修复标记' : '未确认 Trojan 分段握手修复' }}</span>
                 </span>
               </div>
             </div>
