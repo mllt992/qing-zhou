@@ -33,6 +33,18 @@
       <n-input v-model:value="search" placeholder="搜索用户名或套餐名称" size="small" style="width:230px;" clearable />
     </div>
 
+    <div v-if="pageItems.length" class="batch-bar" :class="{ active: selected.size }">
+      <n-checkbox :checked="allPageSelected" :indeterminate="somePageSelected && !allPageSelected" @update:checked="togglePage">本页全选</n-checkbox>
+      <template v-if="selected.size">
+        <span class="bb-count">已选 <b>{{ selected.size }}</b> 单</span>
+        <a v-if="selected.size < view.length" class="bb-link" @click="selectAllResults">选择筛选结果全部 {{ view.length }} 单</a>
+        <a class="bb-link" @click="clearSel">取消选择</a>
+        <span class="spacer" />
+        <n-button size="small" type="error" secondary :loading="batching" @click="batchDelete">批量删除</n-button>
+      </template>
+      <span v-else class="bb-hint">勾选订单后可批量删除</span>
+    </div>
+
     <n-spin :show="loading">
       <!-- 桌面端：现代数据表格 -->
       <div v-if="view.length" class="orders-panel">
@@ -40,6 +52,7 @@
           <table class="orders-table">
             <thead>
               <tr>
+                <th class="chk-col"><n-checkbox :checked="allPageSelected" :indeterminate="somePageSelected && !allPageSelected" @update:checked="togglePage" /></th>
                 <th style="width:72px;">单号</th>
                 <th>套餐名称</th>
                 <th>用户</th>
@@ -53,7 +66,7 @@
             <tbody>
               <template v-for="g in pagedGroups" :key="g.key">
                 <tr v-if="g.label" class="group-row" @click="toggleGroupCollapse(g.key)">
-                  <td :colspan="8">
+                  <td :colspan="9">
                     <div class="group-bar">
                       <span class="group-chev" :class="{ closed: collapsedGroups.has(g.key) }">▾</span>
                       <span class="group-name">{{ g.label }}</span>
@@ -63,7 +76,8 @@
                   </td>
                 </tr>
                 <template v-if="!g.label || !collapsedGroups.has(g.key)">
-                  <tr v-for="o in g.items" :key="o.id" :class="{ refunded: o.status === 'refunded' }">
+                  <tr v-for="o in g.items" :key="o.id" :class="{ refunded: o.status === 'refunded', picked: selected.has(o.id) }">
+                    <td class="chk-col"><n-checkbox :checked="selected.has(o.id)" @update:checked="(v: boolean) => toggleSel(o.id, v)" /></td>
                     <td class="id-col">#{{ o.id }}</td>
                     <td class="strong">{{ o.name || '—' }}</td>
                     <td>
@@ -129,6 +143,7 @@
           <div v-if="!g.label || !collapsedGroups.has(g.key)" class="card-grid">
             <div v-for="o in g.items" :key="o.id" class="list-card">
               <div class="lc-head">
+                <n-checkbox :checked="selected.has(o.id)" @update:checked="(v: boolean) => toggleSel(o.id, v)" />
                 <span class="lc-title"><span class="id-col">#{{ o.id }}</span> {{ o.name || '—' }}</span>
                 <span class="pill" :class="o.status === 'success' ? 'pill-ok' : 'pill-warn'">{{ o.status === 'success' ? '成功' : '已退款' }}</span>
               </div>
@@ -165,7 +180,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { NSpin, NInput, NButton, NTag, NEmpty, NPagination, useMessage, useDialog } from 'naive-ui'
+import { NSpin, NInput, NButton, NTag, NEmpty, NPagination, NCheckbox, useMessage, useDialog } from 'naive-ui'
 import { apiList, apiDelete } from '@/api'
 import { fmtDateTime } from '@/utils/format'
 import RefundDialog from '@/components/RefundDialog.vue'
@@ -189,6 +204,7 @@ const collapsedGroups = ref<Set<string>>(new Set())
 
 watch([statusTab, groupBy, search, sortKey, sortDir, pageSize], () => {
   page.value = 1
+  selected.value = new Set()
 })
 
 const tabs = computed(() => [
@@ -305,6 +321,47 @@ const pagedGroups = computed(() => {
   return out
 })
 
+// ---- 多选 / 批量删除 ----
+const selected = ref<Set<number>>(new Set())
+const batching = ref(false)
+const pageItems = computed(() => pagedGroups.value.flatMap((g: any) => g.items))
+const allPageSelected = computed(() => pageItems.value.length > 0 && pageItems.value.every((o: any) => selected.value.has(o.id)))
+const somePageSelected = computed(() => pageItems.value.some((o: any) => selected.value.has(o.id)))
+function toggleSel(id: number, v: boolean) {
+  const n = new Set(selected.value)
+  if (v) n.add(id); else n.delete(id)
+  selected.value = n
+}
+function togglePage(v: boolean) {
+  const n = new Set(selected.value)
+  for (const o of pageItems.value) { if (v) n.add(o.id); else n.delete(o.id) }
+  selected.value = n
+}
+function selectAllResults() { selected.value = new Set(view.value.map((o: any) => o.id)) }
+function clearSel() { selected.value = new Set() }
+function batchDelete() {
+  const ids = [...selected.value]
+  if (!ids.length) return
+  dialog.warning({
+    title: '确认批量删除订单',
+    content: `确定删除选中的 ${ids.length} 笔订单？订单记录将永久消失（不会退还积分），此操作不可撤销。`,
+    positiveText: `删除 ${ids.length} 单`, negativeText: '取消',
+    onPositiveClick: async () => {
+      batching.value = true
+      let ok = 0; const failed: string[] = []
+      for (const id of ids) {
+        try { await apiDelete(`/api/admin/orders/${id}`); ok++ }
+        catch (e: any) { failed.push(`#${id} ${e?.message || '失败'}`) }
+      }
+      batching.value = false
+      selected.value = new Set()
+      if (failed.length) message.warning(`已删除 ${ok} 单，${failed.length} 单失败：${failed.slice(0, 3).join('；')}`, { duration: 8000 })
+      else message.success(`已删除 ${ok} 单`)
+      await load()
+    },
+  })
+}
+
 function toggleSort(k: 'created_at' | 'price_points') {
   if (sortKey.value === k) sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
   else { sortKey.value = k; sortDir.value = 'desc' }
@@ -358,6 +415,20 @@ onMounted(load)
   margin-bottom: 14px;
 }
 .orders-toolbar .spacer { flex: 1; }
+
+/* 批量操作条 */
+.batch-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-height: 40px;
+  padding: 8px 14px; margin-bottom: 12px; font-size: 12.5px;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px;
+}
+.batch-bar.active { background: var(--accent-soft); border-color: rgba(15, 108, 189, .22); }
+.bb-count b { color: var(--accent-strong); }
+.bb-hint { color: var(--text-3); }
+.bb-link { color: var(--accent-strong); cursor: pointer; }
+.bb-link:hover { text-decoration: underline; }
+.batch-bar .spacer { flex: 1; }
+.list-card .lc-head { align-items: center; gap: 8px; }
 
 /* 分段筛选 */
 .seg {
@@ -418,7 +489,10 @@ onMounted(load)
   background: var(--bg-subtle);
   box-shadow: none;
 }
-.orders-table-wrap { overflow-x: auto; }
+.orders-table-wrap { overflow: auto; max-height: calc(100vh - 360px); min-height: 280px; }
+.orders-table thead th { position: sticky; top: 0; z-index: 2; }
+.orders-table th.chk-col, .orders-table td.chk-col { width: 44px; padding-right: 0; }
+.orders-table tbody tr.picked td { background: var(--accent-soft); }
 .orders-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .orders-table thead th {
   text-align: left; font-weight: 650; color: var(--text-3); font-size: 12px;

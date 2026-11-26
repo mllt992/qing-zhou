@@ -35,11 +35,25 @@
       <span class="au-count">{{ filtered.length }} / {{ users.length }}</span>
     </div>
 
+    <!-- 批量操作条 -->
+    <div v-if="pagedUsers.length" class="batch-bar" :class="{ active: selected.size }">
+      <n-checkbox :checked="allPageSelected" :indeterminate="somePageSelected && !allPageSelected" @update:checked="togglePage">本页全选</n-checkbox>
+      <template v-if="selected.size">
+        <span class="bb-count">已选 <b>{{ selected.size }}</b> 位</span>
+        <a v-if="selected.size < selectableFiltered.length" class="bb-link" @click="selectAllFiltered">选择筛选结果全部 {{ selectableFiltered.length }} 位</a>
+        <a class="bb-link" @click="clearSel">取消选择</a>
+        <span class="spacer" />
+        <n-button size="small" type="error" secondary :loading="batching" @click="batchDelete">批量删除</n-button>
+      </template>
+      <span v-else class="bb-hint">勾选用户后可批量操作（管理员账号不可勾选）</span>
+    </div>
+
     <n-spin :show="loading">
       <div v-if="filtered.length" class="card-grid">
-        <div v-for="u in pagedUsers" :key="u.id" class="user-card">
+        <div v-for="u in pagedUsers" :key="u.id" class="user-card" :class="{ picked: selected.has(u.id) }">
           <!-- 身份 -->
           <div class="uc-head">
+            <n-checkbox :checked="selected.has(u.id)" :disabled="u.role === 'admin'" @update:checked="(v: boolean) => toggleSel(u.id, v)" />
             <span class="uc-avatar" :style="avatarStyle(u.username)">{{ initial(u.username) }}</span>
             <div class="uc-id">
               <div class="uc-name-row">
@@ -369,28 +383,35 @@
     </n-modal>
 
     <!-- 订单历史 -->
-    <n-modal v-model:show="showOrders" preset="card" title="用户订单" style="max-width:700px;">
+    <n-modal v-model:show="showOrders" preset="card" title="用户订单" style="max-width:720px;">
       <p class="modal-sub">用户：{{ ordersUser?.username }}</p>
       <n-spin :show="loadingOrders">
-        <div v-if="userOrders.length" class="card-grid compact">
-          <div v-for="o in userOrders" :key="o.id" class="list-card">
-            <div class="lc-head">
-              <span class="lc-title">{{ o.name || '—' }}</span>
-              <n-tag :type="o.status === 'success' ? 'success' : 'warning'" size="tiny" :bordered="false">{{ o.status === 'success' ? '成功' : '已退款' }}</n-tag>
+        <div v-if="userOrders.length" class="uo-bar">
+          <n-radio-group v-model:value="orderStatus" size="small">
+            <n-radio-button value="all">全部 {{ userOrders.length }}</n-radio-button>
+            <n-radio-button value="success">成功 {{ userOrders.filter((o: any) => o.status === 'success').length }}</n-radio-button>
+            <n-radio-button value="refunded">已退款 {{ userOrders.filter((o: any) => o.status === 'refunded').length }}</n-radio-button>
+          </n-radio-group>
+        </div>
+        <div v-if="pagedUserOrders.length" class="uo-list">
+          <div v-for="o in pagedUserOrders" :key="o.id" class="uo-row">
+            <div class="uo-main">
+              <span class="uo-name">{{ o.name || '—' }}</span>
+              <span class="uo-sub">#{{ o.id }} · {{ fmtDateTime(o.created_at) }}</span>
             </div>
-            <div class="lc-meta">
-              <span class="kv">积分 <b>{{ o.price_points }}</b></span>
-              <span class="kv" v-if="o.status === 'refunded'">已退 <b style="color:var(--warn);">{{ o.refunded_points }}</b>
-                <template v-if="o.refund_ratio > 0 && o.refund_ratio < 1">（{{ Math.round(o.refund_ratio * 100) }}%）</template>
-              </span>
-              <span class="kv">{{ fmtDateTime(o.created_at) }}</span>
+            <div class="uo-pts">
+              <b>{{ o.price_points }}</b> 积分
+              <small v-if="o.status === 'refunded'">已退 {{ o.refunded_points }}<template v-if="o.refund_ratio > 0 && o.refund_ratio < 1">（{{ Math.round(o.refund_ratio * 100) }}%）</template></small>
             </div>
-            <div class="lc-foot">
-              <n-button v-if="o.status === 'success'" size="tiny" type="warning" @click="openRefund(o.id)">退款</n-button>
-            </div>
+            <n-tag :type="o.status === 'success' ? 'success' : 'warning'" size="tiny" :bordered="false">{{ o.status === 'success' ? '成功' : '已退款' }}</n-tag>
+            <div class="uo-act"><n-button v-if="o.status === 'success'" size="tiny" type="warning" secondary @click="openRefund(o.id)">退款</n-button></div>
           </div>
         </div>
-        <n-empty v-else-if="!loadingOrders" description="暂无订单" style="padding:30px 0;" />
+        <div v-if="userOrdersFiltered.length > orderPageSize" class="uo-pager">
+          <n-pagination v-model:page="orderPage" v-model:page-size="orderPageSize" :item-count="userOrdersFiltered.length" :page-sizes="[8, 15, 30]" show-size-picker size="small" />
+        </div>
+        <n-empty v-else-if="userOrders.length && !pagedUserOrders.length" description="没有符合条件的订单" style="padding:24px 0;" />
+        <n-empty v-if="!userOrders.length && !loadingOrders" description="暂无订单" style="padding:30px 0;" />
       </n-spin>
     </n-modal>
 
@@ -418,13 +439,14 @@ const users = ref<any[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const search = ref('')
-const filter = ref('all')
+const filter = ref('normal')
 const sortBy = ref('default')
 const userPage = ref(1)
 const userPageSize = ref(24)
 
 watch([search, filter, sortBy, userPageSize], () => {
   userPage.value = 1
+  selected.value = new Set()
 })
 
 const sortOptions = [
@@ -536,6 +558,7 @@ function expiringSoon(u: any) {
 
 // ---- 概览 / 筛选 ----
 const stats = computed(() => [
+  { key: 'normal', label: '正常用户', value: users.value.filter((u: any) => u.status !== 'banned').length, color: '#6f8f76' },
   { key: 'all', label: '全部用户', value: users.value.length, color: '' },
   { key: 'online', label: '在线', value: onlineCount.value, color: '#6f8f76' },
   { key: 'unfetched', label: '从未拉取订阅', value: users.value.filter((u: any) => !u.sub_last_fetched_at).length, color: '#767676' },
@@ -545,12 +568,13 @@ const stats = computed(() => [
 ])
 const emptyText = computed(() => {
   if (search.value) return '没有匹配的用户'
-  return { online: '当前无在线用户', unfetched: '所有用户都拉取过订阅', noplan: '所有用户都有生效中的套餐', expiring: '近 7 天没有套餐到期', banned: '没有被封禁的用户' }[filter.value] || '暂无用户'
+  return { normal: '没有正常状态的用户', online: '当前无在线用户', unfetched: '所有用户都拉取过订阅', noplan: '所有用户都有生效中的套餐', expiring: '近 7 天没有套餐到期', banned: '没有被封禁的用户' }[filter.value] || '暂无用户'
 })
 
 const filtered = computed(() => {
   let list = users.value
   switch (filter.value) {
+    case 'normal': list = list.filter((u: any) => u.status !== 'banned'); break
     case 'online': list = list.filter((u: any) => u.online); break
     case 'unfetched': list = list.filter((u: any) => !u.sub_last_fetched_at); break
     case 'noplan': list = list.filter(needsPlan); break
@@ -596,6 +620,49 @@ function avatarStyle(name: string) {
 }
 
 // ---- 更多操作 ----
+// ---- 多选 / 批量删除 ----
+const selected = ref<Set<number>>(new Set())
+const batching = ref(false)
+const selectableFiltered = computed(() => filtered.value.filter((u: any) => u.role !== 'admin'))
+const pageSelectable = computed(() => pagedUsers.value.filter((u: any) => u.role !== 'admin'))
+const allPageSelected = computed(() => pageSelectable.value.length > 0 && pageSelectable.value.every((u: any) => selected.value.has(u.id)))
+const somePageSelected = computed(() => pageSelectable.value.some((u: any) => selected.value.has(u.id)))
+function toggleSel(id: number, v: boolean) {
+  const n = new Set(selected.value)
+  if (v) n.add(id); else n.delete(id)
+  selected.value = n
+}
+function togglePage(v: boolean) {
+  const n = new Set(selected.value)
+  for (const u of pageSelectable.value) { if (v) n.add(u.id); else n.delete(u.id) }
+  selected.value = n
+}
+function selectAllFiltered() { selected.value = new Set(selectableFiltered.value.map((u: any) => u.id)) }
+function clearSel() { selected.value = new Set() }
+function batchDelete() {
+  const ids = [...selected.value]
+  if (!ids.length) return
+  dialog.warning({
+    title: '确认批量删除用户',
+    content: `确定删除选中的 ${ids.length} 位用户？其订阅、套餐与设备将一并失效，此操作不可撤销。`,
+    positiveText: `删除 ${ids.length} 位`, negativeText: '取消',
+    onPositiveClick: async () => {
+      batching.value = true
+      let ok = 0; const failed: string[] = []
+      for (const id of ids) {
+        try { await apiDelete(`/api/admin/users/${id}`); ok++ }
+        catch (e: any) { failed.push(`#${id} ${e?.message || '失败'}`) }
+      }
+      batching.value = false
+      selected.value = new Set()
+      if (plansUser.value && ids.includes(plansUser.value.id)) showPlans.value = false
+      if (failed.length) message.warning(`已删除 ${ok} 位，${failed.length} 位失败：${failed.slice(0, 3).join('；')}`, { duration: 8000 })
+      else message.success(`已删除 ${ok} 位用户`)
+      await load()
+    },
+  })
+}
+
 const moreOptions = [
   { label: '重置节点凭据', key: 'creds' },
   { type: 'divider', key: 'd1' },
@@ -1014,10 +1081,17 @@ const showOrders = ref(false)
 const ordersUser = ref<any>(null)
 const userOrders = ref<any[]>([])
 const loadingOrders = ref(false)
+const orderStatus = ref('all')
+const orderPage = ref(1)
+const orderPageSize = ref(8)
+const userOrdersFiltered = computed(() => orderStatus.value === 'all' ? userOrders.value : userOrders.value.filter((o: any) => o.status === orderStatus.value))
+const pagedUserOrders = computed(() => userOrdersFiltered.value.slice((orderPage.value - 1) * orderPageSize.value, orderPage.value * orderPageSize.value))
+watch([orderStatus, orderPageSize], () => { orderPage.value = 1 })
 const refundShow = ref(false)
 const refundId = ref<number | null>(null)
 async function openOrders(u: any) {
   ordersUser.value = u; showOrders.value = true; loadingOrders.value = true
+  orderStatus.value = 'all'; orderPage.value = 1
   try { userOrders.value = await apiList(`/api/admin/users/${u.id}/orders`) } catch {} finally { loadingOrders.value = false }
 }
 function openRefund(orderId: number) {
@@ -1122,6 +1196,35 @@ onMounted(load)
 .ss-item:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .ss-val { font-size: 20px; font-weight: 720; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .ss-label { font-size: 11.5px; color: var(--text-3); }
+
+/* 批量操作条 */
+.batch-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-height: 40px;
+  padding: 8px 14px; margin-bottom: 12px; font-size: 12.5px;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px;
+}
+.batch-bar.active { background: var(--accent-soft); border-color: rgba(15, 108, 189, .22); }
+.bb-count b { color: var(--accent-strong); }
+.bb-hint { color: var(--text-3); }
+.bb-link { color: var(--accent-strong); cursor: pointer; }
+.bb-link:hover { text-decoration: underline; }
+.batch-bar .spacer { flex: 1; }
+.user-card.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+/* 用户订单弹窗 */
+.uo-bar { margin-bottom: 12px; }
+.uo-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.uo-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 56px; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid rgba(15, 23, 42, .06); }
+.uo-row:last-child { border-bottom: 0; }
+.uo-row:hover { background: var(--bg-soft); }
+.uo-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.uo-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uo-sub { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.uo-pts { text-align: right; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.uo-pts b { font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+.uo-pts small { display: block; color: var(--warn); font-size: 11px; }
+.uo-act { text-align: right; }
+.uo-pager { display: flex; justify-content: flex-end; margin-top: 12px; }
 
 /* 用户卡片 */
 .user-card {

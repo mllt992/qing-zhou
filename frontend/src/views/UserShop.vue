@@ -25,23 +25,26 @@
           <span class="sc-badge" :class="typeMeta(pkg.type).cls">{{ typeMeta(pkg.type).label }}</span>
         </div>
 
-        <div class="sc-desc" :class="{ empty: !pkg.description }">
-          {{ pkg.description || '暂无套餐说明' }}
+        <div class="sc-body">
+          <div class="sc-desc" :class="{ empty: !pkg.description }">
+            {{ pkg.description || '暂无套餐说明' }}
+          </div>
+          <ul v-if="pkg.highlights?.length" class="sc-highlights">
+            <li v-for="(h, i) in pkg.highlights" :key="i">{{ h }}</li>
+          </ul>
         </div>
 
-        <ul v-if="pkg.highlights?.length" class="sc-highlights">
-          <li v-for="(h, i) in pkg.highlights" :key="i">{{ h }}</li>
-        </ul>
-
-        <!-- 多时长套餐：选哪档，下面的规格和价格就跟着变 -->
-        <div v-if="pkg.options?.length > 1" class="sc-durations">
-          <button v-for="o in pkg.options" :key="o.days" type="button" class="sc-dur"
-                  :class="{ on: chosenDays[pkg.id] === o.days }"
-                  @click="chosenDays[pkg.id] = o.days">
-            <span class="d">{{ o.days }} 天</span>
-            <span class="p">{{ o.price_points }} 积分</span>
-            <span v-if="saveHint(pkg, o)" class="off">{{ saveHint(pkg, o) }}</span>
-          </button>
+        <!-- 多时长套餐：选哪档，下面的规格和价格就跟着变；无多档时也占位，保证各卡片行对齐 -->
+        <div class="sc-durations" :class="{ none: !(pkg.options?.length > 1) }">
+          <template v-if="pkg.options?.length > 1">
+            <button v-for="o in pkg.options" :key="o.days" type="button" class="sc-dur"
+                    :class="{ on: chosenDays[pkg.id] === o.days }"
+                    @click="chosenDays[pkg.id] = o.days">
+              <span class="d">{{ o.days }} 天</span>
+              <span class="p">{{ o.price_points }} 积分</span>
+              <span v-if="saveHint(pkg, o)" class="off">{{ saveHint(pkg, o) }}</span>
+            </button>
+          </template>
         </div>
 
         <div class="sc-specs">
@@ -56,18 +59,18 @@
           <div class="sc-price">
             <span class="sc-points">{{ priceOf(pkg) }}</span>
             <span class="sc-unit">积分</span>
+            <span class="sc-yuan">{{ yuan(priceOf(pkg)) }}</span>
+            <span v-if="pkg.stock >= 0" class="sc-stock" :class="{ hot: pkg.stock <= 5 }">{{ pkg.stock === 0 ? '已售罄' : `仅剩 ${pkg.stock} 件` }}</span>
           </div>
-          <div class="sc-yuan">{{ yuan(priceOf(pkg)) }}</div>
-          <div v-if="pkg.stock >= 0" class="sc-stock" :class="{ hot: pkg.stock <= 5 }">
-            {{ pkg.stock === 0 ? '已售罄' : `仅剩 ${pkg.stock} 件` }}
+          <div class="sc-actions">
+            <n-button type="primary" block class="sc-buy"
+              :loading="buying===pkg.id"
+              :disabled="!canAfford(pkg) || pkg.stock === 0"
+              @click="handleBuy(pkg)">
+              {{ pkg.stock === 0 ? '已售罄' : canAfford(pkg) ? '购买' : '积分不足' }}
+            </n-button>
+            <button type="button" class="sc-redeem" :class="{ hide: canAfford(pkg) }" :tabindex="canAfford(pkg) ? -1 : 0" @click="showRedeem = true">积分不足？使用兑换码</button>
           </div>
-          <n-button type="primary" block class="sc-buy"
-            :loading="buying===pkg.id"
-            :disabled="!canAfford(pkg) || pkg.stock === 0"
-            @click="handleBuy(pkg)">
-            {{ pkg.stock === 0 ? '已售罄' : canAfford(pkg) ? '购买' : '积分不足' }}
-          </n-button>
-          <n-button v-if="!canAfford(pkg)" block quaternary @click="showRedeem = true">积分不足？使用兑换码</n-button>
         </div>
       </div>
     </div>
@@ -229,11 +232,15 @@ onMounted(async () => {
 .empty-guide b { color:var(--text-2); font-size:12px; }
 .empty-guide small { margin-top:2px; color:var(--text-3); font-size:10.5px; line-height:1.5; }
 
-.shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); column-gap: 16px; row-gap: 0; align-items: stretch; }
 
 .shop-card {
-  display: flex;
-  flex-direction: column;
+  /* 每张卡占 5 行并用 subgrid 继承行轨道：同一排的卡片，标题 / 说明 / 时长 / 规格 / 价格按钮逐行对齐 */
+  display: grid;
+  grid-row: span 5;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  margin-bottom: 16px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -259,8 +266,13 @@ onMounted(async () => {
 .t-plan { color: #4b7a5c; background: #edf4ef; border-color: #d9e8df; }
 .t-other { color: var(--warn); background: #f7f1e2; border-color: #ece0c6; }
 
+.sc-body { margin-top: 10px; }
+@supports not (grid-template-rows: subgrid) {
+  .shop-card { display: flex; flex-direction: column; grid-row: auto; }
+  .sc-foot { margin-top: auto; }
+}
 .sc-desc {
-  margin-top: 10px;
+  margin-top: 0;
   font-size: 13px;
   color: var(--text-2);
   line-height: 1.6;
@@ -289,6 +301,7 @@ onMounted(async () => {
 /* 时长档位：整块可点，选中的一档描边加深，价格直接写在里面便于横向比较 */
 .sc-durations {
   margin-top: 14px;
+  align-content: start;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: 8px;
@@ -308,6 +321,7 @@ onMounted(async () => {
   color: var(--text-2);
   transition: border-color .15s ease, background .15s ease, color .15s ease;
 }
+.sc-durations.none { margin-top: 0; }
 .sc-dur:hover { border-color: #c9c9c9; }
 .sc-dur.on { border-color: var(--accent-strong); color: var(--text); background: #f6f9f7; }
 .sc-dur .d { font-size: 13px; font-weight: 650; }
@@ -343,13 +357,16 @@ onMounted(async () => {
 .sc-spec .k { color: var(--text-3); }
 .sc-spec .v { color: var(--text); font-weight: 600; }
 
-.sc-foot { margin-top: 16px; }
-.sc-price { display: flex; align-items: baseline; gap: 6px; }
+.sc-foot { margin-top: 16px; display: flex; flex-direction: column; }
+.sc-price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; }
 .sc-points { font-size: 24px; font-weight: 740; color: var(--accent-strong); letter-spacing: -.01em; }
 .sc-unit { font-size: 13px; color: var(--text-2); }
-.sc-yuan { font-size: 12px; color: var(--text-3); margin-top: 2px; }
-.sc-stock { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+.sc-yuan { font-size: 12px; color: var(--text-3); }
+.sc-stock { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
 .sc-stock.hot { color: var(--warn); }
-.sc-queue-note { font-size: 11px; color: #4b7a5c; background: #edf4ef; border: 1px solid #d9e8df; border-radius: 8px; padding: 5px 8px; margin-bottom: 10px; line-height: 1.4; }
-.sc-buy { margin-top: 12px; }
+.sc-queue-note { font-size: 11px; margin-top: -4px; color: #4b7a5c; background: #edf4ef; border: 1px solid #d9e8df; border-radius: 8px; padding: 5px 8px; margin-bottom: 10px; line-height: 1.4; }
+.sc-actions { margin-top: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.sc-redeem { align-self: center; background: none; border: 0; padding: 2px 0; height: 22px; font: inherit; font-size: 12px; color: var(--text-3); cursor: pointer; }
+.sc-redeem:hover { color: var(--accent-strong); text-decoration: underline; }
+.sc-redeem.hide { visibility: hidden; pointer-events: none; }
 </style>
