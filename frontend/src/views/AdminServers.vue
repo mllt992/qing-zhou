@@ -9,149 +9,143 @@
       <div class="resource-metric success"><b>{{ servers.filter(s => s.enabled).length }}</b><span>已启用</span></div>
       <div class="resource-metric"><b>{{ servers.filter(s => s.probe_enabled).length }}</b><span>探针已开启</span></div>
       <div class="resource-metric" :class="{ danger: versions.filter(v => v.too_old || (v.version && !v.has_v2ray_api)).length }"><b>{{ versions.filter(v => v.too_old || (v.version && !v.has_v2ray_api)).length }}</b><span>版本或统计异常</span></div>
+      <div class="resource-metric" :class="{ danger: blockedCount }"><b>{{ blockedCount }}</b><span>TCP 疑似阻断</span></div>
     </div>
     <AdminRelayMetering />
-    <!-- 各节点实际在跑的 sing-box。数据来自面板本来就在做的能力探测 -->
-    <n-card size="small" class="ver-panel" style="margin-bottom:16px;">
-      <template #header>
-        <div class="vp-head-left">
-          <span>节点 sing-box 内核版本</span>
-          <span class="vp-req">要求 ≥ {{ minSupported }}</span>
-          <span v-if="currentReleaseVersion" class="vp-rel">面板构建 <code>{{ shortVer(currentReleaseVersion) }}</code></span>
-        </div>
-      </template>
-      <template #header-extra>
-        <n-space size="small" align="center">
-          <n-button size="tiny" type="primary" secondary :loading="verLoading" @click="refreshVersions">重新检测</n-button>
-        </n-space>
-      </template>
-
-      <details class="nv-help-details">
-        <summary class="nv-help-summary">
-          <span>内核探测与补丁核验说明（点击展开详情）</span>
-          <span class="nv-help-tags">
-            <span v-if="visionFixedVersion">Vision <code>{{ visionFixedVersion }}</code></span>
-            <span v-if="transportFixedVersion">WS/HTTPUpgrade <code>{{ transportFixedVersion }}</code></span>
-            <span v-if="currentReleaseVersion">当前发布 <code>{{ currentReleaseVersion }}</code></span>
-          </span>
-        </summary>
-        <div class="nv-help-box">
-          这里显示每台机器最近检测到的内核版本；普通重新检测读取已安装文件，更换磁盘文件不代表运行中的进程已更新。
-          逐用户中转的 Vision、WebSocket/HTTPUpgrade 路径还会在下发前后核验实际运行的内核；预检不通过时不切换该路径，运行能力复核通过后才确认下发。
-          面板生成的配置要求 <b>sing-box ≥ {{ minSupported }}</b>；低于这个版本，节点的
-          <code>sing-box check</code> 会失败，面板会<b>停止向它下发任何配置</b>（旧配置继续跑，所以表面看不出来）。
-          「重装」装的是<b>面板自己发布的构建</b>（随面板版本走，当前标识<span v-if="currentReleaseVersion"> <code>{{ currentReleaseVersion }}</code></span>，含流量统计所需的 <code>v2ray_api</code> 与 Trojan 分段握手维护补丁）。
-          官方版不带这个插件，无法提供所需流量统计，也不含 Trojan 维护补丁。
-          已安装的历史审定标记（Vision <code v-if="visionFixedVersion">{{ visionFixedVersion }}</code>、WS/HTTPUpgrade <code v-if="transportFixedVersion">{{ transportFixedVersion }}</code>，以及旧 1.14.2 Trojan 标记）仍然算具备相应能力；不能仅凭官方版本号较新判断支持。
-        </div>
-      </details>
-
-      <div v-if="versions.length" class="nv-table">
-        <div v-for="n in versions" :key="n.server_id" class="nv-row">
-          <div class="nv-col-node">
-            <span class="nv-dot" :class="n.too_old || (n.version && !n.has_v2ray_api) || n.error ? 'err' : (n.version ? 'ok' : 'idle')" />
-            <span class="nv-name">{{ n.name }}</span>
-            <code v-if="n.host" class="nv-host">{{ n.host }}</code>
-            <n-tag v-if="n.server_id === 0" size="tiny" :bordered="false">本机</n-tag>
-          </div>
-          <div class="nv-col-ver">
-            <span class="nv-ver-badge" :title="n.version || '未知'">{{ shortVer(n.version) }}</span>
-            <span v-if="verBuildMeta(n.version)" class="nv-ver-sub" :title="n.version">{{ verBuildMeta(n.version) }}</span>
-          </div>
-          <div class="nv-col-caps">
-            <n-tag v-if="n.too_old" type="error" size="tiny" :bordered="false">版本过低</n-tag>
-            <n-tag v-else-if="!n.version" type="default" size="tiny" :bordered="false">未安装 / 未知</n-tag>
-            <n-tag v-if="n.version && !n.has_v2ray_api" type="error" size="tiny" :bordered="false">缺 v2ray_api</n-tag>
-            <template v-if="n.version">
-              <span class="cap-pill" :class="{ on: n.has_vision_framing_fix }">
-                {{ n.has_vision_framing_fix ? '版本含 Vision 修复标记' : '未确认 Vision 修复' }}
-              </span>
-              <span class="cap-pill" :class="{ on: n.has_transport_read_buffer_fix }">
-                {{ n.has_transport_read_buffer_fix ? '版本含 WS/HTTPUpgrade 修复标记' : '未确认 WS/HTTPUpgrade 修复' }}
-              </span>
-              <span class="cap-pill" :class="{ on: n.has_trojan_handshake_fix }">
-                {{ n.has_trojan_handshake_fix ? '版本含 Trojan 分段握手修复标记' : '未确认 Trojan 分段握手修复' }}
-              </span>
-            </template>
-          </div>
-          <div class="nv-col-side">
-            <span v-if="n.checked_at" class="nv-time">{{ fmtDateTime(n.checked_at) }}</span>
-            <n-button size="tiny" secondary :disabled="!n.upgradable || n.upgrading" :loading="n.upgrading"
-                      @click="confirmUpgrade(n)">
-              {{ n.upgrading ? '安装中' : (n.version ? '重装内核' : '安装内核') }}
-            </n-button>
-          </div>
-          <!-- 安装是后台跑的（要往节点上拉 ~60MB 的二进制），这里显示脚本的输出。 -->
-          <div v-if="n.upgrading" class="nv-err" style="color:var(--text-3);">
-            正在安装…（往节点下载 sing-box 约 60MB，通常 1–3 分钟；离开本页不影响安装）
-          </div>
-          <div v-else-if="n.upgrade_error" class="nv-err">
-            安装失败：<pre class="nv-out">{{ n.upgrade_error }}</pre>
-          </div>
-          <div v-if="n.error" class="nv-err">探测失败：{{ n.error }}</div>
-          <div v-else-if="n.version && !n.has_v2ray_api" class="nv-err">
-            该版本不含 <code>with_v2ray_api</code> 插件 —— 这台机器的流量<b>统计不到</b>，配额也不会生效（界面上一直显示 0）。
-            点「重装内核」换成面板发布的版本即可；官方发布版不带这个插件。
-          </div>
-        </div>
+    <!-- 工具条：内核要求 + 全局检测 -->
+    <div class="srv-toolbar">
+      <div class="vp-head-left">
+        <span class="tb-title">服务器列表</span>
+        <span class="vp-req">内核要求 ≥ {{ minSupported }}</span>
+        <span v-if="currentReleaseVersion" class="vp-rel">面板构建 <code>{{ shortVer(currentReleaseVersion) }}</code></span>
       </div>
-      <n-empty v-else-if="!verLoading" description="暂无数据，点「重新检测」" style="padding:20px 0;" />
-    </n-card>
+      <n-space size="small" align="center">
+        <n-button size="small" secondary :loading="tcpChecking" @click="checkAllTcp">检测 TCP 连通</n-button>
+        <n-button size="small" type="primary" secondary :loading="verLoading" @click="refreshVersions">重新检测内核</n-button>
+      </n-space>
+    </div>
+    <details class="nv-help-details">
+      <summary class="nv-help-summary">
+        <span>状态检测说明（点击展开）</span>
+        <span class="nv-help-tags">
+          <span v-if="visionFixedVersion">Vision <code>{{ visionFixedVersion }}</code></span>
+          <span v-if="transportFixedVersion">WS/HTTPUpgrade <code>{{ transportFixedVersion }}</code></span>
+          <span v-if="currentReleaseVersion">当前发布 <code>{{ currentReleaseVersion }}</code></span>
+        </span>
+      </summary>
+      <div class="nv-help-box">
+        <b>TCP 连通</b>：由面板所在机器向该服务器的 SSH 端口发起 TCP 握手。若服务器本身在线、而握手超时或被拒，通常意味着该 IP / 端口被墙（GFW）阻断或防火墙拦截；结果取决于面板所在网络位置。<br>
+        <b>内核版本</b>：显示每台机器最近检测到的 sing-box 版本；普通重新检测读取已安装文件，更换磁盘文件不代表运行中的进程已更新。
+        面板生成的配置要求 <b>sing-box ≥ {{ minSupported }}</b>，低于该版本面板会<b>停止向它下发任何配置</b>（旧配置继续跑，所以表面看不出来）。
+        「重装内核」装的是<b>面板自己发布的构建</b>（含流量统计所需的 <code>v2ray_api</code> 与 Trojan 分段握手维护补丁）；官方版不带这个插件。
+        逐用户中转的 Vision、WebSocket/HTTPUpgrade 路径会在下发前后核验实际运行的内核；已安装的历史审定标记仍然算具备相应能力，不能仅凭官方版本号较新判断支持。
+      </div>
+    </details>
 
     <n-spin :show="loading">
-      <div v-if="servers.length" class="srv-grid">
-        <div v-for="(s, idx) in servers" :key="s.id" class="srv-item-card" :class="{ 'is-disabled': !s.enabled }">
-          <div class="sic-head">
-            <div class="sic-title-row">
+      <div v-if="servers.length || localVer" class="srv-list">
+        <article v-for="(s, idx) in servers" :key="s.id" class="srv-card" :class="['h-' + healthOf(s), { off: !s.enabled }]">
+          <!-- 左：基本信息 + 操作 -->
+          <div class="srv-left">
+            <div class="sl-head">
               <i class="order-no">{{ idx + 1 }}</i>
-              <span class="sic-name" :title="s.name">{{ s.name || '—' }}</span>
+              <span class="sl-name" :title="s.name">{{ s.name || '—' }}</span>
               <n-tag v-if="!s.enabled" type="warning" size="tiny" :bordered="false">已禁用</n-tag>
-            </div>
-            <div class="sic-order">
+              <span style="flex:1;" />
               <n-button size="tiny" quaternary circle :disabled="idx === 0 || reordering" title="前移" @click="moveServer(idx, -1)">←</n-button>
               <n-button size="tiny" quaternary circle :disabled="idx === servers.length - 1 || reordering" title="后移" @click="moveServer(idx, 1)">→</n-button>
               <n-switch size="small" :value="!!s.enabled" :loading="togglingServer === s.id" @update:value="v => toggleServerEnabled(s, v)" />
             </div>
+            <dl class="sl-meta">
+              <div><dt>SSH 主机</dt><dd><code>{{ s.host }}:{{ s.port }}</code></dd></div>
+              <div><dt>对外域名</dt><dd><span v-if="s.domain" class="domain">{{ s.domain }}</span><span v-else class="muted">未绑定（使用 IP）</span></dd></div>
+              <div v-if="s.domain_v6 || s.host_v6"><dt>IPv6 接入</dt><dd><span class="domain">{{ s.domain_v6 || s.host_v6 }}</span></dd></div>
+            </dl>
+            <div class="sl-actions">
+              <n-button size="small" type="primary" secondary @click="openTrafficAnalysis(s)">流量分析</n-button>
+              <n-button size="small" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { server: String(s.id) } })">向导配置</n-button>
+              <n-button size="small" secondary @click="openDnsModal(s)">子域名</n-button>
+              <n-button size="small" secondary @click="openForm(s)">编辑</n-button>
+              <n-dropdown trigger="click" :options="serverMoreOpts(s)" @select="(k: string) => onServerMore(k, s)">
+                <n-button size="small" quaternary :loading="clearing === s.id">更多 ▾</n-button>
+              </n-dropdown>
+            </div>
           </div>
 
-          <div class="sic-info-grid">
-            <div class="sic-info-cell">
-              <span class="k">SSH 主机</span>
-              <code class="v">{{ s.host }}:{{ s.port }}</code>
+          <!-- 右：状态信息 -->
+          <div class="srv-right">
+            <div class="sr-head">
+              <span>运行状态</span>
+              <span class="health-badge" :class="healthOf(s)">{{ healthText(healthOf(s)) }}</span>
             </div>
-            <div class="sic-info-cell">
-              <span class="k">对外域名</span>
-              <span v-if="s.domain" class="v domain-chip">{{ s.domain }}</span>
-              <span v-else class="v muted">未绑定（使用 IP）</span>
-            </div>
-            <div v-if="s.domain_v6 || s.host_v6" class="sic-info-cell">
-              <span class="k">IPv6 接入</span>
-              <span class="v domain-chip">{{ s.domain_v6 || s.host_v6 }}</span>
-            </div>
-            <div class="sic-info-cell">
-              <span class="k">监控与内核</span>
-              <div class="v tags-inline">
-                <n-tag :type="s.probe_enabled ? 'success' : 'default'" size="tiny" :bordered="false">
-                  探针 {{ s.probe_enabled ? '已开启' : '未开启' }}
-                </n-tag>
-                <span v-if="serverVerOf(s.id)" class="ver-mini-tag" :title="serverVerOf(s.id)">
-                  {{ shortVer(serverVerOf(s.id)) }}
+            <div class="sr-rows">
+              <div class="sr-row">
+                <span class="k">TCP 连通</span>
+                <span class="v">
+                  <span class="dot" :class="tcpCls(s.id)" />
+                  <span :class="'txt-' + tcpCls(s.id)">{{ tcpText(s.id) }}</span>
+                  <a class="link" @click="checkTcp(s)">重测</a>
+                </span>
+              </div>
+              <div class="sr-row">
+                <span class="k">内核版本</span>
+                <span class="v">
+                  <template v-if="verOf(s.id)">
+                    <code class="ver" :title="verOf(s.id).version || '未知'">{{ shortVer(verOf(s.id).version) }}</code>
+                    <n-tag :type="kernelTag(verOf(s.id)).type" size="tiny" :bordered="false">{{ kernelTag(verOf(s.id)).text }}</n-tag>
+                    <n-button v-if="verOf(s.id).upgradable || verOf(s.id).upgrading" size="tiny" type="primary" secondary
+                              :loading="verOf(s.id).upgrading" @click="confirmUpgrade(verOf(s.id))">
+                      {{ verOf(s.id).upgrading ? '安装中' : (verOf(s.id).version ? '升级内核' : '安装内核') }}
+                    </n-button>
+                  </template>
+                  <span v-else class="muted">暂无数据</span>
+                </span>
+              </div>
+              <div class="sr-row">
+                <span class="k">监控探针</span>
+                <span class="v">
+                  <n-tag :type="s.probe_enabled ? 'success' : 'default'" size="tiny" :bordered="false">{{ s.probe_enabled ? '已开启' : '未开启' }}</n-tag>
+                </span>
+              </div>
+              <div v-if="verOf(s.id)?.version" class="sr-row">
+                <span class="k">能力修复</span>
+                <span class="v caps">
+                  <span class="cap-pill" :class="{ on: verOf(s.id).has_vision_framing_fix }">Vision</span>
+                  <span class="cap-pill" :class="{ on: verOf(s.id).has_transport_read_buffer_fix }">WS/HTTPUpgrade</span>
+                  <span class="cap-pill" :class="{ on: verOf(s.id).has_trojan_handshake_fix }">Trojan 握手</span>
                 </span>
               </div>
             </div>
+            <div v-if="verOf(s.id)?.upgrading" class="sr-note">正在安装…（往节点下载 sing-box 约 60MB，通常 1–3 分钟；离开本页不影响安装）</div>
+            <div v-else-if="verOf(s.id)?.upgrade_error" class="sr-note bad">安装失败：<pre class="nv-out">{{ verOf(s.id).upgrade_error }}</pre></div>
+            <div v-if="verOf(s.id)?.error" class="sr-note bad">探测失败：{{ verOf(s.id).error }}</div>
+            <div v-else-if="verOf(s.id)?.version && !verOf(s.id).has_v2ray_api" class="sr-note bad">
+              该版本不含 <code>with_v2ray_api</code> 插件，这台机器的流量<b>统计不到</b>、配额不会生效；点「升级内核」换成面板发布的版本即可。
+            </div>
+            <div v-if="tcp[s.id]?.state === 'blocked'" class="sr-note bad">
+              TCP 握手失败（{{ tcp[s.id].error || '超时' }}）：若机器在线，多半是 IP / 端口被阻断或被防火墙拦截。
+            </div>
+            <div v-if="verOf(s.id)?.checked_at" class="sr-foot">内核检测于 {{ fmtDateTime(verOf(s.id).checked_at) }}</div>
           </div>
+        </article>
 
-          <div class="sic-foot">
-            <n-button size="tiny" type="primary" secondary @click="openTrafficAnalysis(s)">流量分析</n-button>
-            <n-button size="tiny" type="primary" secondary @click="router.push({ path: '/admin/setup', query: { server: String(s.id) } })">向导配置</n-button>
-            <n-button size="tiny" secondary @click="openDnsModal(s)">子域名</n-button>
-            <n-button size="tiny" @click="openForm(s)">编辑</n-button>
-            <span style="flex:1;" />
-            <n-dropdown trigger="click" :options="serverMoreOpts(s)" @select="(k: string) => onServerMore(k, s)">
-              <n-button size="tiny" quaternary :loading="clearing === s.id">更多 ▾</n-button>
-            </n-dropdown>
+        <!-- 面板本机 -->
+        <article v-if="localVer" class="srv-card h-local">
+          <div class="srv-left">
+            <div class="sl-head">
+              <i class="order-no">本</i>
+              <span class="sl-name">{{ localVer.name || '面板本机' }}</span>
+              <n-tag size="tiny" :bordered="false">本机</n-tag>
+            </div>
+            <dl class="sl-meta"><div><dt>说明</dt><dd><span class="muted">面板所在机器上的 sing-box</span></dd></div></dl>
           </div>
-        </div>
+          <div class="srv-right">
+            <div class="sr-head"><span>运行状态</span><span class="health-badge" :class="localVer.too_old || localVer.error || (localVer.version && !localVer.has_v2ray_api) ? 'bad' : (localVer.version ? 'ok' : 'idle')">{{ localVer.version ? shortVer(localVer.version) : '未安装 / 未知' }}</span></div>
+            <div class="sr-rows">
+              <div class="sr-row"><span class="k">内核版本</span><span class="v"><code class="ver">{{ shortVer(localVer.version) }}</code><n-tag :type="kernelTag(localVer).type" size="tiny" :bordered="false">{{ kernelTag(localVer).text }}</n-tag></span></div>
+            </div>
+          </div>
+        </article>
       </div>
       <n-empty v-else-if="!loading" description="下一步：添加服务器，或在面板本机安装 sing-box 后重新检测" style="padding:40px 0;"><template #extra><n-button @click="openForm()">添加服务器</n-button></template></n-empty>
     </n-spin>
@@ -501,6 +495,7 @@ async function moveServer(idx:number, dir:number){
   finally{ reordering.value = false }
 }
 async function load(){loading.value=true;try{servers.value=await apiList('/api/admin/servers')}catch{}finally{loading.value=false}}
+let tcpAutoDone = false
 
 // ---- Provider-cycle traffic analysis ----
 const showTraffic = ref(false)
@@ -571,6 +566,54 @@ function serverVerOf(id: number): string {
   const row = versions.value.find(v => v.server_id === id)
   return row?.version || ''
 }
+function verOf(id: number): any { return versions.value.find(v => v.server_id === id) || null }
+const localVer = computed(() => versions.value.find(v => v.server_id === 0) || null)
+
+// 内核是否需要更新：版本过低 / 缺 v2ray_api / 没装；修复标记缺失给出「建议升级」。
+function kernelTag(n: any): { type: 'success' | 'warning' | 'error' | 'default'; text: string } {
+  if (n.error) return { type: 'error', text: '探测失败' }
+  if (!n.version) return { type: 'default', text: '未安装 / 未知' }
+  if (n.too_old) return { type: 'error', text: '版本过低 · 需更新' }
+  if (!n.has_v2ray_api) return { type: 'error', text: '缺 v2ray_api · 需更新' }
+  if (!n.has_vision_framing_fix || !n.has_transport_read_buffer_fix || !n.has_trojan_handshake_fix) return { type: 'warning', text: '建议更新' }
+  return { type: 'success', text: '已是最新' }
+}
+
+// ---- TCP 连通（面板 → 服务器 SSH 端口） ----
+const tcp = reactive<Record<number, { state: 'checking' | 'ok' | 'blocked'; ms?: number; error?: string }>>({})
+const tcpChecking = ref(false)
+const blockedCount = computed(() => servers.value.filter(s => tcp[s.id]?.state === 'blocked').length)
+async function checkTcp(s: any) {
+  tcp[s.id] = { state: 'checking' }
+  try {
+    const r: any = await apiGet(`/api/admin/sb/port-check?server_id=${s.id}&port=${s.port || 22}`)
+    tcp[s.id] = r?.reachable ? { state: 'ok', ms: r.ms } : { state: 'blocked', error: r?.error }
+  } catch (e: any) {
+    tcp[s.id] = { state: 'blocked', error: e?.message }
+  }
+}
+async function checkAllTcp() {
+  tcpChecking.value = true
+  try { await Promise.all(servers.value.map(checkTcp)) } finally { tcpChecking.value = false }
+}
+function tcpCls(id: number) {
+  const t = tcp[id]
+  return !t ? 'idle' : t.state === 'checking' ? 'checking' : t.state === 'ok' ? 'ok' : 'bad'
+}
+function tcpText(id: number) {
+  const t = tcp[id]
+  if (!t) return '未检测'
+  if (t.state === 'checking') return '检测中…'
+  return t.state === 'ok' ? `连通 · ${Math.round(t.ms || 0)}ms` : '疑似被阻断'
+}
+function healthOf(s: any): 'ok' | 'warn' | 'bad' | 'idle' {
+  const n = verOf(s.id)
+  if (tcp[s.id]?.state === 'blocked' || n?.error || (n && n.version && (n.too_old || !n.has_v2ray_api))) return 'bad'
+  if (n && (!n.version || kernelTag(n).type === 'warning')) return 'warn'
+  if (n && tcp[s.id]?.state === 'ok') return 'ok'
+  return n ? 'ok' : 'idle'
+}
+function healthText(h: string) { return ({ ok: '运行正常', warn: '需关注', bad: '存在异常', idle: '待检测' } as Record<string, string>)[h] || '' }
 function serverMoreOpts(s: any) {
   return [
     { label: '重建并推送配置', key: 'rebuild' },
@@ -772,7 +815,7 @@ function confirmClearDns() {
   })
 }
 
-onMounted(() => { load(); loadVersions() })
+onMounted(async () => { await load(); loadVersions(); if (!tcpAutoDone) { tcpAutoDone = true; checkAllTcp() } })
 onUnmounted(() => trafficChart.value?.dispose())
 </script>
 
@@ -808,51 +851,6 @@ onUnmounted(() => trafficChart.value?.dispose())
   padding: 10px 14px 12px;
   background: var(--bg-soft); border-top: 1px solid var(--border);
 }
-.nv-table { display: flex; flex-direction: column; }
-.nv-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.3fr) minmax(140px, 1fr) minmax(240px, 1.6fr) auto;
-  align-items: center;
-  gap: 10px 14px;
-  padding: 10px 4px;
-  border-bottom: 1px solid var(--border);
-}
-.nv-row:last-child { border-bottom: 0; }
-.nv-col-node { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.nv-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #cbd5e1; }
-.nv-dot.ok { background: var(--success); box-shadow: 0 0 0 3px rgba(5, 150, 105, .14); }
-.nv-dot.err { background: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, .15); }
-.nv-name { font-weight: 650; font-size: 13px; color: var(--text); }
-.nv-host {
-  font-family: var(--mono); color: var(--text-3); font-size: 11.5px;
-  background: var(--bg-soft); padding: 1px 6px; border-radius: 5px;
-}
-.nv-col-ver { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.nv-ver-badge {
-  font-family: var(--mono); font-size: 12.5px; font-weight: 650; color: var(--text);
-}
-.nv-ver-sub {
-  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.nv-col-caps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.cap-pill {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 2px 8px; border-radius: 6px;
-  font-size: 11.5px; font-weight: 560;
-  color: var(--text-3); background: var(--bg-soft); border: 1px solid transparent;
-}
-.cap-pill.on {
-  color: var(--accent-strong); background: var(--accent-soft);
-  border-color: rgba(15, 108, 189, .14);
-}
-.nv-col-side { display: flex; align-items: center; justify-content: flex-end; gap: 10px; white-space: nowrap; }
-.nv-time { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
-.nv-err { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.65; color: var(--warn); padding-left: 16px; }
-@media (max-width: 960px) {
-  .nv-row { grid-template-columns: 1fr auto; }
-  .nv-col-ver, .nv-col-caps { grid-column: 1 / -1; padding-left: 16px; }
-}
 /* 脚本输出可能很长，限高 + 可滚动，免得一次失败把整页撑开。 */
 .nv-out {
   margin:4px 0 0; padding:8px 10px; max-height:220px; overflow:auto;
@@ -861,62 +859,72 @@ onUnmounted(() => trafficChart.value?.dispose())
   background:var(--bg-soft); border:1px solid var(--border); border-radius:6px; color:var(--text-2);
 }
 
-/* 服务器卡片网格 */
-.srv-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 14px;
-}
-@media (max-width: 640px) {
-  .srv-grid { grid-template-columns: 1fr; }
-}
-.srv-item-card {
-  display: flex; flex-direction: column; gap: 12px;
-  padding: 16px 18px 14px;
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: var(--r); box-shadow: var(--shadow-sm);
+/* 工具条 */
+.srv-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 4px 0 10px; }
+.tb-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.nv-help-details { margin-bottom: 14px; }
+
+/* 服务器卡片：左右结构 */
+.srv-list { display: flex; flex-direction: column; gap: 14px; }
+.srv-card {
+  --accent-c: var(--border-strong);
+  position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--r) + 2px);
+  box-shadow: var(--shadow-sm); overflow: hidden;
   transition: box-shadow .25s var(--ease-standard), border-color .22s var(--ease-standard), transform .25s var(--ease-emphasized);
 }
-.srv-item-card:hover {
-  box-shadow: var(--shadow); border-color: var(--border-strong); transform: translateY(-2px);
-}
-.srv-item-card.is-disabled { opacity: .68; }
-.sic-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.sic-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.sic-name { font-size: 15px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sic-order { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.srv-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent-c); }
+.srv-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); transform: translateY(-1px); }
+.srv-card.h-ok { --accent-c: var(--success); }
+.srv-card.h-warn { --accent-c: #d9a441; }
+.srv-card.h-bad { --accent-c: var(--danger); }
+.srv-card.off { opacity: .66; }
+.srv-left { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 16px 22px; min-width: 0; }
+.sl-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sl-name { font-size: 16px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .order-no {
-  display: inline-grid; place-items: center; width: 22px; height: 22px;
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 4px;
   border-radius: 6px; background: var(--bg-soft); border: 1px solid var(--border);
-  color: var(--text-2); font-size: 11px; font-weight: 650; font-style: normal; font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
+  color: var(--text-2); font-size: 11px; font-weight: 650; font-style: normal; font-variant-numeric: tabular-nums; flex-shrink: 0;
 }
-.sic-info-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 12px;
-  padding: 10px 12px;
-  background: var(--bg-soft);
-  border: 1px solid rgba(15, 23, 42, .055);
-  border-radius: 10px;
-}
-.sic-info-cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.sic-info-cell .k { font-size: 11px; color: var(--text-3); }
-.sic-info-cell .v { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sic-info-cell code.v { font-family: var(--mono); font-size: 12px; }
-.sic-info-cell .v.muted { color: var(--text-3); font-weight: 400; font-size: 12px; }
-.sic-info-cell .v.domain-chip {
-  font-family: var(--mono); font-size: 12px; color: var(--success);
-}
-.tags-inline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.ver-mini-tag {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  color: var(--text-2); background: #fff; border: 1px solid var(--border);
-  padding: 1px 6px; border-radius: 5px;
-}
-.sic-foot {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(15, 23, 42, .055);
+.sl-meta { margin: 0; display: flex; flex-direction: column; gap: 7px; }
+.sl-meta > div { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.sl-meta dt { flex: 0 0 64px; font-size: 12px; color: var(--text-3); }
+.sl-meta dd { margin: 0; min-width: 0; font-size: 13px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-meta code { font-family: var(--mono); font-size: 12.5px; }
+.sl-meta .domain { font-family: var(--mono); font-size: 12.5px; color: var(--success); }
+.muted { color: var(--text-3); font-weight: 400; font-size: 12px; }
+.sl-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 12px; border-top: 1px dashed var(--border); }
+
+.srv-right { display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; background: var(--bg-soft); border-left: 1px solid var(--border); min-width: 0; }
+.sr-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 650; color: var(--text-2); letter-spacing: .02em; }
+.health-badge { padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--bg); color: var(--text-3); border: 1px solid var(--border); }
+.health-badge.ok { color: var(--success); background: rgba(5, 150, 105, .09); border-color: rgba(5, 150, 105, .2); }
+.health-badge.warn { color: #a67516; background: rgba(217, 164, 65, .13); border-color: rgba(217, 164, 65, .3); }
+.health-badge.bad { color: var(--danger); background: rgba(220, 38, 38, .08); border-color: rgba(220, 38, 38, .2); }
+.sr-rows { display: flex; flex-direction: column; }
+.sr-row { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgba(15, 23, 42, .05); min-height: 34px; }
+.sr-row:last-child { border-bottom: 0; }
+.sr-row .k { flex: 0 0 64px; font-size: 12px; color: var(--text-3); }
+.sr-row .v { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; font-size: 12.5px; color: var(--text); }
+.sr-row .ver { font-family: var(--mono); font-size: 12.5px; font-weight: 650; }
+.sr-row .link { font-size: 11.5px; color: var(--accent-strong); cursor: pointer; }
+.sr-row .link:hover { text-decoration: underline; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; flex-shrink: 0; }
+.dot.ok { background: var(--success); box-shadow: 0 0 0 3px rgba(5, 150, 105, .14); }
+.dot.bad { background: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, .15); }
+.dot.checking { background: #d9a441; animation: srvpulse 1s ease-in-out infinite; }
+@keyframes srvpulse { 50% { opacity: .35; } }
+.txt-ok { color: var(--success); font-weight: 600; }
+.txt-bad { color: var(--danger); font-weight: 600; }
+.txt-idle, .txt-checking { color: var(--text-3); }
+.caps { gap: 6px; }
+.sr-note { font-size: 11.5px; line-height: 1.65; color: var(--text-2); padding: 8px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); }
+.sr-note.bad { color: #a6402f; background: rgba(220, 38, 38, .05); border-color: rgba(220, 38, 38, .15); }
+.sr-foot { margin-top: auto; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+@media (max-width: 860px) {
+  .srv-card { grid-template-columns: 1fr; }
+  .srv-right { border-left: 0; border-top: 1px solid var(--border); }
 }
 
 .hint{ font-size:12px; line-height:1.6; color:var(--text-3); margin-top:6px; }
