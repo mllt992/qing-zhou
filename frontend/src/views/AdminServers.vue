@@ -43,7 +43,7 @@
     </details>
 
     <n-spin :show="loading">
-      <div v-if="servers.length || localVer" class="srv-list">
+      <div v-if="servers.length || extraVers.length" class="srv-list">
         <article v-for="(s, idx) in servers" :key="s.id" class="srv-card" :class="['h-' + healthOf(s), { off: !s.enabled }]">
           <!-- 左：基本信息 + 操作 -->
           <div class="srv-left">
@@ -92,13 +92,17 @@
                 <span class="v">
                   <template v-if="verOf(s.id)">
                     <code class="ver" :title="verOf(s.id).version || '未知'">{{ shortVer(verOf(s.id).version) }}</code>
+                    <span v-if="verBuildMeta(verOf(s.id).version)" class="build-meta" :title="verOf(s.id).version">{{ verBuildMeta(verOf(s.id).version) }}</span>
                     <n-tag :type="kernelTag(verOf(s.id)).type" size="tiny" :bordered="false">{{ kernelTag(verOf(s.id)).text }}</n-tag>
-                    <n-button v-if="verOf(s.id).upgradable || verOf(s.id).upgrading" size="tiny" type="primary" secondary
+                    <n-button size="tiny" type="primary" secondary :disabled="!verOf(s.id).upgradable || verOf(s.id).upgrading"
                               :loading="verOf(s.id).upgrading" @click="confirmUpgrade(verOf(s.id))">
-                      {{ verOf(s.id).upgrading ? '安装中' : (verOf(s.id).version ? '升级内核' : '安装内核') }}
+                      {{ verOf(s.id).upgrading ? '安装中' : (verOf(s.id).version ? '重装内核' : '一键安装 sing-box') }}
                     </n-button>
                   </template>
-                  <span v-else class="muted">暂无数据</span>
+                  <template v-else>
+                    <span class="muted">暂无数据</span>
+                    <n-button size="tiny" type="primary" secondary @click="confirmUpgrade({ server_id: s.id, name: s.name })">一键安装 sing-box</n-button>
+                  </template>
                 </span>
               </div>
               <div class="sr-row">
@@ -129,21 +133,41 @@
           </div>
         </article>
 
-        <!-- 面板本机 -->
-        <article v-if="localVer" class="srv-card h-local">
+        <!-- 面板本机 / 未登记的节点 -->
+        <article v-for="n in extraVers" :key="'x' + n.server_id" class="srv-card" :class="n.too_old || n.error || (n.version && !n.has_v2ray_api) ? 'h-bad' : (n.version ? 'h-ok' : 'h-idle')">
           <div class="srv-left">
             <div class="sl-head">
-              <i class="order-no">本</i>
-              <span class="sl-name">{{ localVer.name || '面板本机' }}</span>
-              <n-tag size="tiny" :bordered="false">本机</n-tag>
+              <i class="order-no">{{ n.server_id === 0 ? '本' : '?' }}</i>
+              <span class="sl-name">{{ n.name || '面板本机' }}</span>
+              <n-tag size="tiny" :bordered="false">{{ n.server_id === 0 ? '本机' : '未登记' }}</n-tag>
             </div>
-            <dl class="sl-meta"><div><dt>说明</dt><dd><span class="muted">面板所在机器上的 sing-box</span></dd></div></dl>
+            <dl class="sl-meta">
+              <div v-if="n.host"><dt>主机</dt><dd><code>{{ n.host }}</code></dd></div>
+              <div><dt>说明</dt><dd><span class="muted">{{ n.server_id === 0 ? '面板所在机器上的 sing-box' : '版本探测里存在、但不在服务器列表中的节点' }}</span></dd></div>
+            </dl>
+            <div class="sl-actions">
+              <n-button size="small" type="primary" secondary :disabled="!n.upgradable || n.upgrading" :loading="n.upgrading" @click="confirmUpgrade(n)">
+                {{ n.upgrading ? '安装中' : (n.version ? '重装内核' : '一键安装 sing-box') }}
+              </n-button>
+            </div>
           </div>
           <div class="srv-right">
-            <div class="sr-head"><span>运行状态</span><span class="health-badge" :class="localVer.too_old || localVer.error || (localVer.version && !localVer.has_v2ray_api) ? 'bad' : (localVer.version ? 'ok' : 'idle')">{{ localVer.version ? shortVer(localVer.version) : '未安装 / 未知' }}</span></div>
+            <div class="sr-head"><span>运行状态</span><span class="health-badge" :class="n.too_old || n.error || (n.version && !n.has_v2ray_api) ? 'bad' : (n.version ? 'ok' : 'idle')">{{ n.version ? shortVer(n.version) : '未安装 / 未知' }}</span></div>
             <div class="sr-rows">
-              <div class="sr-row"><span class="k">内核版本</span><span class="v"><code class="ver">{{ shortVer(localVer.version) }}</code><n-tag :type="kernelTag(localVer).type" size="tiny" :bordered="false">{{ kernelTag(localVer).text }}</n-tag></span></div>
+              <div class="sr-row"><span class="k">内核版本</span><span class="v"><code class="ver">{{ shortVer(n.version) }}</code><span v-if="verBuildMeta(n.version)" class="build-meta">{{ verBuildMeta(n.version) }}</span><n-tag :type="kernelTag(n).type" size="tiny" :bordered="false">{{ kernelTag(n).text }}</n-tag></span></div>
+              <div v-if="n.version" class="sr-row">
+                <span class="k">能力修复</span>
+                <span class="v caps">
+                  <span class="cap-pill" :class="{ on: n.has_vision_framing_fix }">{{ n.has_vision_framing_fix ? '版本含 Vision 修复标记' : '未确认 Vision 修复' }}</span>
+                  <span class="cap-pill" :class="{ on: n.has_transport_read_buffer_fix }">{{ n.has_transport_read_buffer_fix ? '版本含 WS/HTTPUpgrade 修复标记' : '未确认 WS/HTTPUpgrade 修复' }}</span>
+                  <span class="cap-pill" :class="{ on: n.has_trojan_handshake_fix }">{{ n.has_trojan_handshake_fix ? '版本含 Trojan 分段握手修复标记' : '未确认 Trojan 分段握手修复' }}</span>
+                </span>
+              </div>
             </div>
+            <div v-if="n.upgrading" class="sr-note">正在安装…（往节点下载 sing-box 约 60MB，通常 1–3 分钟；离开本页不影响安装）</div>
+            <div v-else-if="n.upgrade_error" class="sr-note bad">安装失败：<pre class="nv-out">{{ n.upgrade_error }}</pre></div>
+            <div v-if="n.error" class="sr-note bad">探测失败：{{ n.error }}</div>
+            <div v-if="n.checked_at" class="sr-foot">内核检测于 {{ fmtDateTime(n.checked_at) }}</div>
           </div>
         </article>
       </div>
@@ -567,7 +591,7 @@ function serverVerOf(id: number): string {
   return row?.version || ''
 }
 function verOf(id: number): any { return versions.value.find(v => v.server_id === id) || null }
-const localVer = computed(() => versions.value.find(v => v.server_id === 0) || null)
+const extraVers = computed(() => versions.value.filter(v => v.server_id === 0 || !servers.value.some(s => s.id === v.server_id)))
 
 // 内核是否需要更新：版本过低 / 缺 v2ray_api / 没装；修复标记缺失给出「建议升级」。
 function kernelTag(n: any): { type: 'success' | 'warning' | 'error' | 'default'; text: string } {
@@ -910,6 +934,7 @@ onUnmounted(() => trafficChart.value?.dispose())
 .sr-row .ver { font-family: var(--mono); font-size: 12.5px; font-weight: 650; }
 .sr-row .link { font-size: 11.5px; color: var(--accent-strong); cursor: pointer; }
 .sr-row .link:hover { text-decoration: underline; }
+.build-meta { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; flex-shrink: 0; }
 .dot.ok { background: var(--success); box-shadow: 0 0 0 3px rgba(5, 150, 105, .14); }
 .dot.bad { background: var(--danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, .15); }
