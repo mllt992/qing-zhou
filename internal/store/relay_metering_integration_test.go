@@ -175,6 +175,16 @@ func startMeteringBox(t *testing.T, bin string, raw []byte, api string) *exec.Cm
 	if err != nil {
 		t.Fatal(err)
 	}
+	// sing v0.9.7 (sing-box 1.14.5) maps "http2: stream closed" to net.ErrClosed
+	// before the connection manager logs it, so the old error-level line is gone
+	// and the same close is trace-only. http-tls fixtures need that line to bound
+	// the known download undercount; other transports ignore it.
+	if bytes.Contains(raw, []byte(`"type":"http"`)) || bytes.Contains(raw, []byte(`"type": "http"`)) {
+		rewritten := meteringBoxTraceLog(raw)
+		if err = os.WriteFile(path, rewritten, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, "run", "-c", path)
 	cmd.Stdout = log
@@ -211,8 +221,11 @@ func startMeteringBox(t *testing.T, bin string, raw []byte, api string) *exec.Cm
 }
 
 // relayFixtureHTTP2LostDownloadWrites counts download writes that this
-// fixture core itself logged as failed with x/net's errStreamClosed. Only the
-// exact route message is counted; any other error never earns an allowance.
+// fixture core itself logged as the known HTTP/2 stream-closed undercount.
+// sing-box 1.14.4 and earlier log the error verbatim. sing v0.9.7 (1.14.5)
+// rewrites that error to net.ErrClosed, and the connection manager then logs
+// only "connection download closed" at trace. Any other error text still
+// fails closed.
 func relayFixtureHTTP2LostDownloadWrites(t *testing.T, cmd *exec.Cmd) int {
 	t.Helper()
 	f, ok := cmd.Stdout.(*os.File)
@@ -223,7 +236,42 @@ func relayFixtureHTTP2LostDownloadWrites(t *testing.T, cmd *exec.Cmd) int {
 	if err != nil {
 		t.Fatalf("read fixture log: %v", err)
 	}
-	return bytes.Count(raw, []byte("connection download closed: http2: stream closed"))
+	return countHTTP2LostDownloadWrites(raw)
+}
+
+func countHTTP2LostDownloadWrites(raw []byte) int {
+	const legacy = "connection download closed: http2: stream closed"
+	const closed = "connection download closed"
+	n := bytes.Count(raw, []byte(legacy))
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		if bytes.Contains(line, []byte(closed)) && !bytes.Contains(line, []byte(closed+":")) {
+			n++
+		}
+	}
+	return n
+}
+
+// meteringBoxTraceLog lowers a generated config to trace so the 1.14.5
+// connection manager's closed-download line is actually written. The bytes
+// are only consulted for http-tls allowance; production configs stay at warn.
+func meteringBoxTraceLog(raw []byte) []byte {
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return raw
+	}
+	logObj, _ := cfg["log"].(map[string]any)
+	if logObj == nil {
+		logObj = map[string]any{}
+		cfg["log"] = logObj
+	}
+	logObj["level"] = "trace"
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(cfg); err != nil {
+		return raw
+	}
+	return buf.Bytes()
 }
 
 // Only inspect the test process started above. This is a point-in-time Linux

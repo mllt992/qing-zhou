@@ -29,8 +29,10 @@ type relayFixtureCounterSettler struct {
 	stableFor   time.Duration
 	samples     int
 	// http2LostWrites, when set, returns how many download writes the hop's
-	// own core log reported as "http2: stream closed" (v2ray HTTP/2 transport
-	// only). See relayHTTP2LostWriteBound. Nil means no allowance at all.
+	// own core log reported as the known HTTP/2 stream-closed undercount
+	// (v2ray HTTP/2 transport only). 1.14.4 logs the error text; 1.14.5 logs
+	// a trace "connection download closed" after mapping it to net.ErrClosed.
+	// See relayHTTP2LostWriteBound. Nil means no allowance at all.
 	http2LostWrites func(hop int) int
 	// slack records the per-hop Down shortfall accepted under the bound, for
 	// diagnostics. It is reset on every sample.
@@ -57,6 +59,12 @@ type relayHTTP2Slack struct {
 // the same hop logged that exact error, is bounded per logged failure, applies
 // to Down only, and never relaxes frozen/cross-user/regression checks.
 const relayHTTP2LostWriteBound = int64(1<<16 + 1<<13)
+
+// relayHTTP2LostWriteMaxAllowance caps per-hop slack. sing-box 1.14.5 logs
+// every closed download as the same trace line, so the line count is no
+// longer the number of uncounted writes. Eight max buffers still covers the
+// raced writes seen at 100 stress batches and still rejects a large loss.
+const relayHTTP2LostWriteMaxAllowance = 8 * relayHTTP2LostWriteBound
 
 // relayHTTP2SlackStableFor is the longer quiet period required before an
 // allowance is accepted, so ordinary read-side visibility lag is not mistaken
@@ -116,6 +124,9 @@ func (s *relayFixtureCounterSettler) observe(now time.Time, sample relayFixtureC
 			lost = s.http2LostWrites(hop)
 		}
 		bound := int64(lost) * relayHTTP2LostWriteBound
+		if bound > relayHTTP2LostWriteMaxAllowance {
+			bound = relayHTTP2LostWriteMaxAllowance
+		}
 		if lost <= 0 || short > bound {
 			ready = false
 			continue
@@ -216,6 +227,19 @@ func TestRelayCounterSnapshotRejectsPermanentUndercountAndRegression(t *testing.
 	}
 }
 
+func TestCountHTTP2LostDownloadWritesAcceptsLegacyAndTraceLines(t *testing.T) {
+	raw := []byte(strings.Join([]string{
+		`ERROR connection download closed: http2: stream closed`,
+		`ERROR connection download closed: read tcp 127.0.0.1:1: connection reset`,
+		`TRACE connection download closed`,
+		`DEBUG connection download finished`,
+		`TRACE connection upload closed`,
+	}, "\n"))
+	if got := countHTTP2LostDownloadWrites(raw); got != 2 {
+		t.Fatalf("lost download writes = %d, want 2 (one legacy error line and one 1.14.5 trace close)", got)
+	}
+}
+
 func TestRelayCounterSnapshotHTTP2LostWriteAllowanceIsBounded(t *testing.T) {
 	start := time.Unix(100, 0)
 	a, b := relayFixtureCounterID{0, 1}, relayFixtureCounterID{1, 2}
@@ -253,6 +277,11 @@ func TestRelayCounterSnapshotHTTP2LostWriteAllowanceIsBounded(t *testing.T) {
 	// One logged failure cannot explain two buffers of missing bytes.
 	if ready, err := run(newSettler(map[int]int{1: 1}), short, 2*time.Second); ready || err == nil {
 		t.Fatalf("shortfall beyond bound accepted: ready=%t err=%v", ready, err)
+	}
+	// A flood of identical 1.14.5 trace lines cannot explain more than the cap.
+	overCap := relayFixtureCounterSample{a: frozen, b: {Up: 20, Down: minB.Down - relayHTTP2LostWriteMaxAllowance - 1}}
+	if ready, err := run(newSettler(map[int]int{1: 1000}), overCap, 2*time.Second); ready || err == nil {
+		t.Fatalf("shortfall beyond the trace-line cap accepted: ready=%t err=%v", ready, err)
 	}
 	// Within bound, accepted only after the longer quiet period.
 	s := newSettler(map[int]int{1: 2})

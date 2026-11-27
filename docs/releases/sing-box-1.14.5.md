@@ -18,4 +18,6 @@
 
 Release 仍以刚构建的二进制执行 `TestGeneratedServerConfigPassesSingboxCheck`，保留生成配置中的 `experimental.v2ray_api`；缺失流量插件或配置校验失败会阻止上传资产。
 
+sing v0.9.7 把 `http2: stream closed` 改写成 `net.ErrClosed`，1.14.5 不再打出旧的错误级日志。`http-tls` 的既有少计放宽改为同时认 trace 级 `connection download closed`，并且每跳最多放宽 8 个最大缓冲（589824 字节）。其它传输、Up 方向和没有这条日志的少计仍然失败。
+
 来源：[1.14.5 release](https://github.com/SagerNet/sing-box/releases/tag/v1.14.5)、[完整 compare](https://github.com/SagerNet/sing-box/compare/v1.14.4...v1.14.5)。
