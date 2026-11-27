@@ -145,15 +145,23 @@ func mcpJSONResult(v any) (*mcp.CallToolResult, any, error) {
 
 // mcpSecretFieldNames lists JSON field substrings that must be scrubbed from
 // MCP audit log argument summaries so secrets never land in plaintext logs.
+// "pass" covers smtp_pass / ssh_key_pass, which do not contain the longer
+// "password" token. "oauth" covers oauth2_config. upstream_* and
+// backup_s3_config are credential documents handled in isMCPSecretKey.
 var mcpSecretFieldNames = []string{
-	"password", "passwd", "secret", "private_key", "ssh_key",
+	"password", "passwd", "pass", "secret", "private_key", "ssh_key",
 	"bot_token", "token", "api_key", "key_pem", "certificate", "key",
+	"oauth",
 }
 
 func isMCPSecretKey(k string) bool {
 	lk := strings.ToLower(strings.TrimSpace(k))
-	if lk == "queue_key" || lk == "key_type" || lk == "public_key" || lk == "ssh_key_path" || lk == "confirm" {
+	switch lk {
+	case "queue_key", "key_type", "public_key", "ssh_key_path", "confirm":
 		return false
+	}
+	if strings.HasPrefix(lk, "upstream_") || lk == "backup_s3_config" {
+		return true
 	}
 	for _, sub := range mcpSecretFieldNames {
 		if strings.Contains(lk, sub) {
