@@ -122,7 +122,7 @@ func TestCompare(t *testing.T) {
 
 func TestVisionFramingFixRequiresExactReviewedMarker(t *testing.T) {
 	for _, version := range []string{
-		"", "1.13.18", "1.14.2", "1.14.3", "2.0.0",
+		"", "1.13.18", "1.14.2", "1.14.3", "1.14.4", "1.14.5", "2.0.0",
 		"1.14.2+qz-vmess.9b95ab8", "1.14.2+qz-vmess.9b95ab8c9478-extra",
 		"1.14.3+qz-vmess.9b95ab8c9478", "1.14.2+other",
 	} {
@@ -140,6 +140,10 @@ func TestVisionFramingFixRequiresExactReviewedMarker(t *testing.T) {
 	current := Parse("sing-box version " + CurrentReleaseVersion + "\nTags: with_v2ray_api")
 	if !current.HasVisionFramingFix || current.Version != CurrentReleaseVersion {
 		t.Fatalf("current release marker must prove Vision framing: %+v", current)
+	}
+	previous := Parse("sing-box version " + PreviousReleaseVersion + "\nTags: with_v2ray_api")
+	if !previous.HasVisionFramingFix || previous.Version != PreviousReleaseVersion {
+		t.Fatalf("previous release marker must still prove Vision framing: %+v", previous)
 	}
 	if Compare(VisionFramingFixVersion, "1.14.2") != 0 {
 		t.Fatal("capability marker must not change the general minimum-version comparison")

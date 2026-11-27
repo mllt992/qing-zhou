@@ -25,6 +25,10 @@ func TestRelayCoreRequirementsTrojanUsesExactMarker(t *testing.T) {
 	if !need.SupportedBy(fixed) || !all.SupportedBy(fixed) {
 		t.Fatal("current core must satisfy Vision, transport and Trojan requirements")
 	}
+	previous := sbver.Parse("sing-box version " + sbver.PreviousReleaseVersion + "\nTags: with_v2ray_api")
+	if !need.SupportedBy(previous) || !all.SupportedBy(previous) {
+		t.Fatal("installed 1.14.4 release marker must still satisfy Vision, transport and Trojan requirements")
+	}
 	if noStats := sbver.Parse("sing-box version " + sbver.TrojanHandshakeFixVersion); need.SupportedBy(noStats) {
 		t.Fatal("v2ray_api remains mandatory")
 	}

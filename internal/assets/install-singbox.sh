@@ -87,12 +87,13 @@ SYSCTL
 QZ_REPO=${QZ_REPO:-mllt992/qing-zhou}
 # Keep the emergency official fallback aligned with scripts/singbox-pins.sh; never jump to
 # an unreviewed stable/minor release merely because upstream latest moved.
-QZ_SB_FALLBACK_VERSION=v1.14.4
+QZ_SB_FALLBACK_VERSION=v1.14.5
 # Capability marker is independent of the stock fallback/minimum version.
 QZ_SB_VISION_FIXED_VERSION=1.14.2+qz-vmess.9b95ab8c9478
 QZ_SB_TRANSPORT_FIXED_VERSION=1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10
 QZ_SB_LEGACY_TROJAN_FIXED_VERSION=1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da
-QZ_SB_TROJAN_FIXED_VERSION=1.14.4+qz-trojan.b85be9da
+QZ_SB_PREVIOUS_RELEASE_VERSION=1.14.4+qz-trojan.b85be9da
+QZ_SB_TROJAN_FIXED_VERSION=1.14.5+qz-trojan.b85be9da
 
 qz_marker_is() {
   local version=$1; shift
@@ -107,7 +108,7 @@ report_vision_capability() {
   local core=$1 output version
   output=$("$core" version 2>/dev/null || true)
   version=$(printf '%s\n' "$output" | awk '$1=="sing-box" && $2=="version" { sub(/^[vV]/,"",$3); print $3; exit }')
-  if qz_marker_is "$version" "$QZ_SB_VISION_FIXED_VERSION" "$QZ_SB_TRANSPORT_FIXED_VERSION" "$QZ_SB_LEGACY_TROJAN_FIXED_VERSION" "$QZ_SB_TROJAN_FIXED_VERSION"; then
+  if qz_marker_is "$version" "$QZ_SB_VISION_FIXED_VERSION" "$QZ_SB_TRANSPORT_FIXED_VERSION" "$QZ_SB_LEGACY_TROJAN_FIXED_VERSION" "$QZ_SB_PREVIOUS_RELEASE_VERSION" "$QZ_SB_TROJAN_FIXED_VERSION"; then
     ok "内核版本标记包含已审定的 Vision 分片修复（9b95ab8c9478）"
     info "P1 Vision 启用前仍需确认各节点实际运行此修复内核，并在面板重新检测"
   else
@@ -115,14 +116,14 @@ report_vision_capability() {
     warn "官方稳定版不含 with_v2ray_api，也不含 Trojan 维护补丁；请安装轻舟发布内核：$QZ_SB_TROJAN_FIXED_VERSION"
     warn "本脚本不会为此自动替换已有内核；如需更换，请明确使用 --force 并重新检测。"
   fi
-  if qz_marker_is "$version" "$QZ_SB_TRANSPORT_FIXED_VERSION" "$QZ_SB_LEGACY_TROJAN_FIXED_VERSION" "$QZ_SB_TROJAN_FIXED_VERSION"; then
+  if qz_marker_is "$version" "$QZ_SB_TRANSPORT_FIXED_VERSION" "$QZ_SB_LEGACY_TROJAN_FIXED_VERSION" "$QZ_SB_PREVIOUS_RELEASE_VERSION" "$QZ_SB_TROJAN_FIXED_VERSION"; then
     ok "内核版本标记包含已审定的 WebSocket/HTTPUpgrade 缓冲修复（07512b10）"
     info "P1 WebSocket/HTTPUpgrade 启用前仍需在面板确认实际运行内核的能力"
   else
     warn "该内核未确认包含 WebSocket/HTTPUpgrade 缓冲修复，不能用于相应 P1 逐用户机器观测。"
     warn "所需轻舟内核标记：$QZ_SB_TROJAN_FIXED_VERSION；本脚本不会为此自动替换已有内核。"
   fi
-  if qz_marker_is "$version" "$QZ_SB_LEGACY_TROJAN_FIXED_VERSION" "$QZ_SB_TROJAN_FIXED_VERSION"; then
+  if qz_marker_is "$version" "$QZ_SB_LEGACY_TROJAN_FIXED_VERSION" "$QZ_SB_PREVIOUS_RELEASE_VERSION" "$QZ_SB_TROJAN_FIXED_VERSION"; then
     ok "内核版本标记包含 Trojan 分段握手修复（轻舟项目维护补丁 b85be9da，非上游官方修复）"
     info "P1 Trojan 路径启用前仍需在面板确认实际运行内核的能力"
   else

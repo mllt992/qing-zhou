@@ -268,6 +268,7 @@ func TestSourceFamilyEgressPassesSingboxCheck(t *testing.T) {
 		{"current", "QZ_SINGBOX_TEST_BIN"},
 		{"1.14.2", "QZ_SINGBOX_TEST_BIN_1_14_2"},
 		{"1.14.4", "QZ_SINGBOX_TEST_BIN_1_14_4"},
+		{"1.14.5", "QZ_SINGBOX_TEST_BIN_1_14_5"},
 	}
 	cert, key := writeTestCert(t)
 	ibs := []Inbound{
@@ -358,7 +359,7 @@ func TestSourceFamilyEgressPassesSingboxCheck(t *testing.T) {
 		}
 	}
 	if ran == 0 {
-		t.Skip("set QZ_SINGBOX_TEST_BIN (and optionally QZ_SINGBOX_TEST_BIN_1_14_2 / _1_14_4) to run this")
+		t.Skip("set QZ_SINGBOX_TEST_BIN (and optionally QZ_SINGBOX_TEST_BIN_1_14_2 / _1_14_4 / _1_14_5) to run this")
 	}
 }
 

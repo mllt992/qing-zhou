@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the metering-enabled core from one reviewed upstream source plus the
-# Trojan handshake maintenance patch. Official 1.14.4 already includes the
+# Trojan handshake maintenance patch. Official 1.14.5 already includes the
 # previously backported Vision (sing-vmess) and WS/HTTPUpgrade buffer fixes, so
 # those patches are not re-applied.
 # No nodes are contacted. --source-dir reads a local Git repository's pinned
@@ -33,6 +33,8 @@ done
 [[ -n "$output_dir" ]] || { usage >&2; exit 2; }
 [[ "$architectures" =~ ^(amd64|arm64)(,(amd64|arm64))*$ ]] || { echo 'Only linux/amd64 and linux/arm64 are supported' >&2; exit 2; }
 for command in "$GO" git python3 sha256sum; do command -v "$command" >/dev/null || { echo "Missing command: $command" >&2; exit 1; }; done
+# v1.14.5 go.mod is `go 1.25.5` with no toolchain line. Upstream CI images use
+# Go 1.27.4; that is not a language requirement. Keep the reviewed 1.25.14 pin.
 [[ $("$GO" env GOVERSION) == go1.25.14 ]] || { echo 'Use the pinned Go 1.25.14 toolchain' >&2; exit 1; }
 mkdir -p "$output_dir"
 output_dir=$(cd "$output_dir" && pwd)
@@ -48,7 +50,7 @@ cd "$work/source"
 [[ $(git rev-parse HEAD) == "$SB_COMMIT" ]] || { echo 'Unreviewed sing-box base commit' >&2; exit 1; }
 [[ -z $(git status --porcelain) ]] || { echo 'Base checkout is not clean' >&2; exit 1; }
 cp go.mod "$work/base.go.mod"
-# Official 1.14.4 already requires the reviewed sing-vmess. Do not `go get` or
+# Official 1.14.5 already requires the reviewed sing-vmess. Do not `go get` or
 # `go mod edit`: either can select unrelated upgrades. A readonly build must
 # accept the unmodified official go.mod.
 python3 - "$work/base.go.mod" "$VMESS_VERSION" <<'MODCHK'

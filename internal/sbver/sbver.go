@@ -31,15 +31,21 @@ const TransportReadBufferFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07
 // carried the qing-zhou Trojan handshake maintenance patch (#87).
 const LegacyTrojanHandshakeFixVersion = "1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10-trojan.b85be9da"
 
+// PreviousReleaseVersion is the 1.14.4 release core: official sing-box 1.14.4
+// plus the Trojan handshake maintenance patch. Already-installed nodes keep
+// Vision, transport, and Trojan capabilities.
+const PreviousReleaseVersion = "1.14.4+qz-trojan.b85be9da"
+
 // CurrentReleaseVersion / TrojanHandshakeFixVersion is the current release
-// core: official sing-box 1.14.4 (which already includes the Vision and
-// WS/HTTPUpgrade fixes) plus the same Trojan maintenance patch.
-const CurrentReleaseVersion = "1.14.4+qz-trojan.b85be9da"
+// core: official sing-box 1.14.5 (which already includes the Vision and
+// WS/HTTPUpgrade fixes, plus sing-vmess 4acc92a6f6c6) and the same Trojan
+// maintenance patch.
+const CurrentReleaseVersion = "1.14.5+qz-trojan.b85be9da"
 const TrojanHandshakeFixVersion = CurrentReleaseVersion
 
 func HasVisionFramingFix(version string) bool {
 	switch version {
-	case VisionFramingFixVersion, TransportReadBufferFixVersion, LegacyTrojanHandshakeFixVersion, CurrentReleaseVersion:
+	case VisionFramingFixVersion, TransportReadBufferFixVersion, LegacyTrojanHandshakeFixVersion, PreviousReleaseVersion, CurrentReleaseVersion:
 		return true
 	default:
 		return false
@@ -48,7 +54,7 @@ func HasVisionFramingFix(version string) bool {
 
 func HasTransportReadBufferFix(version string) bool {
 	switch version {
-	case TransportReadBufferFixVersion, LegacyTrojanHandshakeFixVersion, CurrentReleaseVersion:
+	case TransportReadBufferFixVersion, LegacyTrojanHandshakeFixVersion, PreviousReleaseVersion, CurrentReleaseVersion:
 		return true
 	default:
 		return false
@@ -56,7 +62,7 @@ func HasTransportReadBufferFix(version string) bool {
 }
 
 func HasTrojanHandshakeFix(version string) bool {
-	return version == LegacyTrojanHandshakeFixVersion || version == CurrentReleaseVersion
+	return version == LegacyTrojanHandshakeFixVersion || version == PreviousReleaseVersion || version == CurrentReleaseVersion
 }
 
 // Info is what the panel knows about one node's sing-box.
