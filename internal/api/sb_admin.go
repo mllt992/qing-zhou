@@ -1700,6 +1700,10 @@ func (a *API) handleAdminSaveSbInbound(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if msg := a.guardHysteriaRealm(&n); msg != "" {
+		fail(w, http.StatusBadRequest, msg)
+		return
+	}
 	// 落地中转与第三方代理出口是两种互斥的出网方式。
 	if n.UpstreamInboundID != 0 && n.EgressID != 0 {
 		fail(w, http.StatusBadRequest, "落地入站与代理出口只能二选一")

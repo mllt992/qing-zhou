@@ -170,6 +170,11 @@ func surgeProxy(p *Proxy) string {
 		}
 		return strings.Join(parts, ", ")
 	case "hysteria2":
+		// Surge has no realm field. Emitting the placeholder address would
+		// publish a node that cannot connect.
+		if p.viaRealm() {
+			return ""
+		}
 		parts := []string{"hysteria2", p.Server, itoaPort(p.Port), "password=" + p.Password}
 		if v := p.param("sni"); v != "" {
 			parts = append(parts, "sni="+v)

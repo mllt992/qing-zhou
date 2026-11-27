@@ -91,6 +91,7 @@ func (a *API) handleAdminNodeVersions(w http.ResponseWriter, r *http.Request) {
 		"transport_fixed_version": sbver.TransportReadBufferFixVersion,
 		"trojan_fixed_version":    sbver.TrojanHandshakeFixVersion,
 		"current_release_version": sbver.CurrentReleaseVersion,
+		"realm_min_version":       sbver.HysteriaRealmMinVersion,
 	})
 }
 

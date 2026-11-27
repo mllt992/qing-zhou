@@ -470,8 +470,13 @@ func injectSingboxAIRoute(doc map[string]any) {
 func injectSingboxDomains(doc map[string]any, proxies []*Proxy) {
 	seen := map[string]bool{}
 	for _, p := range proxies {
-		if p.Server != "" && net.ParseIP(p.Server) == nil {
+		if p.Server != "" && net.ParseIP(p.Server) == nil && !p.viaRealm() {
 			seen[p.Server] = true
+		}
+		for _, host := range p.realmDirectHosts() {
+			if net.ParseIP(host) == nil {
+				seen[host] = true
+			}
 		}
 	}
 	if len(seen) == 0 {
@@ -585,11 +590,22 @@ func singboxOutbound(p *Proxy) map[string]any {
 		if p.param("disable-chrome-parrot") == "1" {
 			o["disable_chrome_parrot"] = true
 		}
-		if v := p.param("hop-interval"); v != "" {
-			o["hop_interval"] = v
-		}
-		if v := p.param("hop-interval-max"); v != "" {
-			o["hop_interval_max"] = v
+		// A realm client discovers the server and must not also name it.
+		// sing-box rejects the outbound when server, server_port or
+		// server_ports is set beside realm. Hop fields need those ports.
+		if realm := p.hysteriaRealmBlock(); realm != nil {
+			o["realm"] = realm
+			delete(o, "server")
+			delete(o, "server_port")
+			delete(o, "server_ports")
+			delete(o, "hop_interval")
+		} else {
+			if v := p.param("hop-interval"); v != "" {
+				o["hop_interval"] = v
+			}
+			if v := p.param("hop-interval-max"); v != "" {
+				o["hop_interval_max"] = v
+			}
 		}
 	case "anytls":
 		// sing-box >= 1.12.0. tls is required by the outbound constructor.
@@ -802,8 +818,15 @@ func injectSingboxTunExclude(doc map[string]any, proxies []*Proxy) {
 		// route_exclude_address entries must be CIDR prefixes; only real public IPs
 		// qualify. Bare domains (net.ParseIP == nil) would be invalid and break
 		// the client config, so they are skipped here (see injectRouteExclude).
-		if isPublicIP(p.Server) {
+		// A realm node does not dial p.Server; exclude the realm/STUN addresses
+		// the client actually opens.
+		if isPublicIP(p.Server) && !p.viaRealm() {
 			seen[p.Server] = true
+		}
+		for _, host := range p.realmDirectHosts() {
+			if isPublicIP(host) {
+				seen[host] = true
+			}
 		}
 	}
 	if len(seen) == 0 {
