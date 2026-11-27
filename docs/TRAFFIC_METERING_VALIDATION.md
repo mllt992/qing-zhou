@@ -60,16 +60,16 @@ bash -n install.sh
 
 真实内核必须带`with_v2ray_api`。当前CI和Release共用`scripts/build-singbox.sh`，不再把旧v0.2.86发布中的普通1.14.2夹具作为Vision修复候选。固定来源为：
 
-- sing-box tag：`v1.14.4`
-- sing-box commit：`c005f35300ce76427dc285481ec5695f5b179cd2`
-- 官方sing-vmess commit：`a0c58542bd9d99b00ea0c3cfacce6f03cf8a4017`（已由官方 1.14.4 的 go.mod 引入，构建不再改写 require）
-- sing-vmess伪版本：`v0.2.9-0.20261019223527-a0c58542bd9d`
-- 模块checksum：`h1:K93710Sq6/TFl3GVs+NclQ3I+KPXFLluSsUFC0Sm0N8=`
+- sing-box tag：`v1.14.5`
+- sing-box commit：`a6844a780ba173e189a018d0ac62df67cd50b8e9`
+- 官方sing-vmess commit：`4acc92a6f6c60e4fad6d73311403a682d70d8b80`（已由官方 1.14.5 的 go.mod 引入，构建不再改写 require）
+- sing-vmess伪版本：`v0.2.9-0.20261124075649-4acc92a6f6c6`
+- 模块checksum：`h1:vyyQcx1p4dVam3oHPbxIUp/bzP1vKmHaidQ42iuRMa4=`
 - go.mod checksum：`h1:P11scgTxMxVVQ8dlM27yNm3Cro40mD0+gHbnqrNGDuY=`
-- 完整核心版本：`1.14.4+qz-trojan.b85be9da`
+- 完整核心版本：`1.14.5+qz-trojan.b85be9da`
 - 固定Go工具链：`go1.25.14`
 
-官方 v1.14.4 已包含 Vision 与 transport 修复；轻舟只再打 Trojan 维护补丁。构建以 readonly 方式核对 go.mod 中的 sing-vmess 版本与 checksum，避免无关依赖升级。普通版本排序忽略后缀，不可用“1.14.4或更新”推断已审定能力；当前与历史审定标记必须精确匹配，且由实际运行的相关节点核心探测确认。
+官方 v1.14.5 的 `go.mod` 仍声明 `go 1.25.5`，没有 `toolchain` 行。上游 CI/Dockerfile 使用 Go 1.27.4 只是他们的构建镜像，不是语言下限；本仓库继续用已审定的 Go 1.25.14 构建节点核心（高于 1.25.5，与 1.14.4 发行构建相同）。官方 v1.14.5 已包含 Vision 与 transport 修复；轻舟只再打 Trojan 维护补丁。构建以 readonly 方式核对 go.mod 中的 sing-vmess 版本与 checksum，避免无关依赖升级。普通版本排序忽略后缀，不可用“1.14.5或更新”推断已审定能力；当前与历史审定标记必须精确匹配，且由实际运行的相关节点核心探测确认。
 
 在隔离Linux amd64环境构建并记录来源：
 

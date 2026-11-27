@@ -67,7 +67,7 @@ v=json.load(open(sys.argv[1]))
 assert v['Version']==sys.argv[2] and v['Sum']==sys.argv[3] and v['GoModSum']==sys.argv[4]
 assert not v.get('Origin') or v['Origin']['Hash']==sys.argv[5]
 PY
-# Official 1.14.4 already has the buffer fix; do not apply the 1.14.2 backport.
+# Official 1.14.5 already has the buffer fix; do not apply the 1.14.2 backport.
 cp "$root/transport-buffer/httpupgrade_test.go.txt" transport/v2rayhttpupgrade/qz_buffer_regression_test.go
 cp "$root/transport-buffer/websocket_test.go.txt" transport/v2raywebsocket/qz_buffer_regression_test.go
 if ! "$GO" test -mod=readonly -race -timeout=5m -run '^TestQZ' -count="$rounds" -json "${packages[@]}" > "$work/fixed.json"; then
@@ -85,7 +85,7 @@ for line in open(sys.argv[1]):
 expected={'TestQZHTTPUpgradeClientPreservesCoalescedFirstPayload','TestQZHTTPUpgradeServerPreservesHijackReadAhead','TestQZHTTPUpgradeFragmentedAndLongFlow','TestQZHTTPUpgradeConcurrentIndependentBuffers','TestQZWebSocketClientPreservesCoalescedFirstFrame','TestQZWebSocketConcurrentSharedHeaders','TestQZWebSocketFragmentedAndLongFlow'}
 rounds=int(sys.argv[2]);assert not skipped and expected<=passed.keys() and all(passed[n]==rounds for n in expected)
 assert ran==passed, 'a started regression did not pass'
-print('Official '+str(rounds)+' race rounds for each of '+str(len(expected))+' required groups on the pinned 1.14.4 tree; no skips or traffic retries')
+print('Official '+str(rounds)+' race rounds for each of '+str(len(expected))+' required groups on the pinned 1.14.5 tree; no skips or traffic retries')
 for n in sorted(expected):print('PASS '+n+' x'+str(passed[n]))
 print('Covers 1/7-byte fragmentation, coalesced first data, no payload/normal close, up to 1 MiB flows, 32 concurrent connections and shared WS subprotocol headers')
 PY

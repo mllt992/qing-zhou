@@ -7,7 +7,7 @@ vi.mock('naive-ui',async importOriginal=>({...await importOriginal<typeof import
 vi.mock('echarts',()=>({init:vi.fn()}))
 const vision='1.14.2+qz-vmess.9b95ab8c9478'
 const transport=vision+'-transport.07512b10'
-const current='1.14.4+qz-trojan.b85be9da'
+const current='1.14.5+qz-trojan.b85be9da'
 const srv=(id:number,name:string)=>({id,name,host:'10.0.0.'+id,port:22,enabled:true})
 beforeEach(()=>{vi.resetAllMocks();vi.mocked(apiList).mockResolvedValue([srv(1,'Vision only'),srv(2,'Full transport fix')])})
 it('displays Vision and transport installed markers separately and never upgrades automatically',async()=>{

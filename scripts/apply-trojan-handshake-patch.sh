@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Apply exactly the frozen Trojan handshake maintenance patch (qing-zhou #87).
 # This is a project maintenance patch, not an upstream sing-box fix. It touches
-# only transport/trojan/service.go. Official 1.14.4 already includes the
+# only transport/trojan/service.go. Official 1.14.5 already includes the
 # transport-buffer fix; this patch is applied on the clean upstream tree.
 set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)

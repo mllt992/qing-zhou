@@ -3,8 +3,8 @@
   "kind": "qing-zhou maintenance patch",
   "upstream_fix": false,
   "issue": "https://github.com/mllt992/qing-zhou/issues/87",
-  "base_commit": "c005f35300ce76427dc285481ec5695f5b179cd2",
-  "applied_after": "official v1.14.4 already includes the 07512b10 transport-buffer fix; service.go is unchanged from 1.14.2",
+  "base_commit": "a6844a780ba173e189a018d0ac62df67cd50b8e9",
+  "applied_after": "official v1.14.5 already includes the 07512b10 transport-buffer fix; service.go is unchanged from 1.14.2 through 1.14.5",
   "patch_sha256": "b85be9dae59431e59e431cdff004629ea43c869983f136e6fccf64cec50d48a7",
   "summary": "Trojan server: accumulate the 56-byte key across stream reads before authentication; one bounded handshake budget for key, command, address and CRLF; interrupt only the current conn/stream on timeout or context end; fallback replays consumed bytes once.",
   "files": [

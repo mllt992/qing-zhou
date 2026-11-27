@@ -1,10 +1,10 @@
 # 固定核心的 WebSocket / HTTPUpgrade 缓冲修复
 
-## 当前状态（官方 v1.14.4）
+## 当前状态（官方 v1.14.5）
 
-官方 sing-box **v1.14.3** 已完整纳入提交 [07512b10](https://github.com/SagerNet/sing-box/commit/07512b1093aa38626fca00dbba07bc5d77375861)（树中为 cherry-pick `52f9bad034d291fc16869a396bf812508d50ecd6`）；**v1.14.4** 另修正了 HTTPUpgrade 客户端在 IPv6 Host 上的方括号处理。因此当前发布核心不再回补这三份文件，构建以官方 v1.14.4（`c005f35300ce76427dc285481ec5695f5b179cd2`）加 Trojan 维护补丁为准，完整标记 `1.14.4+qz-trojan.b85be9da`。该标记同时满足 Vision、transport 与 Trojan 能力。
+官方 sing-box **v1.14.3** 已完整纳入提交 [07512b10](https://github.com/SagerNet/sing-box/commit/07512b1093aa38626fca00dbba07bc5d77375861)（树中为 cherry-pick `52f9bad034d291fc16869a396bf812508d50ecd6`）；**v1.14.4** 另修正了 HTTPUpgrade 客户端在 IPv6 Host 上的方括号处理。v1.14.5 未改这三份文件。因此当前发布核心不再回补它们，构建以官方 v1.14.5（`a6844a780ba173e189a018d0ac62df67cd50b8e9`）加 Trojan 维护补丁为准，完整标记 `1.14.5+qz-trojan.b85be9da`。该标记同时满足 Vision、transport 与 Trojan 能力。
 
-历史审定标记 `1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10` 及旧 1.14.2 Trojan 完整标记仍然证明本修复。`scripts/test-transport-buffer.sh --check-baseline` 仍在冻结的官方 v1.14.2 上跑负向对照（缺陷只存在于那棵树）；正向回归在未打该历史补丁的 v1.14.4 上执行。仓库保留 `apply-transport-buffer-patch.sh` 与三文件补丁作为历史复现材料，发行构建不再调用。
+历史审定标记 `1.14.2+qz-vmess.9b95ab8c9478-transport.07512b10`、旧 1.14.2 Trojan 完整标记，以及上一版发布标记 `1.14.4+qz-trojan.b85be9da` 仍然证明本修复。`scripts/test-transport-buffer.sh --check-baseline` 仍在冻结的官方 v1.14.2 上跑负向对照（缺陷只存在于那棵树）；正向回归在未打该历史补丁的 v1.14.5 上执行。仓库保留 `apply-transport-buffer-patch.sh` 与三文件补丁作为历史复现材料，发行构建不再调用。
 
 以下各节保留当初在 v1.14.2 上回补时的范围说明。
 
@@ -44,7 +44,7 @@ bash scripts/build-singbox.sh --output-dir "$PWD/.tmp-metering-core" --arch amd6
 
 ## 运行能力门禁与部署边界
 
-旧完整标记 `1.14.2+qz-vmess.9b95ab8c9478` 继续只证明既有 Vision 能力，不证明本 transport 修复。官方裸版本号（含 1.14.3/1.14.4）也不视为已审定（不含 `with_v2ray_api`，亦未带 Trojan 维护补丁）。能力需单独识别 `has_transport_read_buffer_fix`；通用版本排序、更高 semver、磁盘文件或历史成功缓存均不能替代实际受管运行进程证明。
+旧完整标记 `1.14.2+qz-vmess.9b95ab8c9478` 继续只证明既有 Vision 能力，不证明本 transport 修复。官方裸版本号（含 1.14.3/1.14.4/1.14.5）也不视为已审定（不含 `with_v2ray_api`，亦未带 Trojan 维护补丁）。能力需单独识别 `has_transport_read_buffer_fix`；通用版本排序、更高 semver、磁盘文件或历史成功缓存均不能替代实际受管运行进程证明。
 
 相关 P1 WS/HTTPUpgrade 路径的预检与应用使用独立能力要求。控制器在配置应用前后核验实际运行核心；正在生成/下发时发生配置变化也不能用过期能力快照放行。预检说明、具体节点错误与当前轮次的成功/失败须分别显示，不把“已保存”当“已生效”。
 
