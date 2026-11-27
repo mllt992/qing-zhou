@@ -9,6 +9,9 @@ set -euo pipefail
 
 script_root=$(cd "$(dirname "$0")" && pwd)
 source "$script_root/singbox-pins.sh"
+# with_quic registers hysteria2 plus the hysteria-realm service
+# (include/quic.go registerQUICServices → hysteria2.RegisterRealmService).
+# Hysteria Realm on 1.14.x depends on that tag; do not drop with_quic.
 TAGS=with_gvisor,with_quic,with_grpc,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_v2ray_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_usbip,with_openvpn,with_openconnect,with_purego,badlinkname,tfogo_checklinkname0
 GO=${GO:-go}
 export GOWORK=off GOTOOLCHAIN=local

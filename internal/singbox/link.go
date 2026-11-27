@@ -101,6 +101,12 @@ type LinkParams struct {
 	HopInterval         string // duration, e.g. "30s"
 	HopIntervalMax      string // duration upper bound for hop randomization
 
+	// Realm is Hysteria Realm (NAT traversal, sing-box ≥ 1.14). When set, the
+	// URI carries the realm block so sing-box subscriptions can rebuild it.
+	// Clash, Surge and the base64 share-link list drop that URI: those formats
+	// have no realm and must not advertise a direct server address.
+	Realm *RealmParams
+
 	// TCP dial tuning (TCP-based protocols only). TCP Fast Open and MPTCP each
 	// need BOTH ends enabled to do anything, so 轻舟 mirrors the inbound's
 	// setting onto the client link.
@@ -137,6 +143,21 @@ type LinkParams struct {
 	// hysteria/hysteria2/tuic proxies have none, and an unknown key there fails
 	// the whole config for every subscriber holding that node.
 	NoUDP bool
+}
+
+// RealmParams is the hysteria2 realm block copied onto a client outbound.
+// Port mapping stays on the server; clients only need the discovery fields.
+type RealmParams struct {
+	ServerURL   string
+	Token       string
+	RealmID     string
+	STUNServers []string
+	IPVersion   int // 0 = auto, 4 or 6
+}
+
+// RealmEnabled reports whether this inbound should be published as a realm node.
+func (r *RealmParams) RealmEnabled() bool {
+	return r != nil && (strings.TrimSpace(r.ServerURL) != "" || strings.TrimSpace(r.RealmID) != "")
 }
 
 // pinQuery renders the certificate-pinning extension params for protocols
@@ -419,6 +440,28 @@ func BuildShareLink(p LinkParams) string {
 		}
 		if p.HopIntervalMax != "" {
 			q = append(q, "hop-interval-max="+esc(p.HopIntervalMax))
+		}
+		if p.Realm.RealmEnabled() {
+			// Carrier for sing-box subscriptions. Renderers that cannot express
+			// realm drop the link instead of dialling Host:Port.
+			q = append(q, "qz-realm=1")
+			if v := strings.TrimSpace(p.Realm.ServerURL); v != "" {
+				q = append(q, "realm-server-url="+esc(v))
+			}
+			if v := strings.TrimSpace(p.Realm.RealmID); v != "" {
+				q = append(q, "realm-id="+esc(v))
+			}
+			if v := strings.TrimSpace(p.Realm.Token); v != "" {
+				q = append(q, "realm-token="+esc(v))
+			}
+			for _, stun := range p.Realm.STUNServers {
+				if stun = strings.TrimSpace(stun); stun != "" {
+					q = append(q, "realm-stun="+esc(stun))
+				}
+			}
+			if p.Realm.IPVersion == 4 || p.Realm.IPVersion == 6 {
+				q = append(q, "realm-ip-version="+strconv.Itoa(p.Realm.IPVersion))
+			}
 		}
 		if p.NoUDP {
 			q = append(q, noUDPParam)

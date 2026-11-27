@@ -493,6 +493,11 @@ func clashProxy(p *Proxy, opt ClashOptions) map[string]any {
 			m["skip-cert-verify"] = true
 		}
 	case "hysteria2":
+		// Clash has no hysteria realm, and without a direct address there is
+		// nothing for a Clash client to dial. Drop the node.
+		if p.viaRealm() {
+			return nil
+		}
 		m["type"] = "hysteria2"
 		m["password"] = p.Password
 		if v := p.param("sni"); v != "" {

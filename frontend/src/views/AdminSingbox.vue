@@ -142,6 +142,7 @@
                     </n-tooltip>
                     <span class="kv">TLS <b :title="tlsName(r.tls_id)">{{ tlsName(r.tls_id) }}</b></span>
                     <span v-if="r.egress_id" class="kv">出口 <b :title="egressName(r.egress_id)">{{ egressName(r.egress_id) }}</b></span>
+                    <n-tag v-if="inboundUsesRealm(r)" size="tiny" type="warning" :bordered="false">Realm</n-tag>
                     <n-tooltip v-if="r.tls_warning" placement="top" style="max-width:360px;">
                       <template #trigger>
                         <n-tag size="tiny" type="warning" :bordered="false" class="inbound-tls-warning">证书不覆盖节点地址</n-tag>
@@ -149,6 +150,9 @@
                       {{ r.tls_warning }}
                     </n-tooltip>
                   </div>
+                  <n-alert v-if="inboundUsesRealm(r)" type="warning" :bordered="false" style="margin-top:8px;">
+                    已启用 Hysteria Realm（NAT 穿透）。Clash 订阅和分享链接不会包含此节点：这两种格式不支持 Realm，也没有可直连的服务器地址。请使用 sing-box 订阅（客户端 ≥ 1.14）。
+                  </n-alert>
                   <!-- TLS 检测（#118）：一次真实握手，单独给出「TLS」状态，不影响入站的可达/健康判定。 -->
                   <div v-if="tlsCheck[r.id]" class="lc-tls-check" :class="tlsCheck[r.id].status">
                     <b>TLS {{ tlsStatusText(tlsCheck[r.id].status) }}</b>
@@ -746,8 +750,43 @@
               <n-input v-model:value="ie.hop_interval_max" placeholder="如 60s，与间隔组成随机区间" />
             </n-form-item>
             <n-form-item label="伪装 URL"><n-input v-model:value="ie.masquerade" placeholder="留空不伪装" /></n-form-item>
+            <n-form-item label="Hysteria Realm">
+              <n-switch v-model:value="ie.realm_enabled" :disabled="realmSwitchDisabled" />
+              <template #feedback>
+                <span v-if="realmSupported">NAT 穿透。启用后客户端经 Realm 发现服务器，不再直连本机地址。需要 sing-box ≥ {{ realmMinVersion }}。</span>
+                <span v-else-if="realmNodeVersion">当前节点 sing-box {{ realmNodeVersion }} 低于 {{ realmMinVersion }}，不能启用 Realm。</span>
+                <span v-else>尚未检测到该节点的 sing-box 版本。Realm 需要 ≥ {{ realmMinVersion }}，请先在「服务器」页确认内核。</span>
+              </template>
+            </n-form-item>
+            <template v-if="ie.realm_enabled">
+              <n-form-item label="Realm 服务地址">
+                <n-input v-model:value="ie.realm_server_url" :disabled="!realmSupported" placeholder="https://realm.example.com" />
+              </n-form-item>
+              <n-form-item label="Token">
+                <n-input v-model:value="ie.realm_token" :disabled="!realmSupported" placeholder="可留空" />
+              </n-form-item>
+              <n-form-item label="Realm ID">
+                <n-input v-model:value="ie.realm_id" :disabled="!realmSupported" placeholder="如 home" />
+              </n-form-item>
+              <n-form-item label="STUN 服务器">
+                <n-input v-model:value="ie.realm_stun" :disabled="!realmSupported" type="textarea" placeholder="每行一个，如 stun.example.com:3478" />
+              </n-form-item>
+              <n-form-item label="IP 版本">
+                <n-select v-model:value="ie.realm_ip_version" :disabled="!realmSupported" :options="[
+                  {label:'自动', value:''},
+                  {label:'IPv4', value:'4'},
+                  {label:'IPv6', value:'6'}
+                ]" />
+              </n-form-item>
+              <n-alert v-if="!realmSupported" type="error" :bordered="false" style="margin-bottom:12px;">
+                当前节点 sing-box {{ realmNodeVersion || '版本未知' }}，不能保存 Realm。请先升级到 ≥ {{ realmMinVersion }}，或关闭 Realm。
+              </n-alert>
+              <n-alert type="warning" :bordered="false" style="margin-bottom:12px;">
+                启用 Realm 后，Clash 订阅和分享链接不会包含此节点：这两种格式不支持 Realm，也没有可直连的服务器地址。请让客户端使用 sing-box 订阅（≥ {{ realmMinVersion }}）。
+              </n-alert>
+            </template>
             <n-alert type="info" :bordered="false" style="margin-bottom:12px;">
-              Hysteria Realm（NAT 穿透）本版暂不提供表单；需要时请在自定义配置里写 realm 块，或等后续跟进。节点需 sing-box ≥ 1.14 才能使用 gecko / bbr_profile / parrot / hop。跳港字段为客户端提示，需配合 server_ports 才生效。
+              节点需 sing-box ≥ 1.14 才能使用 gecko / bbr_profile / parrot / hop / Realm。跳港字段为客户端提示，需配合 server_ports 才生效。
             </n-alert>
           </template>
           <template v-if="ie.type === 'shadowsocks'">
@@ -1061,6 +1100,42 @@ const portResult = ref<Record<number, any>>({})
 function jp(s: string) { try { return JSON.parse(s || '{}') } catch { return {} } }
 
 const serverOpts = computed(() => [{ label: '本机', value: 0 }, ...servers.value.map(s => ({ label: s.name, value: s.id }))])
+
+const nodeVersions = ref<Record<number, string>>({})
+const realmMinVersion = ref('1.14.0')
+function versionAtLeast(version: string, min: string): boolean {
+  const parts = (v: string) => v.trim().replace(/^v/i, '').split(/[-+]/)[0].split('.').map(n => {
+    const x = parseInt(n, 10)
+    return Number.isFinite(x) ? x : 0
+  })
+  if (!version.trim()) return false
+  const a = parts(version), b = parts(min)
+  const n = Math.max(a.length, b.length)
+  for (let i = 0; i < n; i++) {
+    const x = a[i] || 0, y = b[i] || 0
+    if (x !== y) return x > y
+  }
+  return true
+}
+const realmNodeVersion = computed(() => nodeVersions.value[ie.server_id || 0] || '')
+const realmSupported = computed(() => versionAtLeast(realmNodeVersion.value, realmMinVersion.value))
+const realmSwitchDisabled = computed(() => !realmSupported.value && !ie.realm_enabled)
+function realmFields(realm: any) {
+  const block = realm && typeof realm === 'object' ? realm : {}
+  const stuns = Array.isArray(block.stun_servers) ? block.stun_servers.filter(Boolean).join('\n') : ''
+  const ip = block.ip_version === 4 || block.ip_version === 6 ? String(block.ip_version) : ''
+  return {
+    realm_enabled: !!(String(block.server_url || '').trim() || String(block.realm_id || '').trim()),
+    realm_server_url: block.server_url || '',
+    realm_token: block.token || '',
+    realm_id: block.realm_id || '',
+    realm_stun: stuns,
+    realm_ip_version: ip,
+  }
+}
+function inboundUsesRealm(r: any): boolean {
+  return realmFields(jp(r?.options)?.realm).realm_enabled
+}
 
 // Relay chaining: which inbounds can serve as a landing (must be renderable as a
 // sing-box outbound). anytls / hysteria v1 have no outbound renderer, so they
@@ -1621,6 +1696,7 @@ const ie = reactive({
   id: 0, type: 'vless', tag: '', listen: '::', listen_port: 443, tls_id: 0, server_id: 0, enabled: true,
   tfo: false, mptcp: false, cc: 'bbr', zero_rtt: false,
   up_mbps: 0, down_mbps: 0, obfs_type: '', obfs_password: '', obfs_min_packet: 0, obfs_max_packet: 0, bbr_profile: '', disable_chrome_parrot: false, hop_interval: '', hop_interval_max: '', masquerade: '',
+  realm_enabled: false, realm_server_url: '', realm_token: '', realm_id: '', realm_stun: '', realm_ip_version: '',
   net: 'tcp', ws_path: '/', ws_host: '', ws_early_data: 0, grpc_service: '', grpc_multi: false,
   ss_method: '2022-blake3-aes-128-gcm', flow: 'xtls-rprx-vision',
   anytls_idle_check: 0, anytls_idle_timeout: 0, anytls_min_idle: 0,
@@ -1680,6 +1756,7 @@ function resetIe() {
     id: 0, type: 'vless', tag: '', listen: '::', listen_port: 443, tls_id: 0, server_id: 0, enabled: true,
     tfo: false, mptcp: false, cc: 'bbr', zero_rtt: false,
     up_mbps: 0, down_mbps: 0, obfs_type: '', obfs_password: '', obfs_min_packet: 0, obfs_max_packet: 0, bbr_profile: '', disable_chrome_parrot: false, hop_interval: '', hop_interval_max: '', masquerade: '',
+  realm_enabled: false, realm_server_url: '', realm_token: '', realm_id: '', realm_stun: '', realm_ip_version: '',
     net: 'tcp', ws_path: '/', ws_host: '', ws_early_data: 0, grpc_service: '', grpc_multi: false,
     ss_method: '2022-blake3-aes-128-gcm', flow: 'xtls-rprx-vision',
     anytls_idle_check: 0, anytls_idle_timeout: 0, anytls_min_idle: 0,
@@ -1702,6 +1779,7 @@ function openInbound(n?: any, clone = false) {
       disable_chrome_parrot: !!o.disable_chrome_parrot,
       hop_interval: o.hop_interval || '', hop_interval_max: o.hop_interval_max || '',
       masquerade: typeof o.masquerade === 'string' ? o.masquerade : (o.masquerade?.url || ''),
+      ...realmFields(o.realm),
       net: tr.type || 'tcp', ws_path: tr.path || '/', ws_host: tr.host || '', ws_early_data: tr.max_early_data || 0,
       grpc_service: tr.service_name || '', grpc_multi: !!tr.multi_mode,
       ss_method: o.method || '2022-blake3-aes-128-gcm', flow: normFlow(o.flow),
@@ -1748,6 +1826,18 @@ async function quickBindCert() {
 }
 
 async function saveInbound() {
+  if (ie.type === 'hysteria2' && ie.realm_enabled) {
+    if (!realmSupported.value) {
+      message.error(realmNodeVersion.value
+        ? `当前节点 sing-box ${realmNodeVersion.value} 低于 ${realmMinVersion.value}，不能启用 Realm`
+        : `尚未检测到该节点的 sing-box 版本，不能启用 Realm（需要 ≥ ${realmMinVersion.value}）`)
+      return
+    }
+    if (!ie.realm_server_url.trim() || !ie.realm_id.trim()) {
+      message.error('启用 Realm 时必须填写服务地址和 Realm ID')
+      return
+    }
+  }
   saving.value = true
   try {
     const o: any = { tcp_fast_open: ie.tfo, tcp_multi_path: ie.mptcp }
@@ -1768,6 +1858,14 @@ async function saveInbound() {
       if (ie.hop_interval) o.hop_interval = ie.hop_interval
       if (ie.hop_interval_max) o.hop_interval_max = ie.hop_interval_max
       if (ie.masquerade) o.masquerade = ie.masquerade
+      if (ie.realm_enabled) {
+        const realm: any = { server_url: ie.realm_server_url.trim(), realm_id: ie.realm_id.trim() }
+        if (ie.realm_token.trim()) realm.token = ie.realm_token.trim()
+        const stuns = ie.realm_stun.split(/[\n,]/).map(s => s.trim()).filter(Boolean)
+        if (stuns.length) realm.stun_servers = stuns
+        if (ie.realm_ip_version === '4' || ie.realm_ip_version === '6') realm.ip_version = Number(ie.realm_ip_version)
+        o.realm = realm
+      }
     }
     if (ie.type === 'shadowsocks') o.method = ie.ss_method
     if (ie.type === 'anytls') {
@@ -1959,8 +2057,12 @@ function copy(text: string) { if (text) { navigator.clipboard.writeText(text); m
 async function load() {
   loading.value = true
   try {
-    const [t, i, s, e, c] = await Promise.all([apiList('/api/admin/sb/tls'), apiList('/api/admin/sb/inbounds'), apiList('/api/admin/servers'), apiList('/api/admin/sb/egresses'), apiList('/api/admin/certs').catch(() => [])])
+    const [t, i, s, e, c, versions] = await Promise.all([apiList('/api/admin/sb/tls'), apiList('/api/admin/sb/inbounds'), apiList('/api/admin/servers'), apiList('/api/admin/sb/egresses'), apiList('/api/admin/certs').catch(() => []), apiGet<any>('/api/admin/nodes/singbox').catch(() => null)])
     tlsList.value = t; inbounds.value = i; servers.value = s; egresses.value = e; certList.value = c
+    const map: Record<number, string> = {}
+    for (const n of versions?.nodes || []) map[n.server_id] = n.version || ''
+    nodeVersions.value = map
+    if (versions?.realm_min_version) realmMinVersion.value = versions.realm_min_version
     // 首次加载后默认展开所有机器；之后保留用户的折叠状态。
     if (!expandedInit) { expandedMachines.value = machines.value.map(m => m.id); expandedInit = true }
   } catch {} finally { loading.value = false }

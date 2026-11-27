@@ -1067,6 +1067,18 @@ func (s *Store) BuildSelfBuiltLinks(u *User, host string) []SelfBuiltLink {
 		p.DisableChromeParrot = mapBool(opts, "disable_chrome_parrot")
 		p.HopInterval = mapStr(opts, "hop_interval")
 		p.HopIntervalMax = mapStr(opts, "hop_interval_max")
+		if realm, ok := opts["realm"].(map[string]interface{}); ok {
+			rp := &singbox.RealmParams{
+				ServerURL:   strings.TrimSpace(mapStr(realm, "server_url")),
+				Token:       strings.TrimSpace(mapStr(realm, "token")),
+				RealmID:     strings.TrimSpace(mapStr(realm, "realm_id")),
+				STUNServers: mapStringList(realm["stun_servers"]),
+				IPVersion:   mapInt(realm, "ip_version"),
+			}
+			if rp.RealmEnabled() {
+				p.Realm = rp
+			}
+		}
 		// transport (ws/grpc/httpupgrade) for vless/vmess/trojan
 		if tr, ok := opts["transport"].(map[string]interface{}); ok {
 			p.Network = mapStr(tr, "type")
@@ -1482,6 +1494,31 @@ func mapStr(m map[string]interface{}, k string) string {
 	s, _ := m[k].(string)
 	return s
 }
+func mapStringList(v interface{}) []string {
+	switch s := v.(type) {
+	case []string:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				if str = strings.TrimSpace(str); str != "" {
+					out = append(out, str)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func mapInt(m map[string]interface{}, k string) int {
 	if m == nil {
 		return 0

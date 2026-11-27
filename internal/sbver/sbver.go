@@ -13,6 +13,11 @@ import (
 	"strings"
 )
 
+// HysteriaRealmMinVersion is the first stable sing-box that accepts a hysteria2
+// realm block and the hysteria-realm service. Older cores reject the field and
+// then refuse the whole config.
+const HysteriaRealmMinVersion = "1.14.0"
+
 // MinSupported is the oldest sing-box the generated config is valid for.
 //
 // Not a guess: the config uses the typed DNS server form and the route rule

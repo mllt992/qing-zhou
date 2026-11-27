@@ -96,7 +96,7 @@ func Render(format string, links []string, aiNodes map[string]bool, clashTpl, si
 	case FormatSurge:
 		return Surge(parseWithAI(links, aiNodes), subURL), "text/plain; charset=utf-8", nil
 	default:
-		return Base64(links), "text/plain; charset=utf-8", nil
+		return Base64(withoutRealmShareLinks(links)), "text/plain; charset=utf-8", nil
 	}
 }
 
@@ -138,7 +138,7 @@ func RenderWithOptions(format string, links []string, aiNodes map[string]bool, c
 		case FormatSurge:
 			return Surge(parseWithAI(links, aiNodes), subURL), "text/plain; charset=utf-8", nil
 		default:
-			return Base64(links), "text/plain; charset=utf-8", nil
+			return Base64(withoutRealmShareLinks(links)), "text/plain; charset=utf-8", nil
 		}
 	}
 	switch NormalizeFormat(format) {
@@ -153,7 +153,7 @@ func RenderWithOptions(format string, links []string, aiNodes map[string]bool, c
 	default:
 		// A base64 subscription contains nodes only. Routing belongs to the local
 		// client, so claiming to apply a server-side profile would be misleading.
-		return Base64(links), "text/plain; charset=utf-8", nil
+		return Base64(withoutRealmShareLinks(links)), "text/plain; charset=utf-8", nil
 	}
 }
 
