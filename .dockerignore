@@ -13,6 +13,7 @@ cmd/probe/dist
 
 # 本地数据与构建产物
 *.db
+.env
 *.db-wal
 *.db-shm
 out/

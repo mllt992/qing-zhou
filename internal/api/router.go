@@ -247,6 +247,8 @@ func (a *API) Router() http.Handler {
 	r.Get("/api/health", a.handleHealth)
 	r.Get("/api/config", a.handleConfig)
 	r.Get("/api/auth/verify", a.handleVerify)
+	r.Get("/confirm-email", a.handleEmailChangeForm)
+	r.Post("/confirm-email", a.handleVerify)
 	r.Get(oauthCallbackPath, a.handleOAuthCallback)
 	r.Get("/sub/{token}", a.handleSub)
 

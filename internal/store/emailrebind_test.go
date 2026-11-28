@@ -5,55 +5,80 @@ import (
 	"time"
 )
 
-// A verify token carries only user_id — no address — and SetEmailVerified marks
-// whatever address the row currently holds. So a token must not survive a rebind:
-// otherwise a user requests a token for an address they own, doesn't click it,
-// rebinds to someone else's address, then redeems the old token and lands
-// email_verified on an address they never controlled — squatting it permanently,
-// since registration and rebinding both reject an address another account holds.
-func TestSetUserEmail_InvalidatesOutstandingVerifyTokens(t *testing.T) {
+func TestEmailChangeRecoveryHandoff(t *testing.T) {
 	st := newRefundStore(t)
-	uid := mkUser(t, st, "mallory")
-
-	if err := st.SetUserEmail(uid, "attacker@evil.test"); err != nil {
-		t.Fatal(err)
+	uid := mkUser(t, st, "rita")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := st.CreateEmailToken(uid, "T1", "verify", time.Hour); err != nil {
-		t.Fatal(err)
+	must(st.AdminSetUserEmail(uid, "old@example.test"))
+	must(st.CreateSession(uid, "current", "127.0.0.1", "test"))
+	u, err := st.UserByID(uid)
+	must(err)
+	issue := func(address, code string, want bool) {
+		t.Helper()
+		issued, err := st.IssueEmailToken(uid, address, code, "reset", time.Hour)
+		must(err)
+		if issued != want {
+			t.Fatalf("issue to %s = %t, want %t", address, issued, want)
+		}
 	}
-	// Rebind to a victim address without redeeming T1.
-	if err := st.SetUserEmail(uid, "ceo@victim.test"); err != nil {
-		t.Fatal(err)
+	must(st.RequestEmailChange(u, "current", "first@example.test", "first"))
+	must(st.RequestEmailChange(u, "current", "new@example.test", "second"))
+	issue("new@example.test", "premature", false)
+	issue("old@example.test", "old-reset", true)
+	if _, ok, err := st.ConfirmEmail("first", "rebind"); err != nil || ok {
+		t.Fatalf("superseded link %t %v", ok, err)
 	}
-
-	if _, ok, err := st.UseEmailToken("T1", "verify"); err != nil {
-		t.Fatal(err)
-	} else if ok {
-		t.Fatal("the pre-rebind verify token still redeems — it would verify the victim's address")
+	if _, ok, err := st.ConfirmEmail("second", "rebind"); err != nil || !ok {
+		t.Fatalf("confirmation %t %v", ok, err)
 	}
-	var verified bool
-	st.db.QueryRow(`SELECT email_verified FROM users WHERE id=?`, uid).Scan(&verified)
-	if verified {
-		t.Error("user is email_verified on an address they never proved control of")
+	if !st.EmailAlreadyConfirmed("second") {
+		t.Fatal("confirmation was not idempotent")
+	}
+	if ok, err := st.ResetPassword("old-reset", "changed"); err != nil || ok {
+		t.Fatalf("old link %t %v", ok, err)
+	}
+	issue("old@example.test", "late-old", false)
+	issue("new@example.test", "new-reset", true)
+	if ok, err := st.ResetPassword("new-reset", "changed"); err != nil || !ok {
+		t.Fatalf("new link %t %v", ok, err)
+	}
+	if st.SessionValid("current") {
+		t.Fatal("reset left the session active")
 	}
 }
 
-// Password-reset tokens are a separate purpose and must not be collateral damage
-// of a rebind — a user changing their email mid-reset should still be able to
-// finish the reset.
-func TestSetUserEmail_KeepsResetTokens(t *testing.T) {
+func TestAdminRebindCancelsPendingLinks(t *testing.T) {
 	st := newRefundStore(t)
-	uid := mkUser(t, st, "rita")
-	if err := st.CreateEmailToken(uid, "R1", "reset", time.Hour); err != nil {
+	uid := mkUser(t, st, "user")
+	if err := st.AdminSetUserEmail(uid, "before@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetUserEmail(uid, "rita@example.test"); err != nil {
+	if err := st.CreateSession(uid, "jti", "127.0.0.1", "ua"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := st.UseEmailToken("R1", "reset"); err != nil {
+	u, err := st.UserByID(uid)
+	if err != nil {
 		t.Fatal(err)
-	} else if !ok {
-		t.Error("rebinding the email wrongly invalidated an outstanding reset token")
+	}
+	if err := st.RequestEmailChange(u, "jti", "pending@example.test", "pending"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.IssueEmailToken(uid, u.Email.String, "reset", "reset", time.Hour); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := st.AdminSetUserEmail(uid, "admin@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := st.ConfirmEmail("pending", "rebind"); err != nil || ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := st.ResetTokenValid("reset"); err != nil || ok {
+		t.Fatal(ok, err)
 	}
 }
 
@@ -88,5 +113,28 @@ func TestBackfillFreeBuckets(t *testing.T) {
 	st.db.QueryRow(`SELECT COUNT(*) FROM user_plans WHERE user_id=? AND kind=?`, provisioned, KindFree).Scan(&n)
 	if n != 1 {
 		t.Errorf("got %d free buckets after two runs, want 1", n)
+	}
+}
+
+func TestEmailChangeAddressClaimAtConfirmation(t *testing.T) {
+	st := newRefundStore(t)
+	for _, name := range []string{"rita", "kai"} {
+		uid := mkUser(t, st, name)
+		if err := st.CreateSession(uid, name, "local", name); err != nil {
+			t.Fatal(err)
+		}
+		u, err := st.UserByID(uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RequestEmailChange(u, name, "shared@example.test", name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok, err := st.ConfirmEmail("kai", "rebind"); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if _, ok, err := st.ConfirmEmail("rita", "rebind"); err != nil || ok {
+		t.Fatal(ok, err)
 	}
 }

@@ -23,3 +23,18 @@ func TestListenEnvWins(t *testing.T) {
 		t.Fatalf("listen = %q, want the value from the environment", got)
 	}
 }
+
+func TestConfiguredSecretKey(t *testing.T) {
+	for _, key := range []string{LegacyComposeKey, "  " + LegacyComposeKey + " ", "   "} {
+		t.Setenv("QZ_SECRET_KEY", key)
+		if _, err := ConfiguredSecretKey(); err == nil {
+			t.Fatal("accepted an unsafe configured key")
+		}
+	}
+	for _, key := range []string{"", "independent-existing-key"} {
+		t.Setenv("QZ_SECRET_KEY", key)
+		if got, err := ConfiguredSecretKey(); err != nil || got != key {
+			t.Fatal("unexpected change to existing configuration")
+		}
+	}
+}

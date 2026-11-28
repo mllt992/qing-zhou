@@ -48,13 +48,11 @@ func TestAdminSetUserEmail_EmptyUnbinds(t *testing.T) {
 	}
 }
 
-// The squatting defence SetUserEmail documents applies here too: a verify token
-// carries only user_id, so one minted for the previous address would otherwise
-// redeem against whatever address the row holds later.
+// 管理员完成换绑后，寄往原地址的验证链接失效。
 func TestAdminSetUserEmail_DropsOutstandingVerifyTokens(t *testing.T) {
 	st := openMigrated(t)
 	uid, _ := st.CreateUser(NewUser{Username: "u1", Email: "old@example.com", PasswordHash: "h"})
-	if err := st.CreateEmailToken(uid, "tok-abc", "verify", time.Hour); err != nil {
+	if ok, err := st.IssueEmailToken(uid, "old@example.com", "tok-abc", "verify", time.Hour); err != nil || !ok {
 		t.Fatal(err)
 	}
 
@@ -62,7 +60,7 @@ func TestAdminSetUserEmail_DropsOutstandingVerifyTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, okTok, err := st.UseEmailToken("tok-abc", "verify")
+	_, okTok, err := st.ConfirmEmail("tok-abc", "verify")
 	if err != nil {
 		t.Fatal(err)
 	}

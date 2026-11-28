@@ -9,9 +9,9 @@ import (
 )
 
 type OAuthState struct {
-	StateHash, BrowserHash, Nonce, Verifier, ConfigHash, SessionID string
-	UserID                                                         int64
-	ExpiresAt                                                      int64
+	StateHash, BrowserHash, Nonce, Verifier, ConfigHash, SessionID, EmailChange string
+	UserID                                                                      int64
+	ExpiresAt                                                                   int64
 }
 
 func (s *Store) CreateOAuthState(ctx context.Context, v OAuthState) error {
@@ -30,7 +30,7 @@ func (s *Store) CreateOAuthState(ctx context.Context, v OAuthState) error {
 	if count >= 4096 {
 		return fmt.Errorf("登录请求过多，请稍后再试")
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO oauth_states(state_hash,browser_hash,nonce,verifier,config_hash,user_id,session_id,expires_at) VALUES(?,?,?,?,?,?,?,?)`, v.StateHash, v.BrowserHash, v.Nonce, s.encrypt(v.Verifier), v.ConfigHash, v.UserID, v.SessionID, v.ExpiresAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO oauth_states(state_hash,browser_hash,nonce,verifier,config_hash,user_id,session_id,expires_at,email_change) VALUES(?,?,?,?,?,?,?,?,?)`, v.StateHash, v.BrowserHash, v.Nonce, s.encrypt(v.Verifier), v.ConfigHash, v.UserID, v.SessionID, v.ExpiresAt, v.EmailChange)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (s *Store) CreateOAuthState(ctx context.Context, v OAuthState) error {
 // Browser binding, expiry and single consumption are checked by one statement.
 func (s *Store) ConsumeOAuthState(ctx context.Context, stateHash, browserHash string) (*OAuthState, error) {
 	v := &OAuthState{}
-	err := s.db.QueryRowContext(ctx, `DELETE FROM oauth_states WHERE state_hash=? AND browser_hash=? AND expires_at>? RETURNING nonce,verifier,config_hash,user_id,session_id,expires_at`, stateHash, browserHash, time.Now().Unix()).Scan(&v.Nonce, &v.Verifier, &v.ConfigHash, &v.UserID, &v.SessionID, &v.ExpiresAt)
+	err := s.db.QueryRowContext(ctx, `DELETE FROM oauth_states WHERE state_hash=? AND browser_hash=? AND expires_at>? RETURNING nonce,verifier,config_hash,user_id,session_id,expires_at,email_change`, stateHash, browserHash, time.Now().Unix()).Scan(&v.Nonce, &v.Verifier, &v.ConfigHash, &v.UserID, &v.SessionID, &v.ExpiresAt, &v.EmailChange)
 	if err != nil {
 		return nil, err
 	}

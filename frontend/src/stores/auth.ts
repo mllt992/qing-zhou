@@ -7,6 +7,7 @@ export interface User {
   username: string
   email: string
   email_verified: boolean
+  email_change_via_oidc?: boolean
   role: string
   is_admin: boolean
   status: string

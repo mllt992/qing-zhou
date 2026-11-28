@@ -59,6 +59,20 @@ func (s *Store) migrations() []migration {
 			_, err := tx.Exec(mcpAuditSchema)
 			return err
 		}},
+		{17, "replace_public_compose_key", s.replacePublicComposeKey},
+		{18, "email_token_destination", func(tx *sql.Tx) error {
+			// Old links have no provable delivery address. Require a fresh link.
+			for _, statement := range []string{
+				"ALTER TABLE email_tokens ADD COLUMN address TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE oauth_states ADD COLUMN email_change TEXT NOT NULL DEFAULT ''",
+			} {
+				if err := execLegacyStatement(tx, statement); err != nil {
+					return err
+				}
+			}
+			_, err := tx.Exec("DELETE FROM email_tokens WHERE address=''")
+			return err
+		}},
 	}
 }
 

@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config holds runtime configuration. Everything has a sensible default so the
@@ -18,6 +20,17 @@ type Config struct {
 	// Docker, <install dir>/ssh-keys for the one-click script — rather than
 	// needing its own mount before the feature works at all.
 	SSHKeyDir string
+}
+
+// LegacyComposeKey is recognized only to reject or migrate the public example.
+const LegacyComposeKey = "please-change-me-openssl-rand-hex-32"
+
+func ConfiguredSecretKey() (string, error) {
+	key := os.Getenv("QZ_SECRET_KEY")
+	if key != "" && (strings.TrimSpace(key) == "" || strings.TrimSpace(key) == LegacyComposeKey) {
+		return "", errors.New("QZ_SECRET_KEY 不能使用空白或旧版公开示例值；请备份数据库并配置独立随机密钥")
+	}
+	return key, nil
 }
 
 func Load() *Config {

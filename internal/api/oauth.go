@@ -267,7 +267,7 @@ func (a *API) startOAuth(w http.ResponseWriter, r *http.Request, bind bool) {
 		fail(w, 400, "请求格式错误")
 		return
 	}
-	state := store.OAuthState{ConfigHash: c.hash(), ExpiresAt: time.Now().Add(10 * time.Minute).Unix()}
+	var state store.OAuthState
 	if bind {
 		u := a.currentUser(r)
 		if u == nil {
@@ -289,6 +289,14 @@ func (a *API) startOAuth(w http.ResponseWriter, r *http.Request, bind bool) {
 			return
 		}
 	}
+	a.oauthAuthorization(w, r, c, state)
+}
+
+const oauthStateTTL = 10 * time.Minute
+
+func (a *API) oauthAuthorization(w http.ResponseWriter, r *http.Request, c oauthConfig, state store.OAuthState) {
+	state.ConfigHash = c.hash()
+	state.ExpiresAt = time.Now().Add(oauthStateTTL).Unix()
 	if !a.oauthSlot(r.Context()) {
 		return
 	}
@@ -314,9 +322,13 @@ func (a *API) startOAuth(w http.ResponseWriter, r *http.Request, bind bool) {
 		fail(w, 503, "暂时无法发起认证，请稍后再试")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie(values[0]), Value: values[1], Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie(values[0]), Value: values[1], Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(oauthStateTTL.Seconds())})
 	w.Header().Set("Cache-Control", "no-store")
-	ok(w, J{"authorization_url": oc.AuthCodeURL(values[0], oidc.Nonce(state.Nonce), oauth2.S256ChallengeOption(state.Verifier))})
+	opts := []oauth2.AuthCodeOption{oidc.Nonce(state.Nonce), oauth2.S256ChallengeOption(state.Verifier)}
+	if state.EmailChange != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"))
+	}
+	ok(w, J{"authorization_url": oc.AuthCodeURL(values[0], opts...)})
 }
 
 func (a *API) handleUserOAuth(w http.ResponseWriter, r *http.Request) {
@@ -417,6 +429,28 @@ func (a *API) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		claims, e := auth.Parse(a.secret, ck.Value)
 		if e != nil || claims.UserID != state.UserID || claims.ID != state.SessionID || !a.st.SessionValid(claims.ID) {
 			finish("session")
+			return
+		}
+		if state.EmailChange != "" {
+			binding, err := a.st.OAuthIdentityForUser(state.UserID, c.Issuer)
+			var proof struct {
+				AuthTime int64 `json:"auth_time"`
+			}
+			if err != nil || binding == nil || binding.Subject != id.Subject || id.Claims(&proof) != nil ||
+				proof.AuthTime < state.ExpiresAt-int64(oauthStateTTL/time.Second)-30 || proof.AuthTime > time.Now().Unix()+30 {
+				finish("provider")
+				return
+			}
+			user, err := a.st.UserByID(state.UserID)
+			if err != nil || user == nil || user.PasswordHash != "!oauth2" || !a.mailerConfigured() {
+				finish("account")
+				return
+			}
+			if err := a.sendEmailChange(user, state.SessionID, state.EmailChange, u.Scheme+"://"+u.Host); err != nil {
+				finish("email_change")
+				return
+			}
+			http.Redirect(w, r, dest+"?email_sent=1", http.StatusSeeOther)
 			return
 		}
 		if a.st.BindOAuthIdentity(ctx, state.UserID, c.Issuer, id.Subject) != nil {

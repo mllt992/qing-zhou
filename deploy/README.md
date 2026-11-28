@@ -5,7 +5,7 @@
 面板是中心机、SSH 管远程落地，容器不需要跑 sing-box，只需持久化 DB。镜像内置两架构探针，支持 amd64/arm64。
 
 ```bash
-# 改 docker-compose.yml 里的 QZ_PUBLIC_BASE 与 QZ_SECRET_KEY(openssl rand -hex 32)
+# 按根目录 README 创建或保留 .env 中的 QZ_SECRET_KEY，并设置 QZ_PUBLIC_BASE
 docker compose up -d
 docker compose logs -f qingzhou     # 首启打印随机管理员密码（未设 QZ_ADMIN_PASS 时）
 ```

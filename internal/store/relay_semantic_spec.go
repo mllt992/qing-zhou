@@ -71,6 +71,9 @@ func upgradeRelaySpecHash(tx *sql.Tx, link *RelayMeteringLink, hashes relaySpecH
 }
 
 func (s *Store) migrateRelayProtocolAuthVerification(tx *sql.Tx) error {
+	if err := s.rewrapComposeSecrets(tx, true); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(relayProtocolAuthSchema); err != nil {
 		return err
 	}
