@@ -29,6 +29,10 @@ func main() {
 		os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 
+	encKey, err := config.ConfiguredSecretKey()
+	if err != nil {
+		log.Fatal(err)
+	}
 	cfg := config.Load()
 
 	st, err := store.Open(cfg.DBPath)
@@ -38,8 +42,8 @@ func main() {
 	defer st.Close()
 
 	// Historical encrypted backfills run before Seed and need the configured key.
-	if key := os.Getenv("QZ_SECRET_KEY"); key != "" {
-		st.SetSecretKey([]byte(key))
+	if encKey != "" {
+		st.SetSecretKey([]byte(encKey))
 	}
 	if err := st.Migrate(); err != nil {
 		log.Fatalf("migrate: %v", err)
@@ -65,7 +69,6 @@ func main() {
 
 	// Key for encrypting secret settings (SMTP/sing-box passwords) at rest.
 	// Prefer QZ_SECRET_KEY (kept outside the DB) for real protection.
-	encKey := os.Getenv("QZ_SECRET_KEY")
 	if encKey == "" {
 		encKey = secret
 		log.Printf("WARNING: QZ_SECRET_KEY not set — encrypting secret settings with jwt_secret, which lives in the same DB. A DB leak then exposes both ciphertext and key. Set QZ_SECRET_KEY (openssl rand -hex 32) for real at-rest protection.")

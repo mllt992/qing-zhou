@@ -299,52 +299,7 @@ func (s *Store) RotateNodeCredentials(userID, lastResetBefore int64) error {
 	return tx.Commit()
 }
 
-// SetUserEmail changes a user's email and marks it unverified (pending re-verify).
-// SetUserEmail rebinds a user's address and drops any verification token still
-// outstanding for them.
-//
-// Invalidating the old tokens is the security-relevant half. A verify token
-// carries only user_id — no address — and SetEmailVerified marks whatever
-// address the row currently holds. So without this, a user could request a token
-// for an address they own, not click it, rebind to someone else's address, then
-// redeem the old token and end up email_verified on an address they never
-// controlled — squatting it permanently, since both registration and rebinding
-// reject an address already held by another account.
-//
-// Both statements share one transaction: leaving the address changed while the
-// old tokens survived would be exactly the state this defends against.
-func (s *Store) SetUserEmail(userID int64, email string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec(`UPDATE users SET email=?, email_verified=0, updated_at=? WHERE id=?`,
-		nullStr(email), time.Now().Unix(), userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM email_tokens WHERE user_id=? AND purpose='verify' AND used=0`,
-		userID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// AdminSetUserEmail rebinds an address on an admin's authority: no verification
-// round-trip, the same way an admin-created account is pre-verified at creation.
-// An empty address unbinds (NULL, and unverified — there is nothing to verify).
-//
-// It is separate from SetUserEmail because the two differ on exactly the field
-// that matters: SetUserEmail is the *user* claiming an address they must then
-// prove they own, so it lands unverified. Here the admin is asserting it, and
-// the user typically cannot receive mail at the old address — which is the
-// situation that brought the admin here. Leaving it unverified would show the
-// user a "邮箱未验证" prompt for an address they never chose and cannot confirm.
-//
-// Outstanding verify tokens are dropped for the same reason SetUserEmail drops
-// them: a token carries only user_id, so one minted for the previous address
-// would otherwise still redeem against this one. See SetUserEmail.
+// AdminSetUserEmail applies an administrator-confirmed address or unbinds an empty one.
 func (s *Store) AdminSetUserEmail(userID int64, email string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -360,7 +315,7 @@ func (s *Store) AdminSetUserEmail(userID int64, email string) error {
 		nullStr(email), verified, time.Now().Unix(), userID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM email_tokens WHERE user_id=? AND purpose='verify' AND used=0`,
+	if _, err := tx.Exec(`DELETE FROM email_tokens WHERE user_id=?`,
 		userID); err != nil {
 		return err
 	}

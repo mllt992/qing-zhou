@@ -69,6 +69,8 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			}
 			claims := jwt.MapClaims{"iss": f.server.URL, "aud": f.c.ClientID, "sub": f.subject, "exp": time.Now().Add(time.Minute).Unix(), "iat": time.Now().Unix(), "nonce": f.nonce, "at_hash": accessHash("access-token")}
 			switch f.fault {
+			case "reauth":
+				claims["auth_time"] = time.Now().Unix()
 			case "nonce":
 				claims["nonce"] = "wrong"
 			case "audience":
@@ -505,5 +507,73 @@ func TestOAuthAdminLivePermissionsAndAtomicConfig(t *testing.T) {
 	f.st.DB().Exec(`UPDATE users SET role='admin',status='banned' WHERE id=?`, uid)
 	if w := request("PUT", string(b)); w.Code != 403 {
 		t.Fatal("banned admin retained access")
+	}
+}
+
+func TestEmailChangeViaOAuth(t *testing.T) {
+	for _, mode := range []string{"reauth", "no_auth_time", "different_subject"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newOAuthFixture(t)
+			t.Setenv("QZ_SMTP_HOST", "127.0.0.1")
+			t.Setenv("QZ_SMTP_PORT", "1")
+			uid, err := f.st.CreateUser(store.NewUser{Username: "external", PasswordHash: "!oauth2"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = f.st.BindOAuthIdentity(context.Background(), uid, f.c.Issuer, f.subject); err != nil {
+				t.Fatal(err)
+			}
+			if err = f.st.CreateSession(uid, "current", "127.0.0.1", "test"); err != nil {
+				t.Fatal(err)
+			}
+			token, err := auth.Issue(f.a.secret, uid, "user", "current", time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("POST", "https://panel.example/api/user/email", strings.NewReader(`{"email":"new@example.test"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(&http.Cookie{Name: cookieName, Value: token})
+			w := httptest.NewRecorder()
+			f.a.Router().ServeHTTP(w, req)
+			if w.Code != 200 {
+				t.Fatalf("begin %d %s", w.Code, w.Body.String())
+			}
+			var reply struct {
+				Data struct {
+					URL string `json:"authorization_url"`
+				}
+			}
+			if err = json.Unmarshal(w.Body.Bytes(), &reply); err != nil {
+				t.Fatal(err)
+			}
+			u, err := url.Parse(reply.Data.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := u.Query()
+			if q.Get("max_age") != "0" || q.Get("prompt") != "login" {
+				t.Fatal("fresh login not requested")
+			}
+			f.nonce, f.challenge = q.Get("nonce"), q.Get("code_challenge")
+			f.fault = "reauth"
+			if mode == "no_auth_time" {
+				f.fault = ""
+			}
+			if mode == "different_subject" {
+				f.subject = "another-account"
+			}
+			result := f.callback(q.Get("state"), w.Result().Cookies()[0], &http.Cookie{Name: cookieName, Value: token})
+			var count int
+			if err = f.st.DB().QueryRow("SELECT COUNT(*) FROM email_tokens WHERE purpose='rebind' AND user_id=?", uid).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if mode == "reauth" {
+				want = 1
+			}
+			if count != want || strings.Contains(result.Header().Get("Location"), "email_sent=1") != (want == 1) {
+				t.Fatal("unexpected rebind result", mode, count, result.Header().Get("Location"))
+			}
+		})
 	}
 }

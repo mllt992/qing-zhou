@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -12,6 +15,7 @@ import (
 	"qingzhou/internal/auth"
 	"qingzhou/internal/idgen"
 	"qingzhou/internal/mailer"
+	"qingzhou/internal/store"
 )
 
 // currentMailer builds a mailer from the latest settings (env overrides win),
@@ -68,6 +72,10 @@ func (a *API) deliver(to, subject, html, devLink string) {
 		log.Printf("[email:dev] SMTP not configured; would send %q to %s; link: %s", subject, to, devLink)
 		return
 	}
+	sendMailAsync(m, to, subject, html)
+}
+
+func sendMailAsync(m *mailer.Mailer, to, subject, html string) {
 	// Sent off the request goroutine. mailer bounds a send at smtpTimeout (20s),
 	// and the server's WriteTimeout is 30s — so against an SMTP host that
 	// blackholes packets (a typo'd hostname, a blocked port 587) the caller sat
@@ -85,10 +93,27 @@ func (a *API) deliver(to, subject, html, devLink string) {
 	}()
 }
 
-// GET /api/auth/verify?token=...  (clicked from an email, renders HTML)
+// 邮件预览只读取表单，收件人提交后才切换找回邮箱。
+func (a *API) handleEmailChangeForm(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Frame-Options", "DENY")
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeHTMLPage(w, 400, "链接无效", "请在账户设置中重新发起换绑。")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>确认换绑邮箱</title><main><h1>确认换绑邮箱</h1><p>确认后，此邮箱将用于找回轻舟账号密码。如果你没有发起换绑，请关闭此页。</p><form method="post" action="/confirm-email"><input type="hidden" name="token" value="%s"><button>确认使用此邮箱</button></form></main></html>`, html.EscapeString(token))
+}
 func (a *API) handleVerify(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
-	userID, ok, err := a.st.UseEmailToken(token, "verify")
+	purpose := "verify"
+	if r.Method == http.MethodPost {
+		token = r.PostFormValue("token")
+		purpose = "rebind"
+	}
+	userID, ok, err := a.st.ConfirmEmail(token, purpose)
 	if err != nil {
 		writeHTMLPage(w, http.StatusInternalServerError, "服务器错误", "请稍后重试。")
 		return
@@ -97,19 +122,15 @@ func (a *API) handleVerify(w http.ResponseWriter, r *http.Request) {
 		// Token couldn't be consumed (already used / pre-fetched by a mail
 		// scanner / clicked twice). If its owner is already verified, this is a
 		// success from the user's point of view — say so instead of "invalid".
-		if found, verified := a.st.TokenUserVerified(token); found && verified {
+		if a.st.EmailAlreadyConfirmed(token) {
 			writeHTMLPage(w, http.StatusOK, "邮箱已验证", "你的邮箱已经验证过了，账号已激活，现在可以返回登录。")
 			return
 		}
 		writeHTMLPage(w, http.StatusBadRequest, "链接无效", "验证链接无效或已过期，请登录后在「个人中心」重新发送验证邮件。")
 		return
 	}
-	if err := a.st.SetEmailVerified(userID); err != nil {
-		writeHTMLPage(w, http.StatusInternalServerError, "服务器错误", "请稍后重试。")
-		return
-	}
 	u, _ := a.st.UserByID(userID)
-	if u != nil && u.Role != "admin" && !u.ClientID.Valid {
+	if u != nil && u.Role != "admin" && !u.ClientID.Valid && !u.ClientUUID.Valid {
 		if err := a.provisionClient(u); err != nil {
 			log.Printf("verify: provision failed for user %d: %v", userID, err)
 			writeHTMLPage(w, http.StatusBadGateway, "激活未完成", "邮箱已验证，但开通节点失败，请稍后重试或联系管理员。")
@@ -171,9 +192,13 @@ func (a *API) handleForgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u, _ := a.st.UserByEmail(email); u != nil && u.Email.Valid {
-		token, _ := idgen.RandToken(24)
-		if err := a.st.CreateEmailToken(u.ID, token, "reset", time.Hour); err == nil {
+	if u, _ := a.st.UserByEmail(email); u != nil && u.EmailVerified && u.Email.Valid {
+		token, err := idgen.RandToken(24)
+		if err != nil {
+			fail(w, 500, "生成重置链接失败")
+			return
+		}
+		if issued, err := a.st.IssueEmailToken(u.ID, email, token, "reset", time.Hour); err == nil && issued {
 			link := a.publicBase(r) + "/reset?token=" + token
 			a.deliver(email, "重置密码 - 轻舟", resetEmailHTML(link), link)
 		}
@@ -192,11 +217,15 @@ func (a *API) handleReset(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+	if len(req.NewPassword) > 72 {
+		fail(w, 400, "密码最多 72 字节")
+		return
+	}
 	if len(req.NewPassword) < 6 {
 		fail(w, http.StatusBadRequest, "密码至少 6 位")
 		return
 	}
-	userID, ok2, err := a.st.UseEmailToken(req.Token, "reset")
+	ok2, err := a.st.ResetTokenValid(req.Token)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "服务器错误")
 		return
@@ -210,15 +239,15 @@ func (a *API) handleReset(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "服务器错误")
 		return
 	}
-	if err := a.st.UpdatePassword(userID, hash); err != nil {
-		fail(w, http.StatusInternalServerError, "重置失败")
+	applied, err := a.st.ResetPassword(req.Token, hash)
+	if err != nil {
+		fail(w, 500, "重置失败")
 		return
 	}
-	// Revoke every existing session. Forgot-password is the account-recovery path
-	// used precisely when an account is compromised; since JWTs stay valid for days
-	// and auth only checks the session row exists (not password freshness), a stolen
-	// session would otherwise survive the reset. Mirrors change-password / admin-reset.
-	_ = a.st.DeleteUserSessions(userID)
+	if !applied {
+		fail(w, 400, "重置链接无效或已过期")
+		return
+	}
 	ok(w, J{"message": "密码已重置，请用新密码登录"})
 }
 
@@ -243,53 +272,88 @@ func validEmail(e string) bool {
 	return dot > at+1 && dot < len(e)-1 && !strings.ContainsAny(e, " \t")
 }
 
-// POST /api/user/email {email} — bind or change email, then send a verify link.
+// POST /api/user/email — prove the account first and the destination mailbox second.
 func (a *API) handleBindEmail(w http.ResponseWriter, r *http.Request) {
 	u := a.currentUser(r)
 	if u == nil {
-		fail(w, http.StatusUnauthorized, "未登录")
+		fail(w, 401, "未登录")
+		return
+	}
+	if media, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); media != "application/json" {
+		fail(w, 415, "请使用 JSON 请求")
 		return
 	}
 	var req struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		fail(w, http.StatusBadRequest, "请求格式错误")
+		fail(w, 400, "请求格式错误")
 		return
 	}
-	email := strings.TrimSpace(strings.ToLower(req.Email))
+	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if !validEmail(email) {
-		fail(w, http.StatusBadRequest, "邮箱格式不正确")
+		fail(w, 400, "邮箱格式不正确")
 		return
 	}
 	if u.Email.Valid && u.Email.String == email && u.EmailVerified {
 		ok(w, J{"message": "邮箱无变化"})
 		return
 	}
-	if other, _ := a.st.UserByEmail(email); other != nil && other.ID != u.ID {
-		fail(w, http.StatusConflict, "该邮箱已被其他账号绑定")
+	if !a.mailerConfigured() {
+		fail(w, 503, "请先联系管理员配置邮件服务")
 		return
 	}
-	if a.resendRL != nil && !a.resendRL.allow(fmt.Sprintf("e%d", u.ID)) {
-		fail(w, http.StatusTooManyRequests, "操作过于频繁，请稍后再试")
+	if a.pwRL != nil && !a.pwRL.allow(fmt.Sprintf("p%d", u.ID)) {
+		fail(w, 429, "尝试过于频繁，请稍后再试")
 		return
 	}
-	if err := a.st.SetUserEmail(u.ID, email); err != nil {
-		fail(w, http.StatusInternalServerError, "保存失败")
+	jti, _ := r.Context().Value(ctxJti).(string)
+	if jti == "" {
+		fail(w, 403, "请重新登录")
 		return
+	}
+	if u.PasswordHash == "!oauth2" {
+		c, err := a.oauthConfig()
+		if err != nil || !c.Enabled || c.validate() != nil {
+			fail(w, 400, "请联系管理员恢复认证中心后重试")
+			return
+		}
+		a.oauthAuthorization(w, r, c, store.OAuthState{UserID: u.ID, SessionID: jti, EmailChange: email})
+		return
+	}
+	if !auth.CheckPassword(u.PasswordHash, req.Password) {
+		fail(w, 403, "当前密码错误")
+		return
+	}
+	if err := a.sendEmailChange(u, jti, email, a.publicBase(r)); err != nil {
+		switch {
+		case errors.Is(err, store.ErrEmailUnavailable), errors.Is(err, store.ErrEmailChanged):
+			fail(w, 409, err.Error())
+		default:
+			fail(w, 500, "创建验证邮件失败")
+		}
+		return
+	}
+	ok(w, J{"message": "验证邮件已发送。点击新邮箱中的链接后换绑生效。"})
+}
+
+func (a *API) sendEmailChange(u *store.User, jti, email, base string) error {
+	m := a.currentMailer()
+	if m == nil {
+		return errors.New("邮件服务未配置")
 	}
 	token, err := idgen.RandToken(24)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "服务器错误")
-		return
+		return err
 	}
-	if err := a.st.CreateEmailToken(u.ID, token, "verify", 24*time.Hour); err != nil {
-		fail(w, http.StatusInternalServerError, "创建验证令牌失败")
-		return
+	if err := a.st.RequestEmailChange(u, jti, email, token); err != nil {
+		return err
 	}
-	link := a.publicBase(r) + "/api/auth/verify?token=" + token
-	a.deliver(email, "验证你的邮箱 - 轻舟", verifyEmailHTML(link), link)
-	ok(w, J{"message": "验证邮件已发送到该邮箱，请点击其中链接完成绑定"})
+	link := base + "/confirm-email?token=" + token
+	body := fmt.Sprintf(`<p>请打开链接并确认，将此邮箱设为轻舟账号的找回邮箱。链接在 24 小时内有效。</p><p><a href="%s">确认换绑邮箱</a></p><p>如果你没有发起换绑，请忽略此邮件。</p>`, html.EscapeString(link))
+	sendMailAsync(m, email, "确认账户邮箱 - 轻舟", body)
+	return nil
 }
 
 // POST /api/user/resend-verify — re-send the email verification link.
@@ -320,7 +384,7 @@ func (a *API) handleResendVerify(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "服务器错误")
 		return
 	}
-	if err := a.st.CreateEmailToken(u.ID, token, "verify", 24*time.Hour); err != nil {
+	if issued, err := a.st.IssueEmailToken(u.ID, email, token, "verify", 24*time.Hour); err != nil || !issued {
 		fail(w, http.StatusInternalServerError, "创建验证令牌失败")
 		return
 	}

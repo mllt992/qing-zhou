@@ -17,9 +17,9 @@ import (
 type ctxKey string
 
 const (
-	ctxUserID   ctxKey = "uid"
-	ctxRole     ctxKey = "role"
-	ctxJti      ctxKey = "jti"
+	ctxUserID    ctxKey = "uid"
+	ctxRole      ctxKey = "role"
+	ctxJti       ctxKey = "jti"
 	ctxAuthKind  ctxKey = "auth_kind" // "jwt" | "api_token"
 	ctxScopes    ctxKey = "scopes"    // []string when auth_kind=api_token
 	ctxTokenID   ctxKey = "token_id"
@@ -289,13 +289,14 @@ func userView(u *store.User) J {
 		email = u.Email.String
 	}
 	return J{
-		"id":             u.ID,
-		"username":       u.Username,
-		"email":          email,
-		"email_verified": u.EmailVerified,
-		"role":           u.Role,
-		"is_admin":       u.Role == "admin",
-		"status":         u.Status,
-		"points":         u.Points,
+		"id":                    u.ID,
+		"username":              u.Username,
+		"email":                 email,
+		"email_verified":        u.EmailVerified,
+		"email_change_via_oidc": u.PasswordHash == "!oauth2",
+		"role":                  u.Role,
+		"is_admin":              u.Role == "admin",
+		"status":                u.Status,
+		"points":                u.Points,
 	}
 }

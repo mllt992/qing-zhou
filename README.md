@@ -183,12 +183,16 @@ bash /opt/qingzhou/install.sh uninstall
 
 ```bash
 git clone https://github.com/mllt992/qing-zhou.git && cd qing-zhou
-# 改 docker-compose.yml 里的 QZ_PUBLIC_BASE 与 QZ_SECRET_KEY(openssl rand -hex 32)
+# 新装：生成一次并保管 .env。已有 .env 时跳过此命令。
+(umask 077; set -C; key=$(openssl rand -hex 32) && printf 'QZ_SECRET_KEY=%s\n' "$key" > .env)
+# 在 docker-compose.yml 中设置 QZ_PUBLIC_BASE
 docker compose up -d
 docker compose logs -f qingzhou     # 首启打印随机管理员密码（未设 QZ_ADMIN_PASS 时）
 ```
 
-或直接用镜像：`docker run -d -p 8081:8081 -e QZ_SECRET_KEY=$(openssl rand -hex 32) -v qingzhou-data:/data ghcr.io/mllt992/qing-zhou:latest`。镜像只含面板和探针，不含 sing-box。发布流程会同时更新版本标签与 `latest`，生产建议固定明确的版本标签（如 `ghcr.io/mllt992/qing-zhou:v0.2.88`）。**Docker 用「拉新镜像 + 重建容器」升级**，详见 [Wiki · Docker 部署](https://github.com/mllt992/qing-zhou/wiki/Docker-部署)。
+已有部署请沿用原来的独立密钥。若曾使用旧 Compose 的公开示例密钥，先备份数据库，再配置新的随机密钥；含此修复的程序会在迁移事务中重新加密现有密文。历史备份仍使用旧密钥，已泄露的备份须另行处置。
+
+或直接用镜像：`docker run -d -p 8081:8081 --env-file .env -v qingzhou-data:/data ghcr.io/mllt992/qing-zhou:latest`。镜像只含面板和探针，不含 sing-box。发布流程会同时更新版本标签与 `latest`，生产建议固定明确的版本标签（如 `ghcr.io/mllt992/qing-zhou:v0.2.88`）。**Docker 用「拉新镜像 + 重建容器」升级**，详见 [Wiki · Docker 部署](https://github.com/mllt992/qing-zhou/wiki/Docker-部署)。
 
 通过当前发布工作流新构建的 GHCR 镜像会携带构建来源证明（provenance）与 SBOM，并标记
 对应的源码 revision。可用 Buildx 查看镜像清单和证明；把示例版本换成实际安装的 tag：
@@ -223,6 +227,8 @@ Windows PowerShell 可直接用 `./start.ps1`（已设好上述环境变量）�
 
 - 用户名默认 `mllt992`（可用 `QZ_ADMIN_USER` 指定）
 - 未设 `QZ_ADMIN_PASS` 时，会**随机生成密码并打印到启动日志**（请到终端查看并首登后立即改密）
+
+自助换绑需通过当前密码或已绑定认证中心重新认证，再点击新邮箱收到的验证链接。确认前仍由原已验证邮箱找回密码。升级后，以前签发的验证和找回链接需要重新申请。
 
 ### 三、编译生产二进制（单文件，内嵌前端）
 

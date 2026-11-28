@@ -256,3 +256,76 @@ func TestForgot_RejectsMalformedAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestEmailRebindRequiresPasswordAndMailbox(t *testing.T) {
+	a, st := newUserEditAPI(t)
+	t.Setenv("QZ_SMTP_HOST", "127.0.0.1")
+	t.Setenv("QZ_SMTP_PORT", "1")
+	hash, err := auth.HashPassword("existing-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, err := st.CreateUser(store.NewUser{Username: "u", Email: "original@example.com", PasswordHash: hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SetUserClient(uid, 0, "qz_u", "existing-uuid", "existing-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SetEmailVerified(uid); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.CreateSession(uid, "session", "local", "test"); err != nil {
+		t.Fatal(err)
+	}
+	bearer, err := auth.Issue(a.secret, uid, "user", "session", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(data string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/user/email", strings.NewReader(data))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		w := httptest.NewRecorder()
+		a.Router().ServeHTTP(w, req)
+		return w
+	}
+	if w := post(`{"email":"new@example.com","password":"wrong"}`); w.Code != 403 {
+		t.Fatal(w.Code)
+	}
+	var pending int
+	if err = st.DB().QueryRow("SELECT COUNT(*) FROM email_tokens").Scan(&pending); err != nil || pending != 0 {
+		t.Fatal(pending, err)
+	}
+	if w := post(`{"email":"new@example.com","password":"existing-password"}`); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	u, err := st.UserByID(uid)
+	if err != nil || u.Email.String != "original@example.com" || !u.EmailVerified {
+		t.Fatal("address changed before confirmation")
+	}
+	var token string
+	if err = st.DB().QueryRow("SELECT token FROM email_tokens WHERE user_id=? AND address=? AND purpose='rebind'", uid, "new@example.com").Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	a.Router().ServeHTTP(w, httptest.NewRequest("GET", "/confirm-email?token="+token, nil))
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	u, err = st.UserByID(uid)
+	if err != nil || u.Email.String != "original@example.com" {
+		t.Fatal("link preview changed mailbox")
+	}
+	req := httptest.NewRequest("POST", "/confirm-email", strings.NewReader("token="+token))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	a.Router().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	u, err = st.UserByID(uid)
+	if err != nil || u.Email.String != "new@example.com" || !u.EmailVerified {
+		t.Fatal("new address not confirmed")
+	}
+}

@@ -77,12 +77,16 @@ func printTokenUsage(w io.Writer) {
 
 func openLocalStore(envFile string) (*store.Store, *config.Config, error) {
 	loadEnvDefaults(envFile)
+	key, err := config.ConfiguredSecretKey()
+	if err != nil {
+		return nil, nil, err
+	}
 	cfg := config.Load()
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开数据库 %s 失败: %w", cfg.DBPath, err)
 	}
-	if key := os.Getenv("QZ_SECRET_KEY"); key != "" {
+	if key != "" {
 		st.SetSecretKey([]byte(key))
 	}
 	if err := st.Migrate(); err != nil {

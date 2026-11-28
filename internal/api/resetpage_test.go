@@ -72,11 +72,14 @@ func TestResetPage_EscapesTheToken(t *testing.T) {
 // ever saw it.
 func TestResetPage_DoesNotConsumeTheToken(t *testing.T) {
 	a, st := newUserEditAPI(t)
-	uid, err := st.CreateUser(store.NewUser{Username: "u1", PasswordHash: "h"})
+	uid, err := st.CreateUser(store.NewUser{Username: "u1", Email: "u1@example.com", PasswordHash: "h"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateEmailToken(uid, "tok-live", "reset", time.Hour); err != nil {
+	if err := st.SetEmailVerified(uid); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.IssueEmailToken(uid, "u1@example.com", "tok-live", "reset", time.Hour); err != nil || !ok {
 		t.Fatal(err)
 	}
 
@@ -87,7 +90,7 @@ func TestResetPage_DoesNotConsumeTheToken(t *testing.T) {
 	}
 
 	// Still redeemable afterwards — that is the whole point.
-	if _, okTok, err := st.UseEmailToken("tok-live", "reset"); err != nil || !okTok {
+	if okTok, err := st.ResetTokenValid("tok-live"); err != nil || !okTok {
 		t.Error("merely rendering the page consumed the reset token")
 	}
 }

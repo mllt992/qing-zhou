@@ -920,6 +920,9 @@ func (s *Store) migrateLegacyBaseline(tx *sql.Tx) error {
 	// The caller sets QZ_SECRET_KEY first; old installs otherwise used jwt_secret.
 	// Use a private helper instance so a failed adoption does not mutate the live
 	// store's key/cache state.
+	if err := s.rewrapComposeSecrets(tx, true); err != nil {
+		return err
+	}
 	legacy := &Store{secretKey: s.secretKey}
 	s = legacy
 	if _, err := tx.Exec(schema); err != nil {

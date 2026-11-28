@@ -9,9 +9,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NSpin } from 'naive-ui'
+import { NButton, NSpin, useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
+const message = useMessage()
 const error = ref('')
 const messages: Record<string, string> = {
   state: '登录请求已过期或失效，请在同一浏览器重新发起登录。',
@@ -21,6 +22,7 @@ const messages: Record<string, string> = {
   email_exists: '此邮箱已有轻舟账号。请先用原账号登录，在账户设置中绑定认证中心。',
   account: '轻舟账号当前不可用，请联系管理员。',
   session: '原登录会话已失效，请重新登录后绑定。',
+  email_change: '无法发送换绑邮件，请检查邮箱地址并重新发起。',
   binding: '绑定失败：该账号可能已有绑定，请联系管理员核实。',
   server: '暂时无法完成登录，请稍后重试。',
 }
@@ -28,7 +30,8 @@ onMounted(async () => {
   if (route.query.error) { error.value = messages[String(route.query.error)] || messages.provider!; return }
   try {
     await auth.loginFromCookie()
-    await router.replace(route.query.bound === '1' ? '/account' : '/dashboard')
+    if (route.query.email_sent === '1') message.success('验证邮件已发送。点击新邮箱中的链接后换绑生效。')
+    await router.replace(route.query.bound === '1' || route.query.email_sent === '1' ? '/account' : '/dashboard')
   } catch (e: any) { error.value = e.message || '登录失败，请重试。' }
 })
 </script>

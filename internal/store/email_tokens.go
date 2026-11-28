@@ -1,82 +1,168 @@
+// [INPUT]: SQLite users, email tokens and login sessions.
+// [OUTPUT]: Issues address-bound links and applies verification or recovery atomically.
+// [POS]: Owns mailbox proof for registration, recovery and self-service changes.
+// [PROTOCOL]: Update this header on change, then check AGENTS.md
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"time"
 )
 
-func (s *Store) CreateEmailToken(userID int64, token, purpose string, ttl time.Duration) error {
+var ErrEmailUnavailable = errors.New("邮箱已被其他账号绑定")
+var ErrEmailChanged = errors.New("账户信息已更新，请重新登录后再试")
+
+// IssueEmailToken binds the link to the same address the caller will send to.
+// The INSERT rechecks account state even if the caller read it before a rebind.
+func (s *Store) IssueEmailToken(userID int64, address, token, purpose string, ttl time.Duration) (bool, error) {
 	now := time.Now()
-	_, err := s.db.Exec(
-		`INSERT INTO email_tokens (user_id, token, purpose, expires_at, used, created_at)
-		 VALUES (?,?,?,?,0,?)`,
-		userID, token, purpose, now.Add(ttl).Unix(), now.Unix())
-	return err
+	res, err := s.db.Exec(`INSERT INTO email_tokens (user_id,address,token,purpose,expires_at,created_at)
+		SELECT id,email,?,?,?,? FROM users WHERE id=? AND email=? AND email!=''
+		AND ((?='verify' AND email_verified=0) OR (?='reset' AND email_verified=1))`,
+		token, purpose, now.Add(ttl).Unix(), now.Unix(), userID, address, purpose, purpose)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
-// UseEmailToken atomically validates and consumes a token. Returns the user id
-// and ok=true only if the token exists, matches purpose, is unused, and unexpired.
-func (s *Store) UseEmailToken(token, purpose string) (int64, bool, error) {
+// A rebind lives on the confirmation token until its recipient accepts it.
+// A revoked session or intervening password/address change invalidates the request.
+func (s *Store) RequestEmailChange(u *User, sessionID, address, token string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var taken bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE lower(email)=lower(?) AND id<>?)`, address, u.ID).Scan(&taken); err != nil {
+		return err
+	}
+	if taken {
+		return ErrEmailUnavailable
+	}
+	if _, err := tx.Exec(`DELETE FROM email_tokens WHERE user_id=? AND purpose='rebind'`, u.ID); err != nil {
+		return err
+	}
+	now := time.Now()
+	res, err := tx.Exec(`INSERT INTO email_tokens(user_id,address,token,purpose,expires_at,created_at)
+		SELECT id,?,?,'rebind',?,? FROM users WHERE id=? AND password_hash=? AND email IS ? AND status='active'
+		AND EXISTS(SELECT 1 FROM sessions WHERE user_id=users.id AND jti=?)`,
+		address, token, now.Add(24*time.Hour).Unix(), now.Unix(), u.ID, u.PasswordHash, u.Email, sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrEmailChanged
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ConfirmEmail(token, purpose string) (int64, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, false, err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	var id, userID int64
-	err = tx.QueryRow(
-		`SELECT id, user_id FROM email_tokens
-		 WHERE token=? AND purpose=? AND used=0 AND expires_at>?`,
-		token, purpose, time.Now().Unix()).Scan(&id, &userID)
+	defer tx.Rollback()
+	var uid int64
+	var address string
+	err = tx.QueryRow(`SELECT user_id,address FROM email_tokens WHERE token=? AND used=0
+		AND purpose=? AND purpose IN ('verify','rebind') AND expires_at>?`, token, purpose, time.Now().Unix()).Scan(&uid, &address)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
 	if err != nil {
-		return 0, false, nil // not found / expired / used → ok=false, no error
-	}
-	if _, err = tx.Exec(`UPDATE email_tokens SET used=1 WHERE id=?`, id); err != nil {
 		return 0, false, err
 	}
-	if err = tx.Commit(); err != nil {
+	res, err := tx.Exec(`UPDATE users SET email=?, email_verified=1,updated_at=? WHERE id=?
+		AND (email=? OR ?='rebind') AND NOT EXISTS(SELECT 1 FROM users WHERE lower(email)=lower(?) AND id<>?)`,
+		address, time.Now().Unix(), uid, address, purpose, address, uid)
+	if err != nil {
 		return 0, false, err
 	}
-	committed = true
-	return userID, true, nil
+	n, err := res.RowsAffected()
+	if err != nil || n != 1 {
+		return 0, false, err
+	}
+	if purpose == "rebind" {
+		if _, err := tx.Exec(`DELETE FROM email_tokens WHERE user_id=? AND token<>?`, uid, token); err != nil {
+			return 0, false, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE email_tokens SET used=1 WHERE token=?`, token); err != nil {
+		return 0, false, err
+	}
+	return uid, true, tx.Commit()
+}
+
+func (s *Store) EmailAlreadyConfirmed(token string) bool {
+	var confirmed bool
+	_ = s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM email_tokens t JOIN users u ON u.id=t.user_id
+		WHERE t.token=? AND t.purpose IN ('verify','rebind') AND t.used=1 AND t.address=u.email
+		AND t.expires_at>? AND u.email_verified=1)`, token, time.Now().Unix()).Scan(&confirmed)
+	return confirmed
+}
+
+const resetOwner = `SELECT u.id FROM email_tokens t JOIN users u ON u.id=t.user_id
+	WHERE t.token=? AND t.purpose='reset' AND t.used=0 AND t.expires_at>? AND t.address=u.email AND u.email_verified=1`
+
+// Check the token cheaply before bcrypt. The password update rechecks it under the write lock.
+func (s *Store) ResetTokenValid(token string) (bool, error) {
+	var valid bool
+	err := s.db.QueryRow("SELECT EXISTS("+resetOwner+")", token, time.Now().Unix()).Scan(&valid)
+	return valid, err
+}
+
+func (s *Store) ResetPassword(token, hash string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var uid int64
+	now := time.Now().Unix()
+	err = tx.QueryRow("UPDATE users SET password_hash=?,updated_at=? WHERE id=("+resetOwner+") RETURNING id", hash, now, token, now).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM email_tokens WHERE user_id=? AND purpose IN ('rebind','reset')`, uid); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM sessions WHERE user_id=?`, uid); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 func (s *Store) SetEmailVerified(userID int64) error {
-	_, err := s.db.Exec(
-		`UPDATE users SET email_verified=1, updated_at=? WHERE id=?`,
-		time.Now().Unix(), userID)
+	_, err := s.db.Exec(`UPDATE users SET email_verified=1, updated_at=? WHERE id=?`, time.Now().Unix(), userID)
 	return err
 }
 
 func (s *Store) UpdatePassword(userID int64, passwordHash string) error {
-	_, err := s.db.Exec(
-		`UPDATE users SET password_hash=?, updated_at=? WHERE id=?`,
-		passwordHash, time.Now().Unix(), userID)
-	return err
-}
-
-// TokenUserVerified looks up the user a (possibly already-used) verify token
-// belongs to, and whether that user is already email-verified. Used to render a
-// friendly "already verified" page instead of "invalid link" on a re-click or a
-// mail-scanner pre-fetch that consumed the one-time token.
-func (s *Store) TokenUserVerified(token string) (found bool, verified bool) {
-	var uid int64
-	if err := s.db.QueryRow(
-		`SELECT user_id FROM email_tokens WHERE token=? AND purpose='verify'`, token).Scan(&uid); err != nil {
-		return false, false
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
 	}
-	var v bool
-	_ = s.db.QueryRow(`SELECT email_verified FROM users WHERE id=?`, uid).Scan(&v)
-	return true, v
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE users SET password_hash=?,updated_at=? WHERE id=?`, passwordHash, time.Now().Unix(), userID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM email_tokens WHERE user_id=? AND purpose IN ('reset','rebind')`, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// CleanupEmailTokens removes expired tokens. Used-but-unexpired tokens are kept
-// so a re-click / mail-scanner pre-fetch can still resolve to an "already
-// verified" page within the token's lifetime instead of "invalid link".
 func (s *Store) CleanupEmailTokens() {
 	_, _ = s.db.Exec(`DELETE FROM email_tokens WHERE expires_at < ?`, time.Now().Unix())
 }

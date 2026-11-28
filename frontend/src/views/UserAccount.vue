@@ -29,9 +29,12 @@
         <n-form-item label="邮箱">
           <n-input v-model:value="emailForm.email" placeholder="输入邮箱地址" />
         </n-form-item>
+        <n-form-item v-if="!auth.user?.email_change_via_oidc" label="当前密码">
+          <n-input v-model:value="emailForm.password" type="password" :input-props="{ autocomplete: 'current-password' }" />
+        </n-form-item>
         <n-form-item>
           <n-space>
-            <n-button type="primary" :loading="bindingEmail" @click="handleBindEmail">绑定邮箱</n-button>
+            <n-button type="primary" :loading="bindingEmail" @click="handleBindEmail">{{ auth.user?.email_change_via_oidc ? '通过认证中心确认邮箱' : '验证新邮箱' }}</n-button>
             <n-button v-if="auth.user?.email && !auth.user?.email_verified" :loading="resending" @click="handleResendVerify">发送验证邮件</n-button>
           </n-space>
         </n-form-item>
@@ -132,7 +135,7 @@ async function saveEmailNotify(enabled: boolean) {
 }
 
 const pwForm = reactive({ old: '', new: '', confirm: '' })
-const emailForm = reactive({ email: '' })
+const emailForm = reactive({ email: '', password: '' })
 const changingPw = ref(false)
 const bindingEmail = ref(false)
 const resending = ref(false)
@@ -253,8 +256,14 @@ async function handleChangePw() {
 
 async function handleBindEmail() {
   if (!emailForm.email) { message.warning('请输入邮箱'); return }
+  if (!auth.user?.email_change_via_oidc && !emailForm.password) { message.warning('请输入当前密码'); return }
   bindingEmail.value = true
-  try { await apiPost('/api/user/email', { email: emailForm.email }); message.success('绑定成功'); await auth.fetchMe() } catch (e: any) { message.error(e.message) } finally { bindingEmail.value = false }
+  try {
+    const data = await apiPost<{ message?: string; authorization_url?: string }>('/api/user/email', emailForm)
+    emailForm.password = ''
+    if (data.authorization_url) { window.location.assign(data.authorization_url); return }
+    message.success(data.message || '请查看新邮箱中的验证邮件')
+  } catch (e: any) { message.error(e.message) } finally { bindingEmail.value = false }
 }
 
 async function handleResendVerify() {

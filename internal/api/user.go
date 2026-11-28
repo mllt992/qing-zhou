@@ -145,8 +145,13 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// If email verification is required, defer provisioning until verified.
 	if verifyRequired {
-		token, _ := idgen.RandToken(24)
-		if err := a.st.CreateEmailToken(id, token, "verify", 24*time.Hour); err != nil {
+		token, tokenErr := idgen.RandToken(24)
+		if tokenErr != nil {
+			_ = a.st.DeleteUser(id)
+			fail(w, http.StatusInternalServerError, "生成验证令牌失败")
+			return
+		}
+		if issued, err := a.st.IssueEmailToken(id, req.Email, token, "verify", 24*time.Hour); err != nil || !issued {
 			_ = a.st.DeleteUser(id)
 			fail(w, http.StatusInternalServerError, "创建验证令牌失败")
 			return

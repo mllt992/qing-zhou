@@ -1,7 +1,7 @@
 # 轻舟面板 · Docker Compose
 #
 # 快速开始：
-#   1. 改下面的 QZ_PUBLIC_BASE 和 QZ_SECRET_KEY（openssl rand -hex 32）
+#   1. 设置下方 QZ_PUBLIC_BASE，并按 README 在 .env 中配置 QZ_SECRET_KEY
 #   2. docker compose up -d
 #   3. docker compose logs -f qingzhou   # 首启会打印随机管理员密码（若未设 QZ_ADMIN_PASS）
 #
@@ -22,7 +22,7 @@ services:
       # 面板对外访问地址（订阅链接、探针安装、邮件链接都用它）——改成你的域名/IP
       QZ_PUBLIC_BASE: "https://node.example.com"
       # 敏感配置加密主密钥，务必改：openssl rand -hex 32
-      QZ_SECRET_KEY: "please-change-me-openssl-rand-hex-32"
+      QZ_SECRET_KEY: "${QZ_SECRET_KEY:?Set QZ_SECRET_KEY in .env before starting QingZhou}"
       # 首次管理员（可选）。QZ_ADMIN_PASS 留空则首启生成随机密码并打印到日志一次
       # QZ_ADMIN_USER: "admin"
       # QZ_ADMIN_PASS: ""
